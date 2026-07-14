@@ -353,7 +353,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a215ce7":{"id":"a215ce7","name":"Cars
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul14·d';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul14·f';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -623,8 +623,8 @@ function renderToday(){
   const steps=[...deals().filter(d=>d.nextStep&&!CLOSED.includes(d.stage)).map(d=>({t:'deal',o:d,txt:d.nextStep})),
                ...contacts().filter(c=>c.nextStep&&PROSPECT.includes(c.status)).map(c=>({t:'contact',o:c,txt:c.nextStep}))];
   const follow=deals().filter(d=>d.stage==='Follow Up');
-  const mrr=deals().filter(d=>d.stage===WON).reduce((a,d)=>a+(+d.mrr||0),0);
-  const q=store.__quota.monthly||0;
+  const mrr=deals().filter(d=>d.stage===WON&&inMonth(d.closedAt,new Date())).reduce((a,d)=>a+(+d.mrr||0),0);
+  const q=qTarget(new Date());
   let h='<div class="grid">';
   h+=stat(ap.totalDue||0,'Apollo tasks due',true);
   h+=stat(replies.length,'New replies');
@@ -779,7 +779,7 @@ const COL={
   status:{k:'status',t:'Status',val:c=>c.status||'New',cell:c=>'<span class="tag'+(c.status==='Customer'?' cust':'')+'">'+esc(c.status||'New')+'</span>'},
   score:{k:'score',t:'Score',num:true,val:c=>+c.score||0,cell:c=>c.score?esc(c.score):'—'},
   angle:{k:'angle',t:'Why it scores',val:c=>c.angle||'',cell:c=>'<span class="tsub">'+esc(c.angle||'')+'</span>'},
-  apollo:{k:'apollo',t:'Apollo',val:c=>c.apolloSeq||'',cell:c=>'<span class="tsub">'+esc(c.apolloSeq||'')+'</span>'},
+  apollo:{k:'apollo',t:'Apollo',val:c=>c.apolloSeq||'',cell:c=>c.apolloSeq?'<span class="tag cust" title="'+esc(c.apolloSeq)+'">● '+esc(c.apolloSeq)+'</span>':''},
   last:{k:'last',t:'Last contacted',val:c=>lastTouchTs(c),cell:c=>'<span class="tsub">'+esc(lastTouchLabel(c))+'</span>'},
   open:{k:'open',t:'Last email open',val:c=>+c.lastEmailOpenTs||0,cell:c=>c.lastEmailOpenTs?'<span class="tsub" style="color:var(--sig)">'+esc(fmtAgo(c.lastEmailOpenTs))+'</span>':'<span class="tsub">—</span>'},
   next:{k:'next',t:'Next step',val:c=>c.nextStep||''}
