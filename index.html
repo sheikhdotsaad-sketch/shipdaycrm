@@ -372,7 +372,7 @@ let store = load();
 let canSave = true, applyingRemote = false;
 
 function blank(){ return { accounts:{}, contacts:{}, deals:{},
-  __quota:{monthly:1800, history:{}}, __keys:{apollo:'', google:false},
+  __quota:{monthly:1800, targets:{}, history:{}}, __keys:{apollo:'', google:false},
   __rep:'Saad Sheikh', __email:'saad.sheikh@shipday.com',
   __updatedAt:0, __seq:1 }; }
 
@@ -391,7 +391,7 @@ function load(){
 function norm(s){
   const b=blank();
   s.accounts=s.accounts||{}; s.contacts=s.contacts||{}; s.deals=s.deals||{};
-  s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__keys=s.__keys||b.__keys; s.__seq=s.__seq||1;
+  s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__seq=s.__seq||1;
   s.__rep=s.__rep||b.__rep; s.__email=s.__email||b.__email;
   if(SEED && SEED.__seedV && !s.__seedV) s.__seedV=SEED.__seedV;
   return s;
@@ -964,16 +964,17 @@ function moveDeal(d,stage){
 let quotaMonth=new Date();
 function monthKey(d){ return d.getFullYear()+'-'+(d.getMonth()+1); }
 function inMonth(ts,ref){ if(!ts) return false; const d=new Date(ts); return d.getFullYear()===ref.getFullYear()&&d.getMonth()===ref.getMonth(); }
+function qTarget(ref){ const t=(store.__quota.targets||{})[monthKey(ref)]; return t!=null?(+t||0):(+store.__quota.monthly||0); }
 function renderQuota(){
   const ref=quotaMonth;
   const won=deals().filter(d=>d.stage===WON&&inMonth(d.closedAt,ref)).sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt));
   const attained=won.reduce((a,d)=>a+(+d.mrr||0),0);
-  const target=+store.__quota.monthly||0;
+  const target=qTarget(ref);
   const pct=target?Math.min(100,Math.round(attained/target*100)):0;
   const remain=Math.max(0,target-attained);
   const label=ref.toLocaleDateString('en-US',{month:'long',year:'numeric'});
-  const key=monthKey(ref);
-  const snap=(store.__quota.history||{})[key];
+  const mShort=ref.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+  const mName=ref.toLocaleDateString('en-US',{month:'short'});
   // calculator: average deal size across all won deals; deals needed to hit goal
   const allWon=deals().filter(d=>d.stage===WON);
   const avgDeal=allWon.length?Math.round(allWon.reduce((a,d)=>a+(+d.mrr||0),0)/allWon.length):0;
@@ -993,19 +994,21 @@ function renderQuota(){
     paceHtml='<div class="grid" style="margin-top:4px">'+stat(money(avgDeal),'Avg deal MRR')+stat(dealsNeeded,'Deals to goal')+'</div>';
   }
   let h='';
-  h+='<div class="panel"><div class="ph"><h3>Monthly Quota</h3><span class="sub">MRR attainment · '+esc(label)+(snap?' · saved':'')+'</span>'+
-     '<div style="margin-left:auto;display:flex;gap:6px"><button class="btn sm" onclick="quotaShift(-1)">‹ Prev</button><button class="btn sm" onclick="quotaShift(1)">Next ›</button>'+
-     '<button class="btn sm pri" onclick="saveQuotaMonth()">Save month</button></div></div>';
+  h+='<div class="panel"><div class="ph"><h3>Monthly Quota</h3><span class="sub">'+esc(label)+' · MRR attainment</span>'+
+     '<div style="margin-left:auto;display:flex;gap:6px"><button class="btn sm" onclick="quotaShift(-1)">‹ Prev</button>'+
+     '<button class="btn sm'+(isCur?' pri':'')+'" onclick="quotaThis()">This month</button>'+
+     '<button class="btn sm" onclick="quotaShift(1)">Next ›</button></div></div>';
   h+='<div style="padding:16px">';
   h+='<div class="grid">'+stat(money(attained),'Attained',true)+stat(money(target),'Target')+stat(money(remain),'Remaining')+stat(pct+'%','Progress')+'</div>';
   h+='<div class="prog"><div class="fill'+(pct>=100?' done':'')+'" style="width:'+pct+'%"></div></div>';
   h+=paceHtml;
-  h+='<div style="display:flex;align-items:center;gap:8px;margin-top:14px">'+
-     '<label style="font-size:11px;color:var(--mut)">Monthly target $</label>'+
+  h+='<div style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap">'+
+     '<label style="font-size:11px;color:var(--mut)">'+esc(mShort)+' target $</label>'+
      '<input id="qtarget" type="number" style="width:130px" value="'+target+'" onkeydown="if(event.key===\'Enter\')setQuota(this.value)">'+
-     '<button class="btn sm pri" onclick="setQuota(document.getElementById(\'qtarget\').value)">Set target</button>'+
-     '<span class="tsub">'+(dealsNeeded?dealsNeeded+' more '+(avgDeal?'@ '+money(avgDeal)+'/mo':'')+' to hit goal':'goal reached 🎉')+'</span>'+
+     '<button class="btn sm pri" onclick="setQuota(document.getElementById(\'qtarget\').value)">Set '+esc(mName)+' target</button>'+
+     '<span class="tsub">'+(pct>=100?'goal reached 🎉':(dealsNeeded?dealsNeeded+' more '+(avgDeal?'@ '+money(avgDeal)+'/mo':'')+' to hit goal':''))+'</span>'+
      '</div>';
+  h+='<div class="tsub" style="margin-top:8px">Each month keeps its own target — setting one won\'t change the others.</div>';
   h+='</div></div>';
   h+='<div class="panel"><div class="ph"><h3>Closed-Won · '+esc(label)+'</h3><span class="sub">'+won.length+' deals</span>'+
      '<button class="btn sm gh" style="margin-left:auto" onclick="exportQuotaCSV()">Export CSV</button></div>'+
@@ -1015,27 +1018,28 @@ function renderQuota(){
         '<td>'+(d.plan?money(d.plan)+'/mo':'—')+'</td><td class="tname">'+money(d.mrr)+'</td><td class="tsub">'+esc(fmtD(d.closedAt))+'</td></tr>';
     }).join('') : '<tr><td class="empty" colspan="5">No closed-won deals this month.</td></tr>';
   h+='</tbody>'+(won.length?'<tfoot><tr><td colspan="3" style="text-align:right;font-weight:700;border-top:1px solid var(--line)">Total MRR</td><td style="font-weight:800;color:var(--won);border-top:1px solid var(--line)">'+money(attained)+'</td><td style="border-top:1px solid var(--line)"></td></tr></tfoot>':'')+'</table></div>';
-  // saved history
-  const hist=Object.entries(store.__quota.history||{}).sort((a,b)=>b[0].localeCompare(a[0]));
-  if(hist.length){
-    h+='<div class="panel"><div class="ph"><h3>Quota History</h3><span class="sub">'+hist.length+' saved months</span></div>'+
+  // all-months ramp overview (auto-built from per-month targets + closed deals)
+  const targets=store.__quota.targets||{};
+  const mset=new Set(Object.keys(targets));
+  deals().filter(d=>d.stage===WON&&d.closedAt).forEach(d=>mset.add(monthKey(new Date(d.closedAt))));
+  const months=[...mset].sort((a,b)=>{const[ay,am]=a.split('-'),[by,bm]=b.split('-');return (by-ay)||(bm-am);});
+  if(months.length){
+    h+='<div class="panel"><div class="ph"><h3>Ramp / History</h3><span class="sub">'+months.length+' months · each its own target · click a row to open</span></div>'+
       '<table><thead><tr><th>Month</th><th>Target</th><th>Attained</th><th>%</th></tr></thead><tbody>'+
-      hist.map(([k,v])=>{ const[y,m]=k.split('-'); const ml=new Date(y,m-1,1).toLocaleDateString('en-US',{month:'short',year:'numeric'});
-        const p=v.target?Math.round(v.attained/v.target*100):0;
-        return '<tr><td class="tname">'+esc(ml)+'</td><td>'+money(v.target)+'</td><td class="tname">'+money(v.attained)+'</td><td style="color:'+(p>=100?'var(--won)':'var(--mut)')+';font-weight:700">'+p+'%</td></tr>';
+      months.map(k=>{ const[y,m]=k.split('-'); const mref=new Date(+y,+m-1,1); const ml=mref.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+        const tg=(targets[k]!=null)?(+targets[k]||0):(+store.__quota.monthly||0);
+        const at=deals().filter(d=>d.stage===WON&&inMonth(d.closedAt,mref)).reduce((s,d)=>s+(+d.mrr||0),0);
+        const p=tg?Math.round(at/tg*100):0;
+        const cur=(k===monthKey(ref))?' style="background:var(--panel2)"':'';
+        return '<tr'+cur+' onclick="quotaGoto(\''+k+'\')"><td class="tname">'+esc(ml)+'</td><td>'+money(tg)+'</td><td class="tname">'+money(at)+'</td><td style="color:'+(p>=100?'var(--won)':'var(--mut)')+';font-weight:700">'+p+'%</td></tr>';
       }).join('')+'</tbody></table></div>';
   }
   el('view-quota').innerHTML=h;
 }
 function quotaShift(n){ quotaMonth=new Date(quotaMonth.getFullYear(),quotaMonth.getMonth()+n,1); renderQuota(); }
-function setQuota(v){ store.__quota.monthly=+v||0; save(); renderStats(); renderQuota(); toast('Monthly target set to '+money(+v||0)); }
-function saveQuotaMonth(){
-  const ref=quotaMonth, key=monthKey(ref);
-  const attained=deals().filter(d=>d.stage===WON&&inMonth(d.closedAt,ref)).reduce((a,d)=>a+(+d.mrr||0),0);
-  store.__quota.history=store.__quota.history||{};
-  store.__quota.history[key]={target:+store.__quota.monthly||0, attained, savedAt:Date.now()};
-  save(); renderQuota(); toast('Saved '+ref.toLocaleDateString('en-US',{month:'short',year:'numeric'})+' — '+money(attained));
-}
+function quotaThis(){ quotaMonth=new Date(); renderQuota(); }
+function quotaGoto(k){ const[y,m]=k.split('-'); quotaMonth=new Date(+y,+m-1,1); renderQuota(); }
+function setQuota(v){ const k=monthKey(quotaMonth); store.__quota.targets=store.__quota.targets||{}; store.__quota.targets[k]=+v||0; save(); renderQuota(); toast(quotaMonth.toLocaleDateString('en-US',{month:'short',year:'numeric'})+' target set to '+money(+v||0)); }
 function exportQuotaCSV(){
   const ref=quotaMonth;
   const won=deals().filter(d=>d.stage===WON&&inMonth(d.closedAt,ref)).sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt));
