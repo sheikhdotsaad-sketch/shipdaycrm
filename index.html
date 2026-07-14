@@ -353,7 +353,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a215ce7":{"id":"a215ce7","name":"Cars
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul14·c';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul14·d';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -588,7 +588,7 @@ function closeDrawer(){ el('scrim').classList.remove('on'); el('drawer').classLi
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
 /* ====================== TODAY (live dashboard) ====================== */
 function fmtAgo(ts){ if(!ts) return 'never'; const m=Math.round((Date.now()-ts)/60000); if(m<1)return'just now'; if(m<60)return m+'m ago'; const hr=Math.round(m/60); if(hr<24)return hr+'h ago'; return Math.round(hr/24)+'d ago'; }
-const SYNC_FN=''; /* Supabase Edge Function base URL — set when backend is deployed, e.g. 'https://<ref>.functions.supabase.co' */
+const SYNC_FN='https://muidkwqinwcfnfvnducj.functions.supabase.co'; /* Supabase Edge Function base URL — apollo-tasks deployed */
 function byEmail(){ const m={}; contacts().forEach(c=>{ if(c.email) m[c.email.trim().toLowerCase()]=c; }); return m; }
 function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=byEmail(); let n=0;
   list.forEach(u=>{ const c=u.email&&m[String(u.email).trim().toLowerCase()]; if(!c)return; n++;
