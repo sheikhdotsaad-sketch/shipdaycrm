@@ -380,13 +380,8 @@ function load(){
   try{
     const raw=localStorage.getItem(LS);
     if(raw){ const parsed=JSON.parse(raw);
-      if(SEED && SEED.__seedV && (parsed.__seedV||0) < SEED.__seedV){
-        // a newer import shipped — adopt it automatically, keep only cloud creds
-        const fresh=norm(JSON.parse(JSON.stringify(SEED)));
-        ['__sbUrl','__sbKey','__sbId'].forEach(k=>{ if(parsed[k]) fresh[k]=parsed[k]; });
-        fresh.__updatedAt=Date.now(); window.__seedAdopted=true;
-        return fresh;
-      }
+      // Your saved book ALWAYS wins — product updates/reseeds never overwrite your data.
+      // (To deliberately pull the fresh seed, use Data → "Reload imported data".)
       return norm(parsed); }
   }catch(e){}
   // first run: use injected SEED if present
@@ -903,13 +898,28 @@ function renderLive(){
   el('view-live').innerHTML=liveDash()+'<div class="panel"><div class="ph"><h3>Live Accounts</h3><span class="sub">'+t.count+' onboarded & running</span>'+colMenu('live')+'</div>'+t.html+'</div>'; restoreFlt();
 }
 /* ====================== PIPELINE (kanban) ====================== */
+let pipeMonth=null; /* null = all time; Date = specific month */
+function dealMonthTs(d){ return CLOSED.includes(d.stage)?(+d.closedAt|| +d.createdAt||0):(+d.demoDate|| +d.createdAt||0); }
+function pipeShift(n){ pipeMonth=new Date((pipeMonth||new Date()).getFullYear(),(pipeMonth||new Date()).getMonth()+n,1); renderPipeline(); }
+function pipeAll(){ pipeMonth=null; renderPipeline(); }
+function pipeThisMonth(){ pipeMonth=new Date(); renderPipeline(); }
 function renderPipeline(){
   let list=deals().filter(d=>{
     if(UI.warmth.size&&!UI.warmth.has(d.warmth)) return false;
     if(UI.q){ const a=acct(d.accountId); if(!matchQ((d.name||'')+' '+aname(a))) return false; }
     return true;
   });
-  let h='<div class="board">';
+  if(pipeMonth) list=list.filter(d=>inMonth(dealMonthTs(d),pipeMonth));
+  const mLabel=pipeMonth?pipeMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'}):'All time';
+  let h='<div class="ph" style="display:flex;align-items:center;gap:8px;padding:10px 4px 14px">'+
+     '<h3 style="margin:0">Pipeline</h3><span class="sub">'+esc(mLabel)+' · '+list.length+' deals</span>'+
+     '<div style="margin-left:auto;display:flex;gap:6px">'+
+       '<button class="btn sm'+(pipeMonth?'':' pri')+'" onclick="pipeAll()">All time</button>'+
+       '<button class="btn sm" onclick="pipeShift(-1)">‹ Prev</button>'+
+       '<button class="btn sm'+(pipeMonth&&inMonth(Date.now(),pipeMonth)?' pri':'')+'" onclick="pipeThisMonth()">This month</button>'+
+       '<button class="btn sm" onclick="pipeShift(1)">Next ›</button>'+
+     '</div></div>';
+  h+='<div class="board">';
   STAGES.forEach(stage=>{
     const col=list.filter(d=>d.stage===stage);
     const isWon=stage===WON, isLost=stage===LOST;
