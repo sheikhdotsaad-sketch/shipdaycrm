@@ -353,6 +353,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a215ce7":{"id":"a215ce7","name":"Cars
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
+const BUILD = 'build Jul14·b';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -372,7 +373,7 @@ let store = load();
 let canSave = true, applyingRemote = false;
 
 function blank(){ return { accounts:{}, contacts:{}, deals:{},
-  __quota:{monthly:1800, targets:{}, history:{}}, __keys:{apollo:'', google:false},
+  __quota:{monthly:1800, targets:{}, history:{}}, __keys:{apollo:'', google:false}, __probs:{},
   __rep:'Saad Sheikh', __email:'saad.sheikh@shipday.com',
   __updatedAt:0, __seq:1 }; }
 
@@ -391,7 +392,7 @@ function load(){
 function norm(s){
   const b=blank();
   s.accounts=s.accounts||{}; s.contacts=s.contacts||{}; s.deals=s.deals||{};
-  s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__seq=s.__seq||1;
+  s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__probs=s.__probs||{}; s.__seq=s.__seq||1;
   s.__rep=s.__rep||b.__rep; s.__email=s.__email||b.__email;
   if(SEED && SEED.__seedV && !s.__seedV) s.__seedV=SEED.__seedV;
   return s;
@@ -903,6 +904,11 @@ function dealMonthTs(d){ return CLOSED.includes(d.stage)?(+d.closedAt|| +d.creat
 function pipeShift(n){ pipeMonth=new Date((pipeMonth||new Date()).getFullYear(),(pipeMonth||new Date()).getMonth()+n,1); renderPipeline(); }
 function pipeAll(){ pipeMonth=null; renderPipeline(); }
 function pipeThisMonth(){ pipeMonth=new Date(); renderPipeline(); }
+/* projection: each stage has an editable close-probability (%). Projected close =
+   already-won MRR + Σ(open-deal MRR × its stage odds). Stored in store.__probs. */
+const PROB_DEF={"Booked Demo":30,"No Show":10,"Follow Up":50,"Closed Lost":0,"Closed Deal":100};
+function prob(stage){ const p=(store.__probs||{})[stage]; return p!=null?(+p||0):(PROB_DEF[stage]!=null?PROB_DEF[stage]:0); }
+function setProb(stage,v){ store.__probs=store.__probs||{}; let n=Math.max(0,Math.min(100,+v||0)); store.__probs[stage]=n; save(); renderPipeline(); }
 function renderPipeline(){
   let list=deals().filter(d=>{
     if(UI.warmth.size&&!UI.warmth.has(d.warmth)) return false;
@@ -918,6 +924,30 @@ function renderPipeline(){
        '<button class="btn sm" onclick="pipeShift(-1)">‹ Prev</button>'+
        '<button class="btn sm'+(pipeMonth&&inMonth(Date.now(),pipeMonth)?' pri':'')+'" onclick="pipeThisMonth()">This month</button>'+
        '<button class="btn sm" onclick="pipeShift(1)">Next ›</button>'+
+     '</div></div>';
+  // ---- projection calculator ----
+  const wonMRR=list.filter(d=>d.stage===WON).reduce((a,d)=>a+(+d.mrr||0),0);
+  const openStages=STAGES.filter(s=>!CLOSED.includes(s));
+  let weighted=0;
+  const rows=openStages.map(stage=>{
+    const col=list.filter(d=>d.stage===stage);
+    const mrrSum=col.reduce((a,d)=>a+(+d.mrr||0),0);
+    const pc=prob(stage);
+    const contrib=Math.round(mrrSum*pc/100);
+    weighted+=contrib;
+    return '<tr><td class="tname">'+esc(stage)+'</td><td>'+col.length+'</td><td>'+money(mrrSum)+'/mo</td>'+
+      '<td><input type="number" min="0" max="100" value="'+pc+'" style="width:64px" '+
+      'onchange="setProb(\''+esc(stage)+'\',this.value)"> %</td>'+
+      '<td class="tname" style="color:var(--acc)">'+money(contrib)+'/mo</td></tr>';
+  }).join('');
+  const projected=wonMRR+weighted;
+  h+='<div class="panel" style="margin-bottom:14px"><div class="ph"><h3>Projected Close · '+esc(mLabel)+'</h3>'+
+     '<span class="sub">weighted by stage odds · <b style="color:var(--acc)">'+BUILD+'</b></span></div>'+
+     '<div style="padding:14px 16px">'+
+     '<div class="grid">'+stat(money(wonMRR)+'/mo','Won so far',true)+stat(money(weighted)+'/mo','Weighted open')+stat(money(projected)+'/mo','Projected close')+'</div>'+
+     '<table style="margin-top:10px"><thead><tr><th>Stage</th><th>Deals</th><th>Open MRR</th><th>Close odds</th><th>Weighted</th></tr></thead><tbody>'+
+     (rows||'<tr><td class="empty" colspan="5">No open deals'+(pipeMonth?' this month':'')+'.</td></tr>')+'</tbody></table>'+
+     '<div class="tsub" style="margin-top:8px">Edit each stage\'s % to tune your forecast. Projected = Won so far + Σ(open MRR × odds).</div>'+
      '</div></div>';
   h+='<div class="board">';
   STAGES.forEach(stage=>{
@@ -994,7 +1024,7 @@ function renderQuota(){
     paceHtml='<div class="grid" style="margin-top:4px">'+stat(money(avgDeal),'Avg deal MRR')+stat(dealsNeeded,'Deals to goal')+'</div>';
   }
   let h='';
-  h+='<div class="panel"><div class="ph"><h3>Monthly Quota</h3><span class="sub">'+esc(label)+' · MRR attainment</span>'+
+  h+='<div class="panel"><div class="ph"><h3>Monthly Quota</h3><span class="sub">'+esc(label)+' · MRR attainment · <b style="color:var(--acc)">'+BUILD+'</b></span>'+
      '<div style="margin-left:auto;display:flex;gap:6px"><button class="btn sm" onclick="quotaShift(-1)">‹ Prev</button>'+
      '<button class="btn sm'+(isCur?' pri':'')+'" onclick="quotaThis()">This month</button>'+
      '<button class="btn sm" onclick="quotaShift(1)">Next ›</button></div></div>';
