@@ -353,7 +353,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a215ce7":{"id":"a215ce7","name":"Cars
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul14·f';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul14·h';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -392,7 +392,7 @@ function load(){
 function norm(s){
   const b=blank();
   s.accounts=s.accounts||{}; s.contacts=s.contacts||{}; s.deals=s.deals||{};
-  s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__probs=s.__probs||{}; s.__seq=s.__seq||1;
+  s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__probs=s.__probs||{}; s.__cal=s.__cal||{syncedAt:0,events:[]}; s.__seq=s.__seq||1;
   s.__rep=s.__rep||b.__rep; s.__email=s.__email||b.__email;
   if(SEED && SEED.__seedV && !s.__seedV) s.__seedV=SEED.__seedV;
   return s;
@@ -490,6 +490,7 @@ function keysRail(){ const k=store.__keys||{}; const a=document.getElementById('
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function money(n){ n=+n||0; return '$'+n.toLocaleString('en-US',{maximumFractionDigits:0}); }
 function fmtD(d){ if(!d) return ''; const x=new Date(d); if(isNaN(x)) return ''; return x.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
+function fmtDT(d){ if(!d) return ''; const x=new Date(d); if(isNaN(x)) return ''; return x.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+x.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}); }
 function dateInputVal(ts){ if(!ts) return ''; const x=new Date(ts); if(isNaN(x)) return ''; return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); }
 function gsearch(a){ return 'https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||'')+' '+(a.state||'')+' restaurant'); }
 function gmaps(a){ return 'https://www.google.com/maps/search/'+encodeURIComponent((a.name||'')+' '+(a.address||a.city||'')+' '+(a.state||'')); }
@@ -612,11 +613,31 @@ async function syncGmail(){
     const n=applyContactUpdates(d.contacts); save(); renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')); }
   catch(e){ setSync('err','Sync failed'); toast('Gmail sync failed'); }
 }
+async function syncCalendar(){
+  if(!SYNC_FN){ toast('Connect Google in Integrations first'); return; }
+  try{ setSync('busy','Syncing Calendar…'); const r=await fetch(SYNC_FN+'/calendar-sync',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+    if(d.error) throw new Error(d.error);
+    store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[]};
+    save(); renderActive(); setSync('ok','Synced'); toast('Calendar synced · '+(d.events||[]).length+' events'); }
+  catch(e){ setSync('err','Sync failed'); toast('Calendar sync failed'); }
+}
+async function pushDemoToCalendar(id){ const d=deal(id); if(!d)return;
+  if(!d.demoDate){ toast('Set a demo date first'); return; }
+  if(!SYNC_FN){ toast('Connect Google in Integrations first'); return; }
+  const c=contact(d.contactId); const start=new Date(d.demoDate); const end=new Date(start.getTime()+30*60000);
+  try{ setSync('busy','Adding to Calendar…');
+    const r=await fetch(SYNC_FN+'/calendar-sync',{method:'POST',headers:{Authorization:'Bearer '+authToken(),'Content-Type':'application/json'},
+      body:JSON.stringify({summary:'Shipday Demo · '+(d.name||cname(c)),description:'Demo with '+(c?cname(c):'')+(c&&c.email?' <'+c.email+'>':''),startISO:start.toISOString(),endISO:end.toISOString(),attendees:c&&c.email?[c.email]:[]})});
+    const j=await r.json(); if(j.error||!j.id) throw new Error(j.error||'no id');
+    d.calEventId=j.id; d.calLink=j.htmlLink||''; logAuto(d,'📅 Added to Google Calendar');
+    save(); renderActive(); if(drawerOpen()) openDeal(id); setSync('ok','Synced'); toast('Added to Google Calendar'); }
+  catch(e){ setSync('err','Sync failed'); toast('Calendar add failed'); }
+}
 function authToken(){ try{ return (sb&&sb.auth&&sb.auth.session&&sb.auth.session()&&sb.auth.session().access_token)||''; }catch(e){ return ''; } }
 function renderToday(){
   const now=today0();
-  const ap=store.__apollo||{}; const gm=store.__gmail||{};
-  const replies=gm.replies||[];
+  const ap=store.__apollo||{}; const gm=store.__gmail||{}; const cal=store.__cal||{};
+  const replies=gm.replies||[]; const calEvents=cal.events||[];
   const upcoming=deals().filter(d=>d.demoDate&&new Date(d.demoDate)>=now&&!CLOSED.includes(d.stage))
     .sort((a,b)=>new Date(a.demoDate)-new Date(b.demoDate));
   const past=deals().filter(d=>d.demoDate&&new Date(d.demoDate)<now&&d.stage==='Booked Demo');
@@ -648,6 +669,13 @@ function renderToday(){
      '<button class="btn sm gh" style="margin-left:auto" onclick="syncGmail()">↻ Sync</button></div><table><tbody>';
   h+= replies.length? replies.map(r=>'<tr><td class="tname">'+esc(r.from||'')+'</td><td class="tsub">'+esc(r.subject||'')+'</td><td class="tsub" style="text-align:right">'+esc(r.date||'')+'</td></tr>').join('')
       : '<tr><td class="empty" colspan="3">No replies synced yet — connect Gmail in the backend sync.</td></tr>';
+  h+='</tbody></table></div>';
+
+  // Google Calendar
+  h+='<div class="panel"><div class="ph"><h3>📅 Google Calendar</h3><span class="sub">'+calEvents.length+' upcoming · synced '+fmtAgo(cal.syncedAt)+'</span>'+
+     '<button class="btn sm gh" style="margin-left:auto" onclick="syncCalendar()">↻ Sync</button></div><table><tbody>';
+  h+= calEvents.length? calEvents.map(e=>'<tr><td class="tname">'+(e.htmlLink?'<a href="'+esc(e.htmlLink)+'" target="_blank">'+esc(e.summary)+'</a>':esc(e.summary))+'</td><td class="tsub" style="text-align:right">'+esc(fmtDT(e.start))+'</td></tr>').join('')
+      : '<tr><td class="empty" colspan="2">No events synced yet — connect Google in the backend sync.</td></tr>';
   h+='</tbody></table></div>';
 
   h+=panelStart('Upcoming Demos','deals on the calendar');
@@ -822,6 +850,14 @@ function prefilter(list){ return list.filter(c=>{
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
+const telNum=c=>{ const p=(c.phone||c.mobile||'').replace(/[^\d+]/g,''); return p; };
+const callCell=r=>{ const p=telNum(r); return p
+  ? '<a class="btn sm pri" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')">📞 Call now</a>'
+  : '<span class="tsub">no #</span>'; };
+function logCall(cid){ const c=contact(cid); if(!c)return;
+  c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
+  logAuto(c,'📞 Called '+cname(c)); save(); renderActive();
+  toast('Call logged',()=>{ /* keep */ }); }
 function renderLeads(){
   const recs=prefilter(contacts().filter(c=>PROSPECT.includes(c.status||'New')&&!isCustC(c)));
   const t=dataTable('leads',chosenCols('leads'),recs,r=>"openContact('"+r.id+"')",bookCell);
@@ -846,8 +882,8 @@ function renderHotList(){
   const top=all.slice(0,HOT_TOP);
   const next=all.slice(HOT_TOP,HOT_TOP+HOT_NEXT);
   const engaged=all.filter(c=>(+c.lastEmailOpenTs||0)>lastTouchTs(c)).length;
-  const t1=dataTable('hotlist',chosenCols('hotlist'),top,r=>"openContact('"+r.id+"')",bookCell);
-  const t2=dataTable('hotlist2',chosenCols('hotlist2'),next,r=>"openContact('"+r.id+"')",bookCell);
+  const t1=dataTable('hotlist',chosenCols('hotlist'),top,r=>"openContact('"+r.id+"')",callCell);
+  const t2=dataTable('hotlist2',chosenCols('hotlist2'),next,r=>"openContact('"+r.id+"')",callCell);
   const eng=engaged?engaged+' opened an email since last touch — call these first · ':'';
   let h='<div class="panel"><div class="ph"><h3>🔥 Hot List · Top 50</h3><span class="sub">'+eng+'ranked by last opens, intent &amp; staleness</span>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
   h+='<div class="panel"><div class="ph"><h3>Next 100</h3><span class="sub">the following '+t2.count+' priority contacts</span>'+colMenu('hotlist2')+'</div>'+t2.html+'</div>';
@@ -1242,6 +1278,7 @@ function openDeal(id){
   let b='';
   b+='<div class="f2">'+fld('Stage',sel("setDstage('"+id+"',this.value)",STAGES,d.stage))+(CLOSED.includes(d.stage)?'':fld('Warmth',sel("setD('"+id+"','warmth',this.value)",WARMTHS,d.warmth||'Warm')))+'</div>';
   b+='<div class="f3">'+fld('Deal value',inp("setD('"+id+"','value',+this.value)",d.value,'number'))+fld('Plan $/mo',selN("setDplan('"+id+"',this.value)",PLANS.map(String),d.plan?String(d.plan):''))+fld('Demo date',inp("setD('"+id+"','demoDate',this.value)",d.demoDate,'datetime-local'))+'</div>';
+  if(d.demoDate) b+='<div style="margin:-4px 0 10px">'+(d.calEventId?'<span class="tag cust">📅 On Google Calendar</span>'+(d.calLink?' <a href="'+esc(d.calLink)+'" target="_blank" style="font-size:11px">Open ↗</a>':''):'<button class="btn sm" onclick="pushDemoToCalendar(\''+id+'\')">📅 Add to Google Calendar</button>')+'</div>';
   if(CLOSED.includes(d.stage)) b+='<div class="f2">'+fld('Close date',inp("setDclosed('"+id+"',this.value)",dateInputVal(d.closedAt),'date'))+'</div>';
   b+='<div class="f2">'+fld('Contact',contactPicker("setD('"+id+"','contactId',this.value)",d.accountId,d.contactId))+fld('Next step',inp("setD('"+id+"','nextStep',this.value)",d.nextStep))+'</div>';
   b+=fld('Notes',ta("setD('"+id+"','notes',this.value)",d.notes));
