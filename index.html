@@ -431,7 +431,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·x';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·y';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -546,7 +546,7 @@ function rollingBackup(json){
   }catch(e){}
 }
 /* Supabase blob sync (model-agnostic, whole store) */
-let sb=null, sbChan=null, pushTimer=null;
+let sb=null, sbChan=null, pushTimer=null, syncPulled=false;
 function syncCfg(){ return { url:(TEAM.url||store.__sbUrl||''), key:(TEAM.key||store.__sbKey||''), row:(TEAM.row||store.__sbId||'shipday-team') }; }
 function setSync(cls,msg){ const d=document.getElementById('sync-dot'),s=document.getElementById('sync-status');
   if(d)d.className='sync-dot '+cls; if(s)s.textContent=msg; }
@@ -559,11 +559,16 @@ async function initSync(){
     setSync('busy','Connecting…');
     const {data,error}=await sb.from('crm_state').select('data,updated_at').eq('id',c.row).maybeSingle();
     if(error) throw error;
+    syncPulled=true; // first pull done — this browser now reflects the cloud and may safely push
     if(data&&data.data){ const inc=data.data;
       const incStale = SEED && SEED.__seedV && (inc.__seedV||0) < SEED.__seedV;
       if(incStale){ // cloud copy predates the latest import — push the fresh seed up instead
         await pushCloudNow();
-      } else { applyingRemote=true; store=norm(mergeStores(store,inc)); try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false; }
+      } else if((inc.__updatedAt||0)>(store.__updatedAt||0)){
+        // Cloud wins WHOLESALE on load — never union the local built-in seed into the cloud book
+        // (seed records carry different ids than the imported book → union would duplicate everything).
+        applyingRemote=true; store=norm(inc); try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
+      }
     }
     subscribeRealtime(c.row);
     subscribeClaims();
@@ -590,7 +595,7 @@ function subscribeRealtime(row){
     }).subscribe();
 }
 async function pushCloudNow(){
-  if(!syncReady()) return; const c=syncCfg();
+  if(!syncReady()||!syncPulled) return; const c=syncCfg();
   try{ setSync('busy','Saving…');
     // fetch the current cloud book and MERGE, so this push never clobbers a teammate's records
     let adopted=false;
