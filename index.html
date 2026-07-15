@@ -366,6 +366,7 @@ small.hint{color:var(--dim);font-size:11px}
         <button class="btn sm" style="flex:1" onclick="saveKeys()">Save keys</button>
       </div>
       <button class="btn sm gh" style="width:100%;margin-top:6px" onclick="connectGoogle()"><span id="gstat">Connect Google</span></button>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;cursor:pointer"><input type="checkbox" id="autosync" onchange="setAutoSync(this.checked)"> Auto-refresh opens every 15 min &amp; re-rank Hot List</label>
       <div class="tsub" style="margin-top:6px;font-size:10px;line-height:1.4">Your own Apollo + Gmail + Calendar. Live sync activates once the app is hosted.</div>
     </div>
     <div class="card">
@@ -422,7 +423,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·i';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·l';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -454,8 +455,10 @@ function load(){
       // (To deliberately pull the fresh seed, use Data → "Reload imported data".)
       return norm(parsed); }
   }catch(e){}
-  // first run: use injected SEED if present
-  if(SEED){ const s=norm(JSON.parse(JSON.stringify(SEED))); s.__updatedAt=Date.now(); return s; }
+  // first run: use injected SEED if present. Keep __updatedAt=0 so a brand-new browser
+  // NEVER outranks your real cloud book — initSync() pulls the cloud copy instead of
+  // pushing the fresh seed up over your data.
+  if(SEED){ const s=norm(JSON.parse(JSON.stringify(SEED))); s.__updatedAt=0; return s; }
   return blank();
 }
 function norm(s){
@@ -565,7 +568,7 @@ function syncRail(){
 function saveKeys(){ store.__keys=store.__keys||{}; const a=document.getElementById('apkey'); if(a) store.__keys.apollo=a.value.trim(); save(); keysRail(); toast('Integration keys saved'); }
 function connectGoogle(){ toast('Gmail + Calendar connect finalizes once the app is hosted.'); }
 function toggleCfg(){ const c=document.getElementById('cfg'); if(!c)return; const open=c.style.display==='none'; c.style.display=open?'block':'none'; const car=document.getElementById('cfg-caret'); if(car) car.textContent=open?'▾':'▸'; }
-function keysRail(){ const k=store.__keys||{}; const a=document.getElementById('apkey'); if(a&&document.activeElement!==a) a.value=k.apollo||''; const g=document.getElementById('gstat'); if(g) g.textContent=k.google?'Google connected ✓':'Connect Google'; }
+function keysRail(){ const k=store.__keys||{}; const a=document.getElementById('apkey'); if(a&&document.activeElement!==a) a.value=k.apollo||''; const g=document.getElementById('gstat'); if(g) g.textContent=k.google?'Google connected ✓':'Connect Google'; const as=document.getElementById('autosync'); if(as) as.checked=!!store.__autoSync; }
 /* ====================== UI UTILS ====================== */
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function money(n){ n=+n||0; return '$'+n.toLocaleString('en-US',{maximumFractionDigits:0}); }
@@ -686,20 +689,29 @@ function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=by
     if(u.apolloSeq) c.apolloSeq=u.apolloSeq;
     if(u.replied){ c.lastReplyTs=u.lastReplyTs||Date.now(); }
   }); return n; }
-async function syncApollo(){
+async function syncApollo(bg){
   const key=(store.__keys&&store.__keys.apollo)||'';
-  if(!SYNC_FN){ toast(key?'Apollo key saved — live sync activates once hosted':'Add your Apollo key in Integrations first'); return; }
-  try{ setSync('busy','Syncing Apollo…'); const r=await fetch(SYNC_FN+'/apollo-tasks',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+  if(!SYNC_FN){ if(!bg)toast(key?'Apollo key saved — live sync activates once hosted':'Add your Apollo key in Integrations first'); return 0; }
+  try{ if(!bg)setSync('busy','Syncing Apollo…'); const r=await fetch(SYNC_FN+'/apollo-tasks',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     if(d.summary) store.__apollo=d.summary; else store.__apollo=d;
-    const n=applyContactUpdates(d.contacts); save(); renderActive(); setSync('ok','Synced'); toast('Apollo synced'+(n?' · '+n+' contacts stamped':'')); }
-  catch(e){ setSync('err','Sync failed'); toast('Apollo sync failed'); }
+    const n=applyContactUpdates(d.contacts); save(); if(!bg){ renderActive(); setSync('ok','Synced'); toast('Apollo synced'+(n?' · '+n+' contacts stamped':'')); } return n; }
+  catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Apollo sync failed'); } return 0; }
 }
-async function syncGmail(){
-  if(!SYNC_FN){ toast((store.__keys&&store.__keys.google)?'Gmail sync activates once hosted':'Connect Google in Integrations first'); return; }
-  try{ setSync('busy','Syncing Gmail…'); const r=await fetch(SYNC_FN+'/gmail-replies',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+async function syncGmail(bg){
+  if(!SYNC_FN){ if(!bg)toast((store.__keys&&store.__keys.google)?'Gmail sync activates once hosted':'Connect Google in Integrations first'); return 0; }
+  try{ if(!bg)setSync('busy','Syncing Gmail…'); const r=await fetch(SYNC_FN+'/gmail-replies',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     store.__gmail={syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]};
-    const n=applyContactUpdates(d.contacts); save(); renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')); }
-  catch(e){ setSync('err','Sync failed'); toast('Gmail sync failed'); }
+    const n=applyContactUpdates(d.contacts); save(); if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')); } return n; }
+  catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Gmail sync failed'); } return 0; }
+}
+function setAutoSync(on){ store.__autoSync=!!on; save(); toast(on?'Auto-refresh on · every 15 min':'Auto-refresh off'); if(on)autoSyncTick(); }
+let _autoBusy=false, _lastAuto=0;
+async function autoSyncTick(){
+  if(!store.__autoSync||!SYNC_FN||_autoBusy) return;
+  _autoBusy=true;
+  try{ const n=(await syncApollo(true))+(await syncGmail(true)); _lastAuto=Date.now();
+    if(n){ if(UI.tab==='today'||UI.tab==='hotlist') renderActive(); toast('Auto-refresh · '+n+' opens/updates, Hot List re-ranked'); } }
+  finally{ _autoBusy=false; }
 }
 async function syncCalendar(){
   if(!SYNC_FN){ toast('Connect Google in Integrations first'); return; }
@@ -1151,9 +1163,17 @@ function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
 const HOT_CAP=150;
 function callPriority(c){ return heat(c); }
 function hotQueue(){ const now=Date.now();
-  const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)));
-  let due=base.filter(c=>!(+c.nextCallAt)||+c.nextCallAt<=now).sort((a,b)=>callPriority(b)-callPriority(a));
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c);
+  const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
+  const byHeat=(a,b)=>callPriority(b)-callPriority(a);
+  const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
+  let due=base.filter(isDue).sort(byHeat);
   const snoozed=base.filter(c=>+c.nextCallAt>now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
+  if(due.length<HOT_CAP){                                    // auto-fill to 150 with next-best heat
+    const have=new Set(base.map(c=>c.id));
+    const extra=prefilter(contacts().filter(c=>!have.has(c.id)&&elig(c)&&isDue(c))).sort(byHeat);
+    due=due.concat(extra.slice(0,HOT_CAP-due.length));
+  }
   if(due.length>HOT_CAP) due=due.slice(0,HOT_CAP);          // top 150 highest-heat calls
   return {due,snoozed};
 }
@@ -1940,6 +1960,7 @@ window.addEventListener('storage',e=>{
   }catch(err){}
 });
 setInterval(()=>{ if(drawerOpen())return; renderStats(); renderCounts(); if(UI.tab==='today')renderToday(); checkBackupBanner(); },60000);
+setInterval(()=>{ if(store.__autoSync&&SYNC_FN&&Date.now()-_lastAuto>=15*60000) autoSyncTick(); },60000);
 
 /* ====================== LOGIN GATE (Phase 2) ====================== */
 async function gateInit(){
