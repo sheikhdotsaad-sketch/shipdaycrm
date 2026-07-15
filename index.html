@@ -416,6 +416,7 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">Drops in call logs (OpenPhone), email opens (Mailtracker), or contact sheets — auto-detected.</div>
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="retierBook()">Re-tier book by heat</button>
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="openDedupe()">Find duplicates</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="restoreAutoBackup()">Restore auto-backup</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="reloadSeed()">Reload imported data</button>
       <button class="btn sm gh" style="width:100%;color:var(--hot)" onclick="resetAll()">Reset all</button>
@@ -438,6 +439,7 @@ small.hint{color:var(--dim);font-size:11px}
     <section class="view" id="view-closed"></section>
     <section class="view" id="view-live"></section>
     <section class="view" id="view-quota"></section>
+    <section class="view" id="view-dedupe"></section>
   </main>
 </div>
 </div>
@@ -464,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z21';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z23';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -536,7 +538,7 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   out.contacts=mergeRecs(base.contacts||{},over.contacts||{},del);
   out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
   const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
-  ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
+  ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV','__dedupeKeep'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
   // __cal.reviewed = meeting-review classifications. UNION across reps/pulls so an Ignore/Won/Lost
   // is never clobbered by a newer full-store sync (reviewed is monotonic — only ever added to).
   { const rA=(base.__cal&&base.__cal.reviewed)||{}, rB=(over.__cal&&over.__cal.reviewed)||{};
@@ -764,6 +766,7 @@ function renderActive(){
   else if(v==='closed') renderClosed();
   else if(v==='live') renderLive();
   else if(v==='quota') renderQuota();
+  else if(v==='dedupe') renderDedupe();
 }
 
 /* ====================== RENDER DISPATCH ====================== */
@@ -946,6 +949,42 @@ function meetingReviewPanel(){
   return h;
 }
 
+/* ===== Booked-on-calendar → Pipeline: upcoming meetings that match a book contact but have no deal yet ===== */
+function calDemosToAdopt(){
+  const cal=store.__cal||{}, evs=cal.events||[], now=Date.now(); const out=[];
+  evs.forEach(e=>{ const st=new Date(e.start).getTime()||0; if(st<now-6*36e5) return;   // upcoming (incl. last 6h)
+    const c=matchEventContact(e); if(!c) return;                                        // must map to a known contact
+    if(findEventDeal(c)) return;                                                        // already in the pipeline
+    out.push({e,c}); });
+  out.sort((a,b)=>new Date(a.e.start)-new Date(b.e.start));
+  return out;
+}
+function _makeDemoDeal(e,c){ const id=uid('d');
+  store.deals[id]={id,accountId:c.accountId,contactId:c.id,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now(),demoDate:e.start,calEventId:e.id,calLink:e.htmlLink||''};
+  stampU(store.deals[id]); return id; }
+function adoptCalendarDemo(eventId){
+  const cal=store.__cal||{}; const e=(cal.events||[]).find(x=>x.id===eventId); if(!e){ toast('Event not found'); return; }
+  const c=matchEventContact(e); if(!c){ toast('No matching contact for this event'); return; }
+  if(findEventDeal(c)){ toast('Already in pipeline'); renderActive(); return; }
+  const id=_makeDemoDeal(e,c); logAuto(c,'📅 Demo adopted from calendar: '+(e.summary||''));
+  save(); renderActive();
+  toast('Added to pipeline — Booked Demo', ()=>{ delete store.deals[id]; save(); renderActive(); });
+}
+function adoptAllCalDemos(){
+  const list=calDemosToAdopt(); if(!list.length){ toast('No new calendar demos'); return; }
+  const ids=list.map(({e,c})=>_makeDemoDeal(e,c)); save(); renderActive();
+  toast('Added '+ids.length+' demos to pipeline', ()=>{ ids.forEach(id=>delete store.deals[id]); save(); renderActive(); });
+}
+function calDemoPanel(){
+  const list=calDemosToAdopt(); if(!list.length) return '';
+  let h='<div class="panel"><div class="ph"><h3>📅 Booked on Calendar</h3><span class="sub">'+list.length+' demo'+(list.length===1?'':'s')+' on your calendar not in the pipeline yet</span>'+
+    (list.length>1?'<button class="btn sm pri" style="margin-left:auto" onclick="adoptAllCalDemos()">＋ Add all '+list.length+'</button>':'')+'</div><table><tbody>';
+  h+=list.slice(0,20).map(({e,c})=>'<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')"><td class="tname">'+esc(e.summary||cname(c))+'<div class="tsub">'+esc(fmtDT(e.start))+' · '+esc(cname(c))+(acct(c.accountId)?' · '+esc(acct(c.accountId).name):'')+'</div></td>'+
+    '<td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Add to pipeline</button></td></tr>').join('');
+  h+='</tbody></table></div>';
+  return h;
+}
+
 /* ====================== TASK DASHBOARD ====================== */
 const TASK_ICON={call:'📞',email:'✉️',linkedin:'in',other:'✓'};
 function tasks(){ store.__tasks=Array.isArray(store.__tasks)?store.__tasks:[]; return store.__tasks; }
@@ -1111,6 +1150,7 @@ function renderToday(){
       : '<tr><td class="empty" colspan="2">No events synced yet — connect Google in the backend sync.</td></tr>';
   h+='</tbody></table></div>';
 
+  h+=calDemoPanel();
   h+=meetingReviewPanel();
 
   h+=panelStart('Upcoming Demos','deals on the calendar');
@@ -2913,6 +2953,108 @@ function delDeal(id){ if(!confirm('Delete this deal?'))return; const d=deal(id);
 function delAccount(id){ if(!confirm('Delete account AND its contacts/deals?'))return;
   contactsOf(id).forEach(c=>{ delete store.contacts[c.id]; tomb(c.id); }); dealsOf(id).forEach(d=>{ delete store.deals[d.id]; tomb(d.id); });
   delete store.accounts[id]; tomb(id); save(); closeDrawer(); render(); }
+
+/* ====================== DEDUPE REVIEW ======================
+   Read-only scan surfaces suspected duplicate accounts (same normalized name) and
+   contacts (same email / same phone). NOTHING is removed automatically — the rep
+   picks a winner (merge the rest into it) or "Keep separate". Every merge is one
+   Undo away (full snapshot). */
+function _dnorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function _dphone(s){ return String(s||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); }
+let _dedupeGroups=[];
+function dedupeScan(){
+  const keep=store.__dedupeKeep||{}; const groups=[];
+  const add=(type,reason,recs)=>{ if(recs.length<2) return; const ids=recs.map(r=>r.id).slice().sort();
+    const sig=type+':'+reason+':'+ids.join(','); if(keep[sig]) return; groups.push({type,reason,sig,recs}); };
+  // accounts by normalized name
+  const an={}; accounts().forEach(a=>{ const k=_dnorm(a.name); if(k) (an[k]=an[k]||[]).push(a); });
+  Object.keys(an).forEach(k=>add('account','name',an[k]));
+  // contacts by email
+  const em={}; contacts().forEach(c=>{ const k=(c.email||'').trim().toLowerCase(); if(k) (em[k]=em[k]||[]).push(c); });
+  Object.keys(em).forEach(k=>add('contact','email',em[k]));
+  // contacts by phone — ONLY when the name also matches, so we catch the same person entered
+  // twice, not colleagues sharing one restaurant line. Skip pairs already caught by email.
+  const alreadyEmailed=new Set();
+  groups.filter(g=>g.type==='contact').forEach(g=>g.recs.forEach(r=>g.recs.forEach(r2=>{ if(r!==r2) alreadyEmailed.add([r.id,r2.id].sort().join(',')); })));
+  const ph={}; contacts().forEach(c=>{ const k=_dphone(c.phone), nm=_dnorm(cname(c)); if(k.length>=10&&nm) (ph[k+'|'+nm]=ph[k+'|'+nm]||[]).push(c); });
+  Object.keys(ph).forEach(k=>{ const recs=ph[k]; if(recs.length<2) return;
+    const ids=recs.map(r=>r.id).slice().sort();
+    if(ids.some((id,i)=>i>0&&alreadyEmailed.has([ids[i-1],id].join(',')))) return; add('contact','phone',recs); });
+  return groups;
+}
+// Merge `drop` into `keep`: keep wins on every filled field, drop only fills blanks.
+function _dmerge(type,keep,drop){
+  if(type==='contact'){
+    keep.callCount=(+keep.callCount||0)+(+drop.callCount||0);
+    ['lastContactedTs','lastEmailOpenTs','lastReplyTs','dispoTs'].forEach(k=>{ const m=Math.max(+keep[k]||0,+drop[k]||0); if(m) keep[k]=m; });
+    if(drop.callNote&&drop.callNote!==keep.callNote) keep.callNote=[keep.callNote,drop.callNote].filter(Boolean).join(' · ');
+    if(Array.isArray(drop.log)&&drop.log.length) keep.log=(Array.isArray(keep.log)?keep.log:[]).concat(drop.log);
+  }
+  const skip={id:1,_u:1,callCount:1,log:1,lastContactedTs:1,lastEmailOpenTs:1,lastReplyTs:1,dispoTs:1};
+  Object.keys(drop).forEach(k=>{ if(skip[k]) return; const kv=keep[k];
+    if(kv===undefined||kv===null||kv===''||kv===false||kv===0){ const dv=drop[k];
+      if(dv!==undefined&&dv!==null&&dv!==''&&!(Array.isArray(dv)&&!dv.length)) keep[k]=dv; } });
+}
+function _dclone(x){ return JSON.parse(JSON.stringify(x)); }
+function dedupeDoMerge(type,keepId,dropIds){
+  const coll=type==='account'?'accounts':'contacts';
+  const keep=store[coll][keepId]; if(!keep) return;
+  const snap={accounts:_dclone(store.accounts),contacts:_dclone(store.contacts),deals:_dclone(store.deals),
+    tasks:_dclone(store.__tasks||[]),signals:_dclone(store.__signals||[]),del:Object.assign({},store.__del||{})};
+  let merged=0;
+  dropIds.forEach(dropId=>{ if(dropId===keepId) return; const drop=store[coll][dropId]; if(!drop) return;
+    _dmerge(type,keep,drop);
+    if(type==='account'){ contactsOf(dropId).forEach(c=>{ c.accountId=keepId; stampU(c); });
+      dealsOf(dropId).forEach(d=>{ d.accountId=keepId; stampU(d); });
+      tasks().forEach(t=>{ if(t.accountId===dropId) t.accountId=keepId; }); }
+    else { deals().forEach(d=>{ if(d.contactId===dropId){ d.contactId=keepId; stampU(d); } });
+      tasks().forEach(t=>{ if(t.contactId===dropId) t.contactId=keepId; });
+      (store.__signals||[]).forEach(s=>{ if(s.cid===dropId) s.cid=keepId; }); }
+    delete store[coll][dropId]; tomb(dropId); merged++;
+  });
+  stampU(keep); save(); renderDedupe(); renderCounts(); renderStats();
+  const label=type==='account'?aname(keep):cname(keep);
+  toast('Merged '+merged+' into "'+esc(label)+'"', ()=>{ store.accounts=snap.accounts; store.contacts=snap.contacts;
+    store.deals=snap.deals; store.__tasks=snap.tasks; store.__signals=snap.signals; store.__del=snap.del;
+    save(); renderDedupe(); renderCounts(); renderStats(); });
+}
+function dedupeMergeIdx(gi,keepId){ const g=_dedupeGroups[gi]; if(!g) return; dedupeDoMerge(g.type,keepId,g.recs.map(r=>r.id)); }
+function dedupeKeepIdx(gi){ const g=_dedupeGroups[gi]; if(!g) return; store.__dedupeKeep=store.__dedupeKeep||{};
+  store.__dedupeKeep[g.sig]=Date.now(); save(); renderDedupe(); toast('Kept separate'); }
+function openDedupe(){ switchTab('dedupe'); }
+function dedupeRow(g,gi,r){
+  let name,meta;
+  if(g.type==='account'){ const nC=contactsOf(r.id).length, nD=dealsOf(r.id).length; name=esc(r.name||'(no name)');
+    meta=[ (r.city&&r.state)?esc(r.city+', '+r.state):esc(r.city||r.state||''), nC+' contact'+(nC!==1?'s':''),
+      nD+' deal'+(nD!==1?'s':''), r.isCustomer?'✓ customer':'', (+r.mrr)?money(+r.mrr):'' ].filter(Boolean).join(' · '); }
+  else { const a=acct(r.accountId); name=esc(cname(r));
+    meta=[ esc(r.email||'no email'), esc(r.phone||'no phone'), a?esc(aname(a)):'no account', r.warmth||'',
+      (+r.callCount)?('☎ '+r.callCount):'' ].filter(Boolean).join(' · '); }
+  return '<div style="display:flex;align-items:center;gap:10px;border:1px solid var(--bd);border-radius:8px;padding:8px 10px">'+
+    '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:13px">'+name+'</div>'+
+    '<div class="tsub" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(meta||'—')+'</div></div>'+
+    '<button class="btn sm pri" onclick="dedupeMergeIdx('+gi+',\''+r.id+'\')" title="Keep this record; merge the other'+(g.recs.length>2?'s':'')+' into it">Keep this ▸ merge</button></div>';
+}
+function dedupeCard(g,gi){
+  const rlabel={name:'Same name',email:'Same email',phone:'Same phone'}[g.reason]||'Possible match';
+  const caveat=g.reason==='phone'?' <span class="tsub" style="font-size:10px;font-weight:400">— could be a shared location line, check first</span>':'';
+  let h='<div class="panel" style="margin:0"><div class="ph" style="padding:9px 12px"><h3 style="font-size:13px">'+rlabel+caveat+'</h3>'+
+    '<span class="sub">'+g.recs.length+' records</span></div><div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">';
+  g.recs.forEach(r=>{ h+=dedupeRow(g,gi,r); });
+  h+='<div><button class="btn sm gh" onclick="dedupeKeepIdx('+gi+')">Keep separate</button></div></div></div>';
+  return h;
+}
+function renderDedupe(){
+  _dedupeGroups=dedupeScan();
+  const g=_dedupeGroups;
+  let h='<div class="panel"><div class="ph"><h3>Dedupe review</h3><span class="sub">'+g.length+' suspected duplicate group'+(g.length!==1?'s':'')+
+    ' — nothing is removed without your OK</span><button class="btn sm gh" style="margin-left:auto" onclick="switchTab(\'accounts\')">Done</button></div>';
+  if(!g.length){ h+='<div class="qempty" style="padding:24px">✓ No duplicates found — your book is clean.</div></div>'; el('view-dedupe').innerHTML=h; return; }
+  h+='<div style="padding:12px;display:flex;flex-direction:column;gap:12px">';
+  g.forEach((grp,gi)=>{ h+=dedupeCard(grp,gi); });
+  h+='</div></div>';
+  el('view-dedupe').innerHTML=h;
+}
 
 /* ====================== QUICK ADD ====================== */
 let QA_MODE='account';
