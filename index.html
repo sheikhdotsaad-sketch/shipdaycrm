@@ -431,7 +431,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·s';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·u';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -643,6 +643,7 @@ document.getElementById('nav').addEventListener('click',e=>{
 });
 function switchTab(v){
   UI.tab=v;
+  try{ localStorage.setItem('shipday_crm_tab',v); }catch(e){}
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='view-'+v));
   // stage filter only relevant to pipeline; show filter card contextually
@@ -1265,6 +1266,47 @@ function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.l
 const snoozeCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end">'+
   (telNum(r)?'<a class="btn sm gh" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')">📞</a>':'')+
   '<button class="btn sm gh" onclick="event.stopPropagation();clearSnooze(\''+r.id+'\')">↑ Requeue</button></div>';
+// ---- AI Call Brief: live talking points generated from the account's own signals ----
+function posAngle(a){ const p=((a&&a.pos)||'').toLowerCase();
+  if(/toast/.test(p)) return 'Plugs straight into Toast online ordering — add delivery to their existing pickup site with no workflow change.';
+  if(/square/.test(p)) return 'Integrates with Square Online so they dispatch their own drivers right from checkout.';
+  if(/clover/.test(p)) return 'Works alongside Clover to turn in-store ordering into direct delivery.';
+  if(/olo|chownow|deliverect|ubereats|doordash/.test(p)) return 'Connects to their '+esc(a.pos)+' stack to run self-delivery and keep the margin.';
+  return ''; }
+function callBrief(c){ if(!c) return '';
+  const a=acct(c.accountId), rep=store.__rep||'Saad';
+  const open=lastOpenTs(c), opens=openCount(c), touch=lastTouchTs(c), fn=(c.first||cname(c).split(' ')[0]||'there');
+  let head;
+  if(c.replied) head='↩️ <b>Replied to your outreach</b> — they raised a hand. Reference it and go straight for a time.';
+  else if(open&&open>touch) head='🔥 <b>Opened your email '+fmtAgo(open)+'</b>'+(opens>1?' ('+opens+'× total)':'')+' — you\'re top of mind right now, lead with that.';
+  else if(opens>=2) head='👀 <b>'+opens+' opens</b> on your emails — real curiosity, not a cold dial.';
+  else if(c.apolloSeq) head='● In sequence "<b>'+esc(c.apolloSeq)+'</b>" — warm the thread, don\'t restart cold.';
+  else if(!+c.callCount) head='🆕 <b>First call</b> — keep it short, earn the 15-minute demo.';
+  else head='Following up — '+(+c.callCount||0)+' prior call'+((+c.callCount>1)?'s':'')+', last touch '+lastTouchLabel(c)+'.';
+  let opener;
+  if(c.replied) opener='"Hi '+esc(fn)+', thanks for writing back — figured it\'d be faster to grab two minutes live."';
+  else if(open&&open>touch) opener='"Hi '+esc(fn)+', it\'s '+esc(rep)+' from Shipday — I know you just looked at my note on '+esc(aname(a))+'\'s delivery, so I\'ll be quick."';
+  else opener='"Hi '+esc(fn)+', '+esc(rep)+' with Shipday — reaching out about running delivery in-house for '+esc(aname(a))+'."';
+  const snap=[];
+  if(a){ if(a.pos) snap.push('POS <b>'+esc(a.pos)+'</b>'); if(a.cuisine) snap.push(esc(a.cuisine));
+    const locs=isBrand(a)?childLocs(a.id).length:(+a.employees||0); if(locs>1) snap.push('🏢 <b>'+locs+' locations</b>');
+    if(a.delivery) snap.push('on '+esc(a.delivery)); if(a.city) snap.push(esc([a.city,a.state].filter(Boolean).join(', '))); }
+  const ang=posAngle(a)||((a&&a.delivery)?'They\'re paying 15-30% to '+esc(a.delivery)+' — Shipday lets them keep that margin with their own drivers.':'Position Shipday as their own delivery ops: dispatch, live tracking, no third-party fees.');
+  const od=(a?dealsOf(a.id):[]).filter(d=>!CLOSED.includes(d.stage))[0];
+  const dealLine=od?'<div style="margin-top:5px">📌 Open deal: <b>'+esc(od.stage)+'</b>'+(od.demoDate?' · demo '+esc(fmtD(new Date(+od.demoDate))):'')+'</div>':'';
+  const noteLine=c.notes?'<div style="margin-top:5px;color:var(--mut)">📝 '+esc(c.notes)+'</div>':'';
+  const K='color:var(--mut);text-transform:uppercase;font-size:10px;letter-spacing:.04em;font-weight:700;margin-right:5px';
+  return '<div style="background:var(--panel2);border-left:3px solid var(--sig);border-radius:8px;padding:11px 13px;margin-top:10px;font-size:12.5px;line-height:1.5">'+
+    '<div style="color:var(--sig);font-weight:800;font-size:11px;letter-spacing:.05em;margin-bottom:6px">✦ AI CALL BRIEF · '+esc(aname(a))+'</div>'+
+    '<div>'+head+'</div>'+
+    (snap.length?'<div style="margin-top:5px;color:#cdd6e0">'+snap.join(' · ')+'</div>':'')+
+    '<div style="margin-top:6px"><span style="'+K+'">Open with</span>'+opener+'</div>'+
+    '<div style="margin-top:5px"><span style="'+K+'">Angle</span>'+ang+'</div>'+
+    dealLine+noteLine+'</div>';
+}
+function showBrief(cid){ const c=contact(cid); const box=el('brief-c'+cid); if(!c||!box) return;
+  if(box.style.display==='none'||!box.innerHTML){ box.innerHTML=callBrief(c); box.style.display='block'; }
+  else { box.style.display='none'; } }
 function callCard(c,dueN,snoozedN){
   const a=acct(c.accountId), open=+c.lastEmailOpenTs||0, touch=lastTouchTs(c), p=telNum(c);
   const bits=[];
@@ -1284,10 +1326,22 @@ function callCard(c,dueN,snoozedN){
   h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="logCall(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<span class="tsub">no phone on file</span>';
   h+='<span onclick="openContact(\''+c.id+'\')" style="cursor:pointer;color:var(--mut);font-size:12px">Open contact ↗</span>';
   h+='</div></div>';
+  h+='<div style="padding:0 16px 4px">'+callBrief(c)+'</div>';
   h+='<div class="cc-dispo">'+DISPOS.map(d=>'<button class="btn sm gh" onclick="setDispo(\''+c.id+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
   h+='<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button>';
   h+='<button class="btn sm pri" onclick="bookDemo(\''+c.id+'\')">✅ Booked demo</button></div></div>';
   return h;
+}
+function recalcQueue(){
+  renderHotList();  // instant re-rank from current data
+  const jobs=[];
+  if(typeof syncApollo==='function') jobs.push(Promise.resolve(syncApollo(true)).catch(()=>0));
+  if(typeof syncGmail==='function') jobs.push(Promise.resolve(syncGmail(true)).catch(()=>0));
+  if(!jobs.length){ toast('Queue recalculated'); return; }
+  toast('Recalculating & syncing opens…');
+  Promise.all(jobs).then(rs=>{ const n=rs.reduce((a,x)=>a+(+x||0),0); renderHotList();
+    toast(n?('Queue re-ranked · '+n+' new open/reply'+(n>1?'s':'')):'Queue recalculated · no new signals'); })
+   .catch(()=>{ renderHotList(); toast('Queue recalculated'); });
 }
 function renderHotList(){
   const {due,snoozed}=hotQueue();
@@ -1304,7 +1358,7 @@ function renderHotList(){
   const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
   const droppedN=contacts().filter(c=>c.queueOut).length;
   const restoreLink=droppedN?' · <span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span>':'';
-  h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+'</span>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
+  h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+'</span><button class="btn sm gh" onclick="recalcQueue()" title="Pull fresh opens/replies and re-rank the whole queue" style="margin-left:auto">↻ Resync &amp; recalc</button>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
   if(snoozed.length){
     const t2=dataTable('hotlist2',chosenCols('hotlist2'),snoozed,r=>"openContact('"+r.id+"')",snoozeCell);
     h+='<div class="panel"><div class="ph"><h3>💤 Scheduled</h3><span class="sub">'+snoozed.length+' snoozed by disposition — soonest first</span>'+colMenu('hotlist2')+'</div>'+t2.html+'</div>';
@@ -1349,12 +1403,23 @@ function syncAll(){ toast('Refreshing everything…'); renderCounts();
   Promise.all(jobs).then(rs=>{ const n=rs.reduce((a,x)=>a+(+x||0),0); render();
     toast(n?('Synced — '+n+' contact update'+(n>1?'s':'')+', everything refreshed'):'Refreshed — no new signals'); })
    .catch(()=>{ render(); toast('Refreshed (sync unavailable)'); }); }
+function recalcIntent(){
+  renderIntent();  // instant recompute from current data
+  const jobs=[];
+  if(typeof syncApollo==='function') jobs.push(Promise.resolve(syncApollo(true)).catch(()=>0));
+  if(typeof syncGmail==='function') jobs.push(Promise.resolve(syncGmail(true)).catch(()=>0));
+  if(!jobs.length){ renderCounts(); toast('Intent recalculated'); return; }
+  toast('Recalculating & syncing opens…');
+  Promise.all(jobs).then(rs=>{ const n=rs.reduce((a,x)=>a+(+x||0),0); renderIntent(); renderCounts();
+    toast(n?('Intent re-ranked · '+n+' new open/reply'+(n>1?'s':'')):'Intent recalculated · no new signals'); })
+   .catch(()=>{ renderIntent(); toast('Intent recalculated'); });
+}
 function renderIntent(){
   const rows=intentRows();
   const trending=rows.filter(r=>r.trending);
   const opens7=rows.reduce((a,r)=>a+r.opens7,0), reps=rows.reduce((a,r)=>a+r.replies,0);
   let h='<div class="panel"><div class="ph"><h3>🎯 Intent Tracker</h3><span class="sub">accounts heating up — rolled up from every contact\'s opens, replies &amp; calls</span>'+
-    '<button class="btn sm pri" style="margin-left:auto" onclick="syncAll()">↻ Refresh live</button></div>'+
+    '<button class="btn sm pri" style="margin-left:auto" onclick="recalcIntent()">↻ Resync &amp; recalc</button></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
       stat(trending.length,'🔥 Trending (2+ engaged)',true)+stat(rows.length,'Accounts w/ signal')+
       stat(opens7,'Opens · 7d')+stat(reps,'Replies')+'</div></div></div>';
@@ -2143,7 +2208,13 @@ async function doLogout(){ if(sb)await sb.auth.signOut(); location.reload(); }
 function enterApp(){ el('gate').classList.add('hidden'); el('app').style.display='block'; el('signout').style.display='inline-block'; boot(); }
 
 /* ====================== BOOT ====================== */
-function boot(){ render(); syncRail(); checkBackupBanner(); initSync();
+function boot(){
+  let t='today'; try{ t=localStorage.getItem('shipday_crm_tab')||'today'; }catch(e){}
+  const valid=['today','hotlist','pipeline','accounts','contacts','intent','closed','live','quota'];
+  if(!valid.includes(t)) t='today';
+  buildFilters(); renderStats(); renderCounts(); renderTaskWidget();
+  switchTab(t);
+  syncRail(); checkBackupBanner(); initSync();
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
