@@ -464,7 +464,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z12';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z19';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -974,6 +974,14 @@ function startCadence(ent,id,silent){
   if(!silent){ toast('5-step call cadence started'); renderActive(); refreshDrawer(); renderTaskWidget(); } }
 function addCadenceFor(ent,id){ startCadence(ent,id); }
 function hasCadence(ent,id){ return tasks().some(t=>t.cadence&&(ent==='c'?t.contactId===id:t.accountId===id)); }
+// A logged call CONSUMES the current call-cadence step: close the earliest open cadence task on
+// this contact (or its account) so it drops out of that step and the next one surfaces on its due
+// date. Returns the closed task id so a disposition undo can reopen it. Keeps the cadence honest —
+// the SDR works the queue top-down and never re-dials a step already handled.
+function advanceCallCadence(c){ if(!c) return null;
+  const open=tasks().filter(t=>t.cadence&&!t.done&&(t.contactId===c.id||(c.accountId&&t.accountId===c.accountId)))
+    .sort((a,b)=>(+a.due)-(+b.due));
+  const t=open[0]; if(!t) return null; t.done=true; t.doneTs=Date.now(); return t.id; }
 function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.due<now); const lk=taskLink(t);
   const when=t.done?'done':(overdue?'overdue '+fmtWhen(+t.due):fmtWhen(+t.due));
   const badge=t.done?'<span class="tag">done</span>':'<span class="tag'+(overdue?' od':'')+'">'+esc(when)+'</span>';
@@ -991,19 +999,26 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
 function openTaskCount(){ return tasks().filter(t=>!t.done).length; }
 let twFilter='all';
 function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
-function taskWidgetInner(){ const now=today0().getTime(); const list=tasks().slice();
-  const open=list.filter(t=>!t.done).sort((a,b)=>(+a.due)-(+b.due));
-  const overdue=open.filter(t=>+t.due<now).length; const dueToday=open.filter(t=>+t.due>=now&&+t.due<now+864e5).length;
+function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864e5; const list=tasks().slice();
+  const openAll=list.filter(t=>!t.done);
+  // Dashboard shows only what's actionable now: overdue + due today. Future-dated steps (e.g. the
+  // next email due in 2 days) stay hidden until they come due, so the queue isn't cluttered.
+  const open=openAll.filter(t=>+t.due<endToday).sort((a,b)=>(+a.due)-(+b.due));
+  // "Upcoming" = due tomorrow onward, so the rep can peek at what's next without cluttering today.
+  const upList=openAll.filter(t=>+t.due>=endToday).sort((a,b)=>(+a.due)-(+b.due));
+  const upcoming=upList.length;
+  const overdue=open.filter(t=>+t.due<now).length; const dueToday=open.length-overdue;
   const nCall=open.filter(t=>t.type==='call').length, nEmail=open.filter(t=>t.type==='email').length;
   const nDone=list.filter(t=>t.done).length;
   const chip=(k,lbl,n)=>'<button class="twchip'+(twFilter===k?' on':'')+'" onclick="setTwFilter(\''+k+'\')">'+lbl+(n?' <b>'+n+'</b>':'')+'</button>';
   let rows;
   if(twFilter==='done') rows=list.filter(t=>t.done).sort((a,b)=>(+b.doneTs||0)-(+a.doneTs||0)).slice(0,25);
+  else if(twFilter==='up') rows=upList;
   else if(twFilter==='call') rows=open.filter(t=>t.type==='call');
   else if(twFilter==='email') rows=open.filter(t=>t.type==='email');
   else rows=open;
-  let h='<div class="tw-sub">'+open.length+' open'+(overdue?' · <span class="tw-od">'+overdue+' overdue</span>':'')+(dueToday?' · '+dueToday+' today':'')+'</div>';
-  h+='<div class="twtabs">'+chip('all','All',open.length)+chip('call','📞 Calls',nCall)+chip('email','✉️ Emails',nEmail)+chip('done','✓ Done',nDone)+'</div>';
+  let h='<div class="tw-sub">'+open.length+' open'+(overdue?' · <span class="tw-od">'+overdue+' overdue</span>':'')+(dueToday?' · '+dueToday+' today':'')+(upcoming?' · '+upcoming+' upcoming':'')+'</div>';
+  h+='<div class="twtabs">'+chip('all','All',open.length)+chip('call','📞 Calls',nCall)+chip('email','✉️ Emails',nEmail)+chip('up','⏭ Upcoming',upcoming)+chip('done','✓ Done',nDone)+'</div>';
   // quick add
   h+='<div class="tkadd">'+
      '<input id="tk-title" placeholder="Add a follow-up…" onkeydown="if(event.key===\'Enter\')quickAddTask()">'+
@@ -1012,7 +1027,7 @@ function taskWidgetInner(){ const now=today0().getTime(); const list=tasks().sli
      '<input id="tk-due" type="date">'+
      '<button class="btn sm pri" onclick="quickAddTask()">＋ Add</button></div>';
   h+='<table><tbody>';
-  h+= rows.length? rows.map(taskRow).join('') : '<tr><td class="empty" colspan="4">'+(twFilter==='done'?'Nothing completed yet.':'No tasks here.')+'</td></tr>';
+  h+= rows.length? rows.map(taskRow).join('') : '<tr><td class="empty" colspan="4">'+(twFilter==='done'?'Nothing completed yet.':twFilter==='up'?'Nothing scheduled ahead.':'No tasks here.')+'</td></tr>';
   h+='</tbody></table>';
   // Apollo (synced, read-only)
   const ap=store.__apollo||{}; const apSeqs=ap.sequences||[];
@@ -1065,6 +1080,14 @@ function renderToday(){
 
   // 🔥 Recent signals — new opens/replies worth a call (why the Hot List re-ranked)
   h+=signalsPanel();
+
+  // Apollo tasks — its own panel with a ↻ Sync (mirrors Gmail/Calendar)
+  const apSeqsT=ap.sequences||[];
+  h+='<div class="panel"><div class="ph"><h3>📋 Apollo Tasks</h3><span class="sub">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span>'+
+     '<button class="btn sm gh" style="margin-left:auto" onclick="syncApollo()">↻ Sync</button></div><table><tbody>';
+  h+= apSeqsT.length? apSeqsT.map(sq=>'<tr><td class="tname">'+esc(sq.name)+'</td><td class="tsub" style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>').join('')
+      : '<tr><td class="empty" colspan="2">No Apollo tasks synced yet — hit ↻ Sync.</td></tr>';
+  h+='</tbody></table>'+(ap.syncedAt?'<div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>':'')+'</div>';
 
   // Gmail replies
   h+='<div class="panel"><div class="ph"><h3>✉️ New Replies</h3><span class="sub">'+replies.length+' · synced '+fmtAgo(gm.syncedAt)+'</span>'+
@@ -1328,7 +1351,7 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
 let callModalId=null, cmSel={dispo:'',req:'none',note:''};
 function openCallModal(cid){ const c=contact(cid); if(!c) return;
-  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||''};
+  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',customTs:0};
   claimLead(c);  // opening to work the lead locks it to you (no log yet)
   let m=el('callModal'); if(!m){ m=document.createElement('div'); m.id='callModal'; m.className='cmodal-wrap';
     m.addEventListener('click',function(e){ if(e.target===m) closeCallModal(); }); document.body.appendChild(m); }
@@ -1345,6 +1368,7 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
     '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…" oninput="cmSel.note=this.value">'+esc(cmSel.note)+'</textarea>'+
     '<div class="cm-lbl">Call back</div><div class="cm-reqs">'+reqBtns+'</div>'+
+    (cmSel.req==='custom'?'<input type="datetime-local" id="cmCustom" class="cm-note" style="margin-top:6px" value="'+(cmSel.customTs?esc(dtLocal(cmSel.customTs)):'')+'" onchange="cmSel.customTs=this.value?new Date(this.value).getTime():0">':'')+
     '<div class="cm-foot"><button class="btn gh" onclick="closeCallModal()">Cancel</button>'+
       '<button class="btn" onclick="bookDemoFromModal()">✅ Booked demo</button>'+
       '<button class="btn pri" onclick="saveCallModal()">Save outcome</button></div>'+
@@ -1357,32 +1381,37 @@ function cmPickReq(k){ cmSyncNote(); cmSel.req=k; renderCallModal(); }
 function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
 function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal(); return; }
   cmSyncNote(); if(!cmSel.dispo){ toast('Pick an outcome first'); return; }
-  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req); closeCallModal(); }
+  if(cmSel.req==='custom'&&!cmSel.customTs){ toast('Pick a custom call-back time'); return; }
+  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req,cmSel.customTs); closeCallModal(); }
 function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
   if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
 // applyDispo = the SINGLE place a call is recorded: bumps call count, stamps last-contacted,
 // saves the note, and requeues ONLY if the rep chose a call-back window. Fully reversible.
-function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return;
+function applyDispo(c,key,note,reqKey,customTs){ const d=DISPO_BY[key]; if(!c||!d) return;
   if(pinnedLead===c.id) pinnedLead=null;
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,queueOut:c.queueOut,queueOutTs:c.queueOutTs,
-    callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted};
+    callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted,warmth:c.warmth};
   c.callCount=(+c.callCount||0)+1;
   c.dispo=d.t; c.dispoTs=Date.now();
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
   const nt=(note||'').trim(); if(nt) c.callNote=nt;
   const rq=REQUEUE_BY[reqKey]||REQUEUE_BY.none;
   if(d.gone||rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; }
-  else { c.queueOut=false; c.nextCallAt=Date.now()+rq.ms; }
+  else { c.queueOut=false; c.nextCallAt=(reqKey==='custom'&&customTs)?(+customTs):(Date.now()+(+rq.ms||0)); }
+  // Disposition nudges warmth (complementary): good call heats, bad call cools; Hot List re-ranks.
+  if(d.w) c.warmth=d.w;
   // "Already a Shipday customer" → flag the whole ACCOUNT as an existing customer (NOT our win,
   // no MRR/quota credit) so it drops out of the prospect queue and nobody dials it again.
   let aPrev=null; const a=d.cust?acct(c.accountId):null;
   if(a){ aPrev={id:a.id,isCustomer:a.isCustomer,existingCust:a.existingCust,notOwned:a.notOwned};
     a.isCustomer=true; a.existingCust=true; a.notOwned=true; stampU(a); }
   stampU(c); logAuto(c,'☎ '+d.t+(nt?' — '+nt:'')); if(a) logAuto(a,'🏢 Marked existing Shipday customer (not owned) via call');
+  // Consume the current call-cadence step (if any) — this call handled it.
+  const cadTaskId=advanceCallCadence(c); if(cadTaskId) logAuto(c,'☑ Call-cadence step completed');
   releaseClaim(c);
   save(); renderActive(); refreshDrawer();
   const back=(d.gone||rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt);
-  toast(d.t+' · '+back,()=>{ Object.assign(c,prev); if(aPrev){ const aa=acct(aPrev.id); if(aa){ aa.isCustomer=aPrev.isCustomer; aa.existingCust=aPrev.existingCust; aa.notOwned=aPrev.notOwned; stampU(aa); } } stampU(c); save(); renderActive(); refreshDrawer(); }); }
+  toast(d.t+' · '+back,()=>{ Object.assign(c,prev); if(aPrev){ const aa=acct(aPrev.id); if(aa){ aa.isCustomer=aPrev.isCustomer; aa.existingCust=aPrev.existingCust; aa.notOwned=aPrev.notOwned; stampU(aa); } } if(cadTaskId){ const tk=tasks().find(x=>x.id===cadTaskId); if(tk){ tk.done=false; tk.doneTs=0; } } stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function logCall(cid){ openCallModal(cid); }   // legacy shim: any old dial hook now opens the modal
 function renderLeads(){
   const recs=prefilter(contacts().filter(c=>PROSPECT.includes(c.status||'New')&&!isCustC(c)));
@@ -1396,34 +1425,40 @@ const _HR=36e5, _DAY=864e5;
 // Outcome only — NO forced auto-requeue. The rep chooses the call-back window
 // (REQUEUE below) per call, so "Connected" never silently snoozes 3 days.
 // req = a SUGGESTED default call-back (rep can override or clear); gone = drop from queue.
+// Outcome + a warmth nudge (w). The disposition is COMPLEMENTARY to warmth: a good call heats the
+// lead, a bad one cools it, so the Hot List re-ranks itself off the call result. w omitted = neutral
+// (warmth untouched). req = a SUGGESTED call-back window (rep can override or clear).
 const DISPOS=[
-  {k:'interested', t:'✅ Interested',        req:'2d'},
-  {k:'callback',   t:'↩ Callback set',       req:'1d'},
-  {k:'lvm',        t:'📩 Left voicemail',     req:'2d'},
-  {k:'noanswer',   t:'📵 No answer',          req:'3h'},
+  {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot'},
+  {k:'callback',   t:'↩ Callback set',       req:'1d',  w:'Hot'},
+  {k:'lvm',        t:'📩 Left voicemail',     req:'4h'},
+  {k:'noanswer',   t:'📵 No answer',          req:'4h'},
   {k:'gatekeeper', t:'🛡 Gatekeeper',         req:'1d'},
-  {k:'wrongtime',  t:'🕒 Not a good time',    req:'1w'},
-  {k:'thinking',   t:'🤔 Thinking it over',   req:'1w'},
-  {k:'notnow',     t:'💤 Not now / later Q',  req:'30d'},
-  {k:'notint',     t:'🙅 Not interested',     gone:1},
-  {k:'competitor', t:'🏳 Uses competitor',    req:'30d'},
+  {k:'wrongtime',  t:'🕒 Not a good time',    req:'1w',  w:'Warm'},
+  {k:'thinking',   t:'🤔 Thinking it over',   req:'1w',  w:'Warm'},
+  {k:'notnow',     t:'💤 Not now / later Q',  req:'30d', w:'Warm'},
+  {k:'notint',     t:'🙅 Not interested',     gone:1,    w:'Cold'},
+  {k:'competitor', t:'🏳 Uses competitor',    req:'30d', w:'Cold'},
   {k:'existing',   t:'🏢 Already a Shipday customer', gone:1, cust:1},
   {k:'dnc',        t:'⛔ Do not call',         gone:1},
   {k:'badnumber',  t:'☎ Bad number',          gone:1},
 ];
 const DISPO_BY=Object.fromEntries(DISPOS.map(d=>[d.k,d]));
-// Call-back windows. 'none' = handled, no auto-requeue (drops out of "due now",
-// restorable). Nothing is ever forced — the rep picks.
+// Call-back windows the rep picks after the call. 'next' = resurface at the top of the Hot List
+// right now; 'custom' = pick an exact date/time; 'none' = handled, drops out of "due now"
+// (restorable). Nothing is ever forced — the rep chooses.
 const REQUEUE=[
-  {k:'none',t:'No call-back',ms:-1},
-  {k:'3h', t:'Later today',  ms:3*_HR},
-  {k:'1d', t:'Tomorrow',     ms:1*_DAY},
-  {k:'2d', t:'In 2 days',    ms:2*_DAY},
-  {k:'1w', t:'Next week',    ms:7*_DAY},
-  {k:'2w', t:'In 2 weeks',   ms:14*_DAY},
-  {k:'30d',t:'In a month',   ms:30*_DAY},
+  {k:'next',  t:'⚡ Call next',    ms:0},
+  {k:'4h',    t:'In 4 hours',      ms:4*_HR},
+  {k:'custom',t:'Custom time…',    ms:null},
+  {k:'1d',    t:'In a day',        ms:1*_DAY},
+  {k:'1w',    t:'Next week',       ms:7*_DAY},
+  {k:'30d',   t:'In a month',      ms:30*_DAY},
+  {k:'none',  t:'No call-back',    ms:-1},
 ];
 const REQUEUE_BY=Object.fromEntries(REQUEUE.map(r=>[r.k,r]));
+function dtLocal(ts){ const d=new Date(+ts||Date.now()); const p=n=>(n<10?'0':'')+n;
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
 function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
   const h=d/36e5; if(h<1) return Math.max(1,Math.round(d/6e4))+'m'; if(h<24) return Math.round(h)+'h';
   const days=Math.round(h/24); if(days===1) return 'tomorrow'; if(days<30) return 'in '+days+'d'; return 'in '+Math.round(days/30)+'mo'; }
@@ -1510,14 +1545,19 @@ function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY
   applyDispo(c,key,'',(d.gone?'none':(d.req||'none'))); }
 function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; stampU(c); save(); }
 function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; stampU(c); save(); renderActive(); toast('Re-queued to top'); }
+// Reschedule a snoozed lead's call-back forward (from now) without dialing — keeps the Scheduled
+// list under the rep's control so anything already in the re-queue can be pulled up or pushed out.
+function reschedule(cid,days){ const c=contact(cid); if(!c)return; c.queueOut=false; c.nextCallAt=Date.now()+days*_DAY; stampU(c); save(); renderActive(); toast('Rescheduled — call back '+fmtWhen(c.nextCallAt)); }
 function dropFromQueue(cid){ const c=contact(cid); if(!c)return; if(pinnedLead===cid) pinnedLead=null; c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
   toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
 function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
   if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
   out.forEach(c=>{ c.queueOut=false; }); save(); renderActive(); toast('Restored '+out.length+' to queue'); }
-const snoozeCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end">'+
-  (telNum(r)?'<a class="btn sm gh" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')">📞</a>':'')+
-  '<button class="btn sm gh" onclick="event.stopPropagation();clearSnooze(\''+r.id+'\')">↑ Requeue</button></div>';
+const snoozeCell=r=>'<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;align-items:center">'+
+  (telNum(r)?'<a class="btn sm gh" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')" title="Call now">📞</a>':'')+
+  '<button class="btn sm pri" onclick="event.stopPropagation();clearSnooze(\''+r.id+'\')" title="Pull to the top of the Hot List right now">⚡ Now</button>'+
+  '<button class="btn sm gh" onclick="event.stopPropagation();reschedule(\''+r.id+'\',1)" title="Push the call-back to tomorrow">+1d</button>'+
+  '<button class="btn sm gh" onclick="event.stopPropagation();reschedule(\''+r.id+'\',7)" title="Push the call-back to next week">+1w</button></div>';
 // ---- AI Call Brief: live talking points generated from the account's own signals ----
 function posAngle(a){ const p=((a&&a.pos)||'').toLowerCase();
   if(/toast/.test(p)) return 'Plugs straight into Toast online ordering — add delivery to their existing pickup site with no workflow change.';
@@ -1535,24 +1575,461 @@ const EMAIL_CADENCE=[
   {d:9, label:'ROI / objection'},
   {d:14,label:'Breakup'},
 ];
+/* ===== SEQ_LIB: Saad's REAL Apollo sequences, pulled verbatim from his account. The SDR picks
+   the play that matches the prospect, then copies each step's exact subject+body (same copy that
+   runs in Apollo) and sends from his own inbox. Tokens {{first_name}} {{company}} fill per contact.
+   type:'reply' = reply on the SAME Gmail thread as the prior step (Apollo reply_to_thread). ===== */
+const SEQ_LIB=[
+ {id:'toast-pickup', name:'Toast Pickup-Only (no delivery)', match:'toast', steps:[
+  {d:0,type:'new',label:'Intro',subj:"Adding delivery to {{company}}'s Toast site",body:`Hey {{first_name}},
+
+I wanted to reach out because I noticed {{company}} has Toast online ordering set up for pickup, but I did not see direct delivery available.
+
+That can be a missed revenue lever. If customers already know your food but want it delivered, they either go to DoorDash or Uber Eats, call the restaurant, or just order somewhere else.
+
+Shipday plugs into Toast so {{company}} can offer delivery directly from your existing Toast ordering page without hiring drivers or changing the store workflow.
+
+Orders still come into Toast the same way. Shipday just handles the delivery side in the background: dispatching a driver to your restaurant, sending branded live tracking, updating the customer, and coordinating the drop-off.
+
+The main idea is simple: turn your existing Toast site from pickup-only into a direct pickup + delivery channel.
+We already work with Ohio brands like Romeo's and Zeppe's, and I thought there could be a similar fit for {{company}}.
+
+Worth 10-15 minutes to see how this would plug into your Toast setup? You can grab a time on my calendar.
+
+Best,
+Saad`},
+  {d:2,type:'reply',label:'Bump',subj:"Re: Adding delivery to {{company}}'s Toast site",body:`Hey {{first_name}},
+
+Just wanted to bump this in case it got buried.
+
+The reason I reached out is pretty simple: if {{company}} is already taking pickup orders through Toast, Shipday can help you add delivery to that same ordering flow.
+
+No need to hire drivers. No need to send customers to a third-party app. The customer orders from your Toast site, and Shipday dispatches a driver in the background.
+
+Could be a simple way to open up more order volume from people who already want your food, but do not want to pick it up.
+
+Would 10 minutes this week work? You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'new',label:'No drivers',subj:"Delivery without hiring drivers",body:`Hey {{first_name}},
+
+One thing I should have made clearer: Shipday is not asking {{company}} to build an in-house delivery team.
+We plug into your Toast online ordering page so customers can place delivery orders directly through your site. Once the order is placed, Shipday handles the delivery layer behind the scenes.
+
+A driver gets dispatched to the restaurant, the customer gets branded tracking, and the order still flows through Toast the same way pickup orders do today.
+
+So for a pickup-only Toast restaurant, this is less about replacing a delivery system and more about adding a new direct revenue channel.
+
+Flat-fee delivery starts at $6.49 for up to 5 miles, with coverage available up to 10 miles.
+
+Worth seeing what this would look like for {{company}}? You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'reply',label:'Repeat customers',subj:"Re: Delivery without hiring drivers",body:`Hey {{first_name}},
+
+Another reason this could be worth looking at is repeat customers.
+
+If someone already likes {{company}}, delivery should not have to mean sending them to DoorDash or Uber Eats. That gives the app the customer relationship and takes a large cut of the order.
+
+With Shipday, those customers can order directly from your Toast site, while we handle the driver dispatch, tracking, and customer updates in the background.
+
+You keep the order direct, keep the customer data, and create another way for people nearby to order from you.
+
+Worth a quick walkthrough? You can grab a time here.
+
+Best,
+Saad`},
+  {d:4,type:'new',label:'Breakup',subj:"Should I leave this alone?",body:`Hey {{first_name}},
+
+I know you are busy, so I will keep this short.
+
+I reached out because {{company}} is already on Toast, but from what I saw, delivery does not appear to be available directly from your Toast site.
+
+That is where I thought Shipday could be useful. We help pickup-only Toast restaurants add direct delivery without hiring drivers, changing the ordering flow, or sending customers to third-party apps.
+
+Orders still come through Toast. Shipday handles dispatch, branded tracking, customer updates, delivery coordination, and review boosting in the background.
+
+No contracts, no hidden fees, and I can set you up with credits to test the platform.
+
+If adding delivery as a new revenue channel is even a little bit on your radar, I'd be happy to show you what it would look like in 10 minutes. You can grab a time here.
+
+Either way, appreciate your time and hope you have a great rest of the week.
+
+Best,
+Saad`},
+ ]},
+ {id:'no-show', name:'Demo No-Show Follow-Up', match:'', steps:[
+  {d:0,type:'new',label:'Reschedule',subj:"Sorry we missed each other",body:`Hey {{first_name}},
+
+We had a Shipday demo on the calendar but it looks like we missed each other. Totally understand, things come up in a busy restaurant.
+
+I still think there could be a real fit for {{company}}, so I would love to grab another 10-15 minutes whenever it is easier for you.
+
+You can grab a new time here.
+
+Best,
+Saad`},
+  {d:2,type:'reply',label:'Bump',subj:"Re: Sorry we missed each other",body:`Hey {{first_name}},
+
+Just floating this back to the top in case my last note got buried.
+
+Happy to work around your schedule. Even a quick call before or after service works fine on my end.
+
+You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'new',label:'Breakup',subj:"Should I close this out?",body:`Hey {{first_name}},
+
+I do not want to keep landing in your inbox if the timing is not right, so I will leave it here for now.
+
+If adding direct delivery to your Toast site is still worth a look, I am happy to walk you through it in 10 minutes, and I can set you up with credits to test the platform first.
+
+You can grab a time whenever it suits.
+
+Either way, appreciate your time and hope service is going well.
+
+Best,
+Saad`},
+ ]},
+ {id:'owner', name:'Owner.com Customers (Superfleet)', match:'owner', steps:[
+  {d:0,type:'new',label:'One fleet vs every',subj:"One fleet vs every fleet for {{company}}",body:`Hey {{first_name}},
+
+I noticed {{company}} is running online ordering through Owner, which is a smart way to keep commissions down.
+The one thing I wanted to flag is the delivery side. With most zero-commission setups, you connect a single delivery fleet, so every order is locked to that one network's pricing and driver availability.
+
+Shipday works differently. Our superfleet pulls from DoorDash, Uber Eats, and multiple other fleets on every order, then picks the cheapest and fastest driver available at that moment.
+
+So instead of choosing one provider and hoping they have coverage, you get the best option every time.
+Worth 10-15 minutes to compare it against your current delivery setup?
+
+You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'reply',label:'Follow-up',subj:"Re: One fleet vs every fleet for {{company}}",body:`Hey {{first_name}},
+
+Following up on the delivery piece.
+
+The single-fleet model gets expensive for a simple reason: when that one network surges or runs short on drivers, you either absorb the higher cost or the order slips.
+
+With Shipday's superfleet, each order routes to whichever fleet is cheapest and available right then, so you are never tied to one provider's pricing.
+
+Flat-fee delivery starts at $6.49 for up to 5 miles, with coverage up to 10 miles, and there are no contracts.
+
+Would a quick comparison be useful?
+
+You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'new',label:'Keep Owner',subj:"Keep Owner, upgrade the delivery side",body:`Hey {{first_name}},
+
+To be clear, I am not suggesting you move off Owner.
+
+You can keep your commission-free ordering exactly as it is. Shipday just sits on the delivery layer and gives you a superfleet of DoorDash, Uber Eats, and other couriers instead of a single locked-in fleet.
+
+The customer still orders from you, and Shipday handles dispatch, branded live tracking, and customer updates in the background, picking the best driver on every order.
+
+Worth seeing what the numbers would look like for {{company}}?
+
+You can grab a time here.
+
+Best,
+Saad`},
+  {d:4,type:'new',label:'Breakup',subj:"Should I leave this alone?",body:`Hey {{first_name}},
+
+I will keep this short since I know you are busy.
+
+The short version: Owner keeps your ordering commission-free, and Shipday's superfleet makes the delivery side cheaper and more reliable by pulling from DoorDash, Uber Eats, and more instead of one fleet.
+
+No contracts, no hidden fees, and I can set you up with credits to test it against your current setup.
+
+If it is even a little bit worth a look, I am happy to walk through it in 10 minutes.
+
+You can grab a time here.
+
+Either way, appreciate your time and hope {{company}} is having a strong season.
+
+Best,
+Saad`},
+ ]},
+ {id:'tds', name:'TDS (Toast Delivery Services)', match:'toast', steps:[
+  {d:0,type:'new',label:'Intro',subj:"Cutting {{company}}'s Toast delivery costs",body:`Hey {{first_name}},
+
+I wanted to reach out because I noticed {{company}} has delivery set up through Toast.
+
+If you are using Toast Delivery Services, Shipday is worth comparing because we plug into the same Toast ordering flow, but give restaurants more control over the delivery experience.
+
+Customers still order from your Toast site. Orders still come into Toast the same way. Shipday just powers the delivery side in the background: driver dispatch, branded tracking, customer updates, and delivery coordination.
+
+The main difference is flexibility. Restaurants use Shipday to improve delivery coverage, create a better branded tracking experience, reduce reliance on one fulfillment option, and keep more control over what happens after the order leaves the restaurant.
+
+We already work with Ohio brands like Romeo's and Zeppe's, and I thought there could be a similar fit for {{company}}.
+
+Worth 10-15 minutes to compare it against what you are using today? You can grab a time on my calendar.
+
+Best,
+Saad`},
+  {d:2,type:'reply',label:'Bump',subj:"Re: Cutting {{company}}'s Toast delivery costs",body:`Hey {{first_name}},
+
+Just wanted to bump this in case it got buried.
+
+The main thing I wanted to flag is simple: if {{company}} is using Toast Delivery Services, there may be a cleaner way to lower the delivery cost without changing your Toast setup.
+
+Same Toast menu. Same order flow. More flexibility on fulfillment, tracking, radius, and customer communication.
+Would 10 minutes this week work? You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'new',label:'TDS vs Shipday',subj:"TDS vs Shipday",body:`Hey {{first_name}},
+
+I know Toast Delivery Services can feel like the default option if you are already on Toast.
+The part I would look at is whether it is actually the best delivery setup for {{company}}.
+
+Shipday is not meant to replace Toast. We plug into Toast and power the delivery layer behind the order. The customer still orders through your Toast site, the order still flows into Toast, and Shipday handles the driver dispatch, branded live tracking, updates, and delivery support.
+
+The difference is more flexibility around cost, delivery radius, driver options, customer experience, and reviews.
+I can also set restaurants up with credits so they can test the platform without taking on much risk upfront.
+
+Worth seeing how it would compare to your current setup? You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'reply',label:'Reviews',subj:"Re: TDS vs Shipday",body:`Hey {{first_name}},
+
+Another reason I thought this could be worth looking at is the customer experience after the order leaves the restaurant.
+
+That is usually where delivery issues become Google review issues, even when the food was not the problem.
+
+With Shipday, customers get branded live tracking and delivery updates, and restaurants can use our review booster after the order is completed. The goal is to catch unhappy delivery experiences privately first, while pushing happy customers toward Google.
+
+So this is not just about lowering delivery costs. It is also about giving {{company}} more control over the experience attached to the order.
+
+Worth a quick walkthrough? You can grab a time here.
+Best,
+Saad`},
+  {d:4,type:'new',label:'Breakup',subj:"Should I leave this alone?",body:`Hey {{first_name}},
+
+I have reached out a few times, so I do not want to keep cluttering your inbox if this is not a priority right now.
+The reason I thought Shipday could be relevant is that {{company}} is already on Toast, and delivery is one of the easiest places to protect margin without changing how customers order.
+
+If Toast Delivery Services is working perfectly, no worries at all. But if delivery cost, driver flexibility, tracking, radius, or reviews are things you want more control over, Shipday is probably worth a look.
+
+No contracts, no hidden fees, and I can set you up with credits to test it.
+
+If it is worth 10 minutes, my calendar is right here.
+
+Either way, appreciate your time.
+
+Best,
+Saad`},
+ ]},
+ {id:'square', name:'Square Customers (Superfleet)', match:'square', steps:[
+  {d:0,type:'new',label:'One fleet vs every',subj:"One fleet vs every fleet for {{company}}",body:`Hey {{first_name}},
+
+Quick question about how {{company}} handles delivery through Square.
+
+Square Online gets you commission-free orders, but on the delivery side you are locked into a single fleet. When that one fleet is slow, surging, or has no drivers nearby, the order still goes out the door at whatever price and ETA that fleet gives you.
+
+Shipday works differently. We pull from a superfleet of DoorDash, Uber Eats and other providers on every single order, then automatically pick the cheapest and fastest driver available at that moment. You keep your own customers and your own margins, you just stop being at the mercy of one fleet.
+
+Worth a quick look? You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'reply',label:'Follow-up',subj:"Re: One fleet vs every fleet for {{company}}",body:`Hey {{first_name}},
+
+Following up on this. The part that usually gets people is the single-fleet math. When you can only book one provider, you eat their surge pricing and their wait times on busy nights, exactly when you can least afford it.
+
+With Shipday you get every fleet competing for each order, so you always take the best price and ETA. Flat rate is $6.49 for up to 5 miles and stays reasonable up to 10 miles, no contract and no per-order commission.
+
+Want me to walk you through it? Grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'new',label:'Keep Square',subj:"Keep Square, upgrade the delivery side",body:`Hey {{first_name}},
+
+To be clear, this is not about ripping out Square. Plenty of restaurants keep Square for online ordering and payments and just run their actual deliveries through Shipday so they are not stuck with one fleet.
+
+You keep the commission-free ordering you already like, and you get a superfleet of DoorDash, Uber Eats and more picking the cheapest and fastest driver on every order. Best of both.
+
+Open to fifteen minutes to see if it fits {{company}}? Grab a time here.
+
+Best,
+Saad`},
+  {d:4,type:'new',label:'Breakup',subj:"Should I leave this alone?",body:`Hey {{first_name}},
+
+I do not want to keep landing in your inbox if the timing is off. If being locked into one delivery fleet is not a pain point for {{company}} right now, no problem at all and I will close this out.
+
+If it is worth a look, the door is open. Grab a time here whenever works.
+
+Best,
+Saad`},
+ ]},
+ {id:'dd-ue', name:'DoorDash/Uber Eats (no direct delivery)', match:'doordash|uber', steps:[
+  {d:0,type:'new',label:'Intro',subj:"Direct delivery for {{company}}",body:`Hey {{first_name}},
+
+I wanted to reach out about something most Toast restaurants are dealing with: customers who already know the brand still ordering through DoorDash or Uber Eats.
+
+That means {{company}} may be giving up 20-30% on orders that could be coming directly through your own Toast site.
+
+Shipday is a Toast integration partner that helps restaurants run direct delivery from their Toast online ordering page. Nothing changes operationally for the store team. Orders still come into Toast the same way, and Shipday handles the delivery side in the background: driver dispatch, branded tracking, customer updates, and delivery coordination.
+
+The main idea is simple: keep more delivery orders direct instead of sending customers back to third-party apps.
+
+Flat-fee delivery starts at $6.49 for up to 5 miles, with coverage available up to 10 miles.
+We already work with Ohio brands like Romeo's and Zeppe's.
+
+Would 10-15 minutes this week make sense? Happy to show you exactly how it plugs into Toast. You can grab a time on my calendar.
+
+Best,
+Saad`},
+  {d:2,type:'reply',label:'Bump',subj:"Re: Direct delivery for {{company}}",body:`Hey {{first_name}},
+
+Just wanted to bump this to the top of your inbox in case it got buried.
+
+The main takeaway: Toast restaurants are using Shipday to stop sending repeat delivery customers back to DoorDash and Uber Eats, and instead offer delivery directly through their own Toast menu.
+
+That means you keep more of the sale, own the customer data, and still get a driver dispatched in the background.
+Would 10 minutes this week work? You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'new',label:'Keep it direct',subj:"Keeping delivery on your own Toast site",body:`Hey {{first_name}},
+
+One thing I should have made clearer: Shipday does not replace Toast or add a new ordering flow.
+Customers still order from your Toast site. Orders still come into Toast. Shipday just powers the delivery side after the order is placed.
+
+So instead of sending delivery customers to DoorDash or Uber Eats, {{company}} can keep the order direct and still get reliable driver coverage in the background.
+
+That is usually the bigger win: more direct orders, less commission loss, branded tracking, and customer data you can actually use again.
+
+I can also set restaurants up with credits so they can test real orders without much risk upfront.
+Worth seeing how this would look for {{company}}? You can grab a time here.
+
+Best,
+Saad`},
+  {d:3,type:'reply',label:'Reviews',subj:"Re: Keeping delivery on your own Toast site",body:`Hey {{first_name}},
+
+Another reason this could be worth looking at is reviews.
+
+When delivery happens through DoorDash or Uber Eats, the app controls most of the customer relationship. But if something goes wrong, the restaurant can still take the hit publicly through a bad Google review.
+
+With Shipday, customers get branded live tracking and updates, and restaurants can use our review booster after the order is completed. Happy customers can be pushed toward Google, while unhappy delivery feedback can be caught privately first.
+
+So the win is not just saving 20-30% in commission. It is more control over delivery, customer communication, and the reputation attached to your brand.
+
+Worth a quick walkthrough? You can grab a time here.
+
+Best,
+Saad`},
+  {d:4,type:'new',label:'Breakup',subj:"Should I leave this alone?",body:`Hey {{first_name}},
+
+I know you are busy, so I will keep this short.
+
+I reached out a couple times because {{company}} is already on Toast, and I thought there could be a real opportunity to keep more delivery orders direct instead of relying on DoorDash or Uber Eats.
+
+If the timing is off, I completely understand.
+
+But if delivery costs, third-party commissions, or customer ownership are even a little bit on your radar, I would be happy to show you how other Toast restaurants are handling it in a quick 10-minute call.
+
+No contracts, no hidden fees, and I can set you up with credits to try the platform.
+
+You can book a time here, or just reply and I will work around your schedule.
+
+Either way, appreciate your time and hope you have a great rest of the week.
+
+Best,
+Saad`},
+ ]},
+ {id:'closed-lost', name:'Closed Lost Re-Engagement', match:'', steps:[
+  {d:0,type:'new',label:'Check back',subj:"Checking back in on {{company}}",body:`Hey {{first_name}},
+
+We talked a while back about Shipday for {{company}}, and the timing was not quite right then.
+
+A lot has changed on our side since, so I wanted to reach back out and see if it is worth another look.
+
+The core idea is the same: Shipday plugs into your Toast ordering page so you can offer direct delivery without hiring drivers or sending customers to third-party apps.
+
+Would it be worth 10-15 minutes to catch up on what is new?
+
+You can grab a time here.
+
+Best,
+Saad`},
+  {d:4,type:'reply',label:'Pricing',subj:"Re: Checking back in on {{company}}",body:`Hey {{first_name}},
+
+Following up on my last note.
+
+One thing worth mentioning: flat-fee delivery starts at $6.49 for up to 5 miles, with coverage available up to 10 miles, and there are no contracts or hidden fees.
+
+If cost or commitment was part of why the timing did not work before, that part may look different now.
+
+You can grab a time here.
+
+Best,
+Saad`},
+  {d:5,type:'new',label:"What's new",subj:"What is new for Ohio restaurants",body:`Hey {{first_name}},
+
+Quick update on the delivery side for {{company}}.
+
+We are now working with Ohio brands like Romeo's and Zeppe's, helping them run direct delivery straight from their Toast site while Shipday handles dispatch, branded tracking, and customer updates in the background.
+
+The result is more direct orders without giving up the customer relationship to a third-party app.
+
+Worth revisiting for {{company}}?
+
+You can grab a time here.
+
+Best,
+Saad`},
+  {d:5,type:'new',label:'Breakup',subj:"Should I close this out for good?",body:`Hey {{first_name}},
+
+I do not want to keep reaching out if this is not on your radar, so I will leave it here.
+
+If direct delivery through your Toast site is even a little bit interesting, I am happy to show you what it would look like in 10 minutes, and I can set you up with credits to test it first.
+
+You can grab a time here.
+
+Either way, appreciate your time and I hope {{company}} is having a strong season.
+
+Best,
+Saad`},
+ ]},
+];
+function seqById(id){ if(id==='custom'){ const cu=store&&store.__cadence; return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return SEQ_LIB.find(q=>q.id===id)||null; }
+// Suggest the play that matches the account's stack; rep can always override in the picker.
+function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'').toLowerCase(), dl=((a&&a.delivery)||'').toLowerCase();
+  if(/square/.test(pos)) return 'square';
+  if(/owner/.test(pos)) return 'owner';
+  if(/doordash|uber|grubhub/.test(dl)) return 'dd-ue';
+  if(/toast/.test(pos)) return 'toast-pickup';
+  return 'dd-ue'; }
 // The rep can paste their OWN Apollo sequence copy into store.__cadence (synced to the team),
 // so Embert sends Saad's exact steps. Apollo's public API can't read step bodies, so this is a
 // one-time paste. When custom copy exists it fully replaces the built-in templates below.
 function cadDef(){ const c=store&&store.__cadence; return (Array.isArray(c)&&c.length)?c:EMAIL_CADENCE; }
+// Per-contact step set: the sequence the contact was enrolled in (SEQ_LIB), else custom paste, else default.
+function cadDefFor(c){ const s=c&&c.emailSeq; if(s&&s.seqId){ const q=seqById(s.seqId); if(q&&q.steps&&q.steps.length) return q.steps; } return cadDef(); }
+function cadNFor(c){ return cadDefFor(c).length; }
 function isCustomCad(){ const c=store&&store.__cadence; return !!(Array.isArray(c)&&c.length); }
 function cadN(){ return cadDef().length; }
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
-  const map={ first:(c.first||cname(c).split(' ')[0]||'there'), account:aname(a), rep:senderName(),
+  const fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a);
+  const map={ first:fn, first_name:fn, account:an, company:an, rep:senderName(),
     apps:(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats',
     locs:String(a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0) };
-  return String(str).replace(/\{\{\s*(first|account|rep|apps|locs)\s*\}\}/gi,(m,k)=>map[k.toLowerCase()]||''); }
+  return String(str).replace(/\{\{\s*(first_name|first|account|company|rep|apps|locs)\s*\}\}/gi,(m,k)=>map[k.toLowerCase()]||''); }
 function senderName(){ return myRep()||store.__rep||'Saad'; }
 function inApolloSeq(c){ return !!(c&&c.apolloSeq); }
 function cadState(c){ if(!c) return 'none'; if(inApolloSeq(c)) return 'apollo';
-  const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=cadN()) return 'manual'; return 'none'; }
+  const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=cadNFor(c)) return 'manual'; return 'none'; }
 function emailStep(c,n){
-  const custom=cadDef()[n-1];
-  if(custom&&(custom.subj||custom.body)) return {subj:fillTokens(custom.subj||'',c), body:fillTokens(custom.body||'',c)};
+  const custom=cadDefFor(c)[n-1];
+  if(custom&&(custom.subj||custom.body)) return {subj:fillTokens(custom.subj||'',c), body:fillTokens(custom.body||'',c), type:custom.type||'', label:custom.label||''};
   const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=senderName();
   const apps=(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats';
   const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
@@ -1571,30 +2048,45 @@ function emailStep(c,n){
 'Hi '+fn+',\n\nI don\'t want to keep crowding your inbox. If running delivery in-house isn\'t a priority for '+an+' right now, just say the word and I\'ll close things out.\n\nIf it\'s worth 15 minutes, I\'ll make it easy.');
   }
 }
-// Email cadence also drops one checkable task per step into the task dashboard, so the SDR can
-// work the whole email sequence from their worklist. emailSeq stays the source of truth for the
-// step/copy; the tasks mirror it. Completing a task advances the cadence and vice-versa.
-function buildEmailTasks(id){ const c=contact(id); if(!c)return; const def=cadDef(), N=def.length; const start=today0().getTime(), day=864e5;
-  store.__tasks=tasks().filter(t=>!(t.emailCad&&t.contactId===id));   // clear any prior email tasks for this contact
-  def.forEach((s,i)=>{ const lbl=s.label?(' — '+s.label):'';
-    addTask({title:'Email '+(i+1)+'/'+N+lbl,type:'email',contactId:id,due:start+(+s.d||0)*day,emailCad:true,cadStep:i+1,assignee:c.assignee||''}); }); }
-function markEmailStepSent(c,n,by){ if(!c) return; const N=cadN(); const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
+// Email cadence surfaces ONE checkable task at a time — the step that's due now. Sending a step
+// (from the drawer OR by checking the task) advances the cadence and spawns the NEXT step's task.
+// emailSeq stays the source of truth; the task mirrors the current step. Steps are reversible.
+function clearEmailTasks(id){ store.__tasks=tasks().filter(t=>!(t.emailCad&&t.contactId===id)); }
+function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def=cadDefFor(c), N=def.length; if(step<1||step>N) return;
+  if(tasks().some(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===step&&!t.done)) return;   // already an open task for this step
+  const s=def[step-1], lbl=s&&s.label?(' — '+s.label):''; const wait=(+ (s&&s.d)||0);            // days after the prior step
+  addTask({title:'Email '+step+'/'+N+lbl,type:'email',contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:c.assignee||''}); }
+function markEmailStepSent(c,n,by){ if(!c) return; const N=cadNFor(c); const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
   if(s.done && (+s.step||1)>n) return;                                // already fully sent past this step
   const e=emailStep(c,n);
   logAuto(c,'📧 Email '+n+'/'+N+' sent by '+by+' — '+e.subj);         // counts as an email touch (lastSentTs)
-  s.lastBy=by; s.lastSentAt=Date.now(); if((+s.step||1)<=n) s.step=n+1; if(s.step>N) s.done=true; stampU(c); }
-function startEmailCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'✉️ Started '+cadN()+'-step email cadence'); buildEmailTasks(id); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Email cadence started — Email 1 is in your task list'); }
-function restartCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'↻ Restarted email cadence'); buildEmailTasks(id); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Cadence restarted'); }
-function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadN()); const e=emailStep(c,n);
+  s.lastBy=by; s.lastSentAt=Date.now(); if((+s.step||1)<=n) s.step=n+1; if(s.step>N) s.done=true;
+  const tk=tasks().find(t=>t.emailCad&&t.contactId===c.id&&(+t.cadStep||0)===n&&!t.done); if(tk){ tk.done=true; tk.doneTs=Date.now(); }  // close this step's task
+  if(!s.done) ensureEmailTask(c.id,n+1);                              // …and drop the next step's task
+  stampU(c); }
+// Revert one step: undo the most recent send, reopen that step's task, drop any later task.
+function revertEmailStep(id){ const c=contact(id); const s=c&&c.emailSeq; if(!s){ toast('No email cadence'); return; }
+  const N=cadNFor(c); const cur=s.done?N+1:Math.min(+s.step||1,N); const target=cur-1;
+  if(target<1){ toast('Already at Email 1'); return; }
+  s.done=false; s.step=target;
+  store.__tasks=tasks().filter(t=>!(t.emailCad&&t.contactId===id&&(+t.cadStep||0)>target));     // remove steps beyond target
+  const tk=tasks().find(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===target); if(tk){ tk.done=false; tk.doneTs=0; } else ensureEmailTask(id,target);
+  logAuto(c,'↩ Reverted to Email '+target); stampU(c); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Reverted to Email '+target); }
+function startEmailCadence(id){ const c=contact(id); if(!c)return;
+  const sel=el('seqPick_'+id); const seqId=(sel&&sel.value)||(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c);
+  const q=seqById(seqId); c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId}; stampU(c);
+  logAuto(c,'✉️ Started sequence "'+((q&&q.name)||'Email')+'" ('+cadNFor(c)+' steps)'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Sequence started — Email 1 is in your task list'); }
+function restartCadence(id){ const c=contact(id); if(!c)return; const seqId=(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c); c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId}; stampU(c); logAuto(c,'↻ Restarted email cadence'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Cadence restarted'); }
+function switchSequence(id){ const c=contact(id); if(!c)return; if(!confirm('Switch this contact to a different sequence? Progress on the current one is cleared.')) return; c.emailSeq=null; clearEmailTasks(id); stampU(c); logAuto(c,'⇄ Cleared sequence — choosing another'); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); }
+function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadNFor(c)); const e=emailStep(c,n);
   const txt='Subject: '+e.subj+'\n\n'+e.body;
   const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
   try{ document.execCommand('copy'); }catch(_){} document.body.removeChild(ta); toast('Email '+n+' copied — paste into your inbox'); }
 function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
-  const N=cadN(); const n=Math.min(+s.step||1,N); const by=senderName();
-  markEmailStepSent(c,n,by);
-  const tk=tasks().find(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===n&&!t.done); if(tk){ tk.done=true; tk.doneTs=Date.now(); }  // mirror to the worklist
+  const N=cadNFor(c); const n=Math.min(+s.step||1,N); const by=senderName();
+  markEmailStepSent(c,n,by);   // advances the step, closes this task, spawns the next
   save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
-  const nextD=cadDef()[n]?(+cadDef()[n].d||0):0;
+  const nextD=cadDefFor(c)[n]?(+cadDefFor(c)[n].d||0):0;
   toast(c.emailSeq.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+nextD+'d')); }
 function startApolloCadence(id){ toast('Apollo enrollment isn\'t wired yet — use the manual email cadence, or ask to connect your Apollo master key so any rep can enroll without a license.'); }
 // ===== Sequence copy editor: paste your real Apollo steps once, whole team sends them =====
@@ -1629,21 +2121,27 @@ function saveCadence(){ cadSync();
   store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); }
 function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadState(c);
   if(st==='apollo') return '<div class="cadbox in"><b>● In Apollo sequence:</b> '+esc(c.apolloSeq)+'<div class="tsub" style="margin-top:3px">Managed in Apollo — no manual sends needed here.</div></div>';
-  if(st==='none') return '<div class="cadbox"><div><b>Not in a cadence.</b> '+(isCustomCad()?'Using <b>your Apollo copy</b> ('+cadN()+' steps).':'Start touches to warm this contact.')+'</div>'+
-    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">✉️ Start '+cadN()+'-step email cadence</button>'+
-    '<button class="btn sm gh" onclick="openCadenceEditor()" title="Paste your real Apollo sequence copy — the whole team then sends it">✎ Edit sequence copy</button>'+
-    '<button class="btn sm gh" onclick="startApolloCadence(\''+id+'\')" title="Needs your Apollo master key wired server-side (so Embert can enroll without a license)">⚡ Start in Apollo</button></div></div>';
-  const N=cadN(), n=Math.min((+c.emailSeq.step||1),N), done=!!c.emailSeq.done, e=emailStep(c,n);
+  if(st==='none'){ const sug=suggestSeq(c);
+    let opts=SEQ_LIB.map(q=>'<option value="'+q.id+'"'+(q.id===sug?' selected':'')+'>'+esc(q.name)+' · '+q.steps.length+' steps</option>').join('');
+    if(isCustomCad()) opts+='<option value="custom">Custom (your pasted copy) · '+cadN()+' steps</option>';
+    return '<div class="cadbox"><div><b>Not in a sequence.</b> Pick the play that matches this prospect — the SDR sends your exact Apollo copy, step by step.</div>'+
+    '<select id="seqPick_'+id+'" class="cflt" style="width:100%;margin-top:8px;box-sizing:border-box">'+opts+'</select>'+
+    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">✉️ Start sequence</button>'+
+    '<button class="btn sm gh" onclick="openCadenceEditor()" title="Paste/tweak a fully custom sequence — used when you pick Custom">✎ Edit custom copy</button></div></div>'; }
+  const N=cadNFor(c), n=Math.min((+c.emailSeq.step||1),N), done=!!c.emailSeq.done, e=emailStep(c,n);
   const lastBy=c.emailSeq.lastBy, lastAt=c.emailSeq.lastSentAt;
-  const stepLbl=(cadDef()[n-1]&&cadDef()[n-1].label)||('Email '+n);
-  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>✉️ Email cadence</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' sent':'Email '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
-  h+='<div class="tsub" style="margin-top:4px">Sending as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="openCadenceEditor()" style="cursor:pointer;color:var(--sig)">✎ edit copy</span>'+(isCustomCad()?' · <b>your Apollo copy</b>':'')+(lastBy?' · last sent by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
+  const qNow=seqById(c.emailSeq.seqId), seqName=(qNow&&qNow.name)||'Email sequence';
+  const stepLbl=(cadDefFor(c)[n-1]&&cadDefFor(c)[n-1].label)||('Email '+n);
+  const replyHint=(e.type==='reply')?' <span class="tag" style="background:#3a2f14;color:#e9c46a">↳ reply on the same thread</span>':'';
+  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>✉️ '+esc(seqName)+'</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' sent':'Email '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
+  h+='<div class="tsub" style="margin-top:4px">Sending as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span>'+(lastBy?' · last sent by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
   if(!done){
-    h+='<div style="margin-top:8px;font-size:12.5px"><b>Subject:</b> '+esc(e.subj)+'</div>';
+    h+='<div style="margin-top:8px;font-size:12.5px"><b>Subject:</b> '+esc(e.subj)+replyHint+'</div>';
     h+='<div class="cadbody">'+esc(e.body)+'</div>';
-    h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="copyEmailStep(\''+id+'\')">⧉ Copy Email '+n+'</button><button class="btn sm" onclick="logEmailSent(\''+id+'\')">✓ Log Email '+n+' sent</button></div>';
+    h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="copyEmailStep(\''+id+'\')">⧉ Copy Email '+n+'</button><button class="btn sm" onclick="logEmailSent(\''+id+'\')">✓ Log Email '+n+' sent</button>'+
+       (n>1?'<button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Undo the last send — go back a step">↩ Revert step</button>':'')+'</div>';
   } else {
-    h+='<div class="logbar" style="margin-top:8px"><button class="btn sm gh" onclick="restartCadence(\''+id+'\')">↻ Restart cadence</button></div>';
+    h+='<div class="logbar" style="margin-top:8px"><button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Reopen the last step">↩ Revert step</button><button class="btn sm gh" onclick="restartCadence(\''+id+'\')">↻ Restart cadence</button></div>';
   }
   return h+'</div>';
 }
@@ -1681,9 +2179,12 @@ function callBrief(c){ if(!c) return '';
   // Cadence status nudge
   const cs=cadState(c); let cad;
   if(cs==='apollo') cad='● Already in Apollo sequence "<b>'+esc(c.apolloSeq)+'</b>" — the call backs up the emails.';
-  else if(cs==='manual') cad='✉️ In your email cadence (Email '+Math.min(+c.emailSeq.step||1,cadN())+' of '+cadN()+') — reference the thread, don\'t restart cold.';
-  else if(cs==='done') cad='✉️ Email cadence complete — this call is the follow-through.';
-  else cad='⚠️ Not in a cadence yet — after the call, start a 5-step email sequence from the contact drawer.';
+  else if(cs==='manual'){ const q=seqById(c.emailSeq.seqId); cad='✉️ In "<b>'+esc((q&&q.name)||'email sequence')+'</b>" (Email '+Math.min(+c.emailSeq.step||1,cadNFor(c))+' of '+cadNFor(c)+') — reference the thread, don\'t restart cold.'; }
+  else if(cs==='done') cad='✉️ Email sequence complete — this call is the follow-through.';
+  else cad='⚠️ Not in a sequence yet — after the call, start the matching email sequence from the contact drawer.';
+  // Call-cadence status: where this contact sits in the 5-step dialer sequence (if enrolled).
+  const ccadOpen=tasks().filter(t=>t.cadence&&!t.done&&(t.contactId===c.id||(a&&t.accountId===a.id))).sort((x,y)=>(+x.due)-(+y.due));
+  const ccad=ccadOpen.length?'📞 <b>'+esc(ccadOpen[0].title.replace(' (cadence)',''))+'</b> due '+fmtWhen(+ccadOpen[0].due)+' — logging this call clears the step and queues the next.':'';
   const od=(a?dealsOf(a.id):[]).filter(d=>!CLOSED.includes(d.stage))[0];
   const dealLine=od?'<div style="margin-top:5px">📌 Open deal: <b>'+esc(od.stage)+'</b>'+(od.demoDate?' · demo '+esc(fmtD(new Date(+od.demoDate))):'')+'</div>':'';
   const noteLine=c.notes?'<div style="margin-top:5px;color:var(--mut)">📝 '+esc(c.notes)+'</div>':'';
@@ -1699,6 +2200,7 @@ function callBrief(c){ if(!c) return '';
     '<div style="'+SEC+'"><span style="'+K+'">If they push back</span>'+obj+'</div>'+
     '<div style="'+SEC+'"><span style="'+K+'">Close for the demo</span>'+close+'</div>'+
     '<div style="'+SEC+';color:var(--mut)"><span style="'+K+'">Cadence</span>'+cad+'</div>'+
+    (ccad?'<div style="'+SEC+';color:var(--mut)"><span style="'+K+'">Call step</span>'+ccad+'</div>':'')+
     dealLine+noteLine+'</div>';
 }
 function showBrief(cid){ const c=contact(cid); const box=el('brief-c'+cid); if(!c||!box) return;
@@ -2206,11 +2708,7 @@ function openContact(id){
     '<div class="tsub">'+esc(c.title||'')+(a?' · <a onclick="event.stopPropagation();openAccount(\''+a.id+'\')">'+esc(a.name)+'</a>':'')+'</div></div>'+
     warmBadge(c.warmth)+'<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
-  // Tap-to-call bar — dial the direct line or mobile straight from the drawer (logs the call).
-  const dialBtn=(ico,lab,num)=>num?'<a class="btn pri callbtn" href="tel:'+esc(num)+'" onclick="logCall(\''+id+'\')">'+ico+' '+lab+' '+esc(num)+'</a>':'';
-  if(c.phone||c.mobile){
-    b+='<div class="callbar">'+dialBtn('📞','Direct',c.phone)+dialBtn('📱','Mobile',c.mobile)+'</div>';
-  }
+  // One call affordance only: the inline 📞 beside each number below (no duplicate call bar).
   // Inline call button beside a number: dials that specific line, opens the ONE dispo modal.
   // If a contact has both phone + mobile the SDR can call either; a single outcome (set after
   // the call) logs it and drives the requeue.
@@ -2518,8 +3016,14 @@ function importCSV(text){
   const byPhone={}; contacts().forEach(c=>{ const p=norm10(c.phone||c.mobile); if(p) byPhone[p]=c.id; });
   // Stamp opens/replies/sequence/last-activity onto a contact from its CSV row.
   function stampEngage(c,r){ if(!c) return false; let hit=false;
-    const opensN=iOpens>=0?(parseInt(String(r[iOpens]).replace(/[^\d]/g,''))||(yes(r[iOpens])?1:0)):0;
     let openTs=iOpenAt>=0?(Date.parse(r[iOpenAt]||'')||0):0;
+    // Open count from the cell: a small number = that count; a date = opened then; any other
+    // non-empty/non-falsey marker ("Yes", "Opened", "✓", "true") = 1 open.
+    let opensN=0;
+    if(iOpens>=0){ const raw=String(r[iOpens]==null?'':r[iOpens]).trim(); const low=raw.toLowerCase();
+      if(/^\d{1,3}$/.test(raw)) opensN=parseInt(raw)||0;
+      else if(raw && !['0','no','n','false','none','off'].includes(low)){ opensN=1;
+        const dt=Date.parse(raw); if(!openTs && !isNaN(dt) && raw.length>=6) openTs=dt; } }
     if(opensN>0&&!openTs) openTs=Date.now();
     if(openTs){ if(openTs>(+c.lastEmailOpenTs||0)) c.lastEmailOpenTs=openTs;
       c.log=c.log||[]; const txt='👀 Opened email'+(opensN>1?' ('+opensN+'x)':''); if(!c.log.some(l=>l.txt===txt&&l.ts===openTs)) c.log.push({ts:openTs,txt,sys:true}); hit=true; }
@@ -2529,7 +3033,13 @@ function importCSV(text){
     if(laTs&&laTs>(+c.lastContactedTs||0)){ c.lastContactedTs=laTs; c.lastContacted=fmtD(new Date(laTs)); hit=true; }
     if(hit){ stampU(c); nsig++; } return hit; }
   rows.slice(1).forEach(r=>{
-    const an=(iAcc>=0?r[iAcc]:'').trim(); if(!an)return;
+    let an=(iAcc>=0?r[iAcc]:'').trim();
+    if(!an){ // no account column — derive one so a minimal lead CSV (email + opened) still lands
+      const em=(iEmail>=0?r[iEmail]:'').trim();
+      if(em&&em.includes('@')) an=em.split('@')[1];
+      else { const nmv=((iFirst>=0?r[iFirst]:'')+' '+(iLast>=0?r[iLast]:'')).trim()||(iName>=0?String(r[iName]||'').trim():''); an=nmv; }
+    }
+    if(!an)return;
     let aid=byName[an.toLowerCase()];
     if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),isCustomer:false}; byName[an.toLowerCase()]=aid; na++; }
     const email=(iEmail>=0?r[iEmail]:'').trim();
