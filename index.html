@@ -70,7 +70,8 @@ nav button.on .pill{background:rgba(255,255,255,.25);color:#fff}
 .rail label{display:block;font-size:11px;color:var(--mut);margin:8px 0 3px}
 .rail .row{display:flex;gap:6px}
 .frow{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:4px}
-.fchip{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--chip);border:1px solid transparent;color:var(--mut);font-weight:600}
+.fchip{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--chip);border:1px solid transparent;color:var(--mut);font-weight:600;cursor:pointer;user-select:none}
+.fchip:hover{border-color:var(--line);color:#cdd6e0}
 .fchip.on{color:#fff}
 main{flex:1;min-width:0}
 
@@ -83,6 +84,7 @@ main{flex:1;min-width:0}
 .panel .ph h3{font-size:14px;font-weight:700}
 .panel .ph .sub{font-size:11px;color:var(--mut)}
 table{width:100%;border-collapse:collapse}
+td.num,th.num{text-align:right}
 th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);
   padding:9px 12px;border-bottom:1px solid var(--line);font-weight:700;white-space:nowrap}
 td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
@@ -308,7 +310,9 @@ small.hint{color:var(--dim);font-size:11px}
     <div class="s"><b id="hs-cust">0</b><span>Customers</span></div>
   </div>
   <div class="hspace"></div>
+  <button class="hbtn" onclick="syncAll()" title="Sync Apollo + Gmail and refresh every tab live">↻ Refresh</button>
   <button class="hbtn" onclick="exportCurrentTab()">Export CSV</button>
+  <button class="hbtn" onclick="importBackupPrompt()">Import CSV</button>
   <button class="hbtn pri" onclick="quickAdd()">+ New</button>
   <button class="hbtn" id="signout" style="display:none" onclick="doLogout()">Sign out</button>
 </header>
@@ -317,6 +321,7 @@ small.hint{color:var(--dim);font-size:11px}
   <button class="on" data-v="today">Today <span class="pill" id="p-today">0</span></button>
   <button data-v="accounts">Accounts <span class="pill" id="p-accts">0</span></button>
   <button data-v="contacts">Contacts <span class="pill" id="p-cts">0</span></button>
+  <button data-v="intent">Intent <span class="pill" id="p-intent">0</span></button>
   <button data-v="hotlist">Hot List <span class="pill" id="p-hot">0</span></button>
   <button data-v="pipeline">Pipeline <span class="pill" id="p-pipe">0</span></button>
   <button data-v="closed">Closed <span class="pill" id="p-closed">0</span></button>
@@ -392,6 +397,7 @@ small.hint{color:var(--dim);font-size:11px}
     <section class="view on" id="view-today"></section>
     <section class="view" id="view-accounts"></section>
     <section class="view" id="view-contacts"></section>
+    <section class="view" id="view-intent"></section>
     <section class="view" id="view-hotlist"></section>
     <section class="view" id="view-pipeline"></section>
     <section class="view" id="view-closed"></section>
@@ -423,7 +429,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·l';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·q';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -616,7 +622,10 @@ function buildFilters(){
   const asg=el('f-assignee'); if(asg){ const AS=[['__none','Unassigned'],...team().map(n=>[n,n])];
     asg.innerHTML=AS.map(([k,lbl])=>'<span class="fchip '+(UI.assignee.has(k)?'on':'')+'" onclick="tgl(\'assignee\',\''+esc(k).replace(/'/g,"\\'")+'\')">'+esc(lbl)+'</span>').join(''); }
 }
-function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFilters(); renderActive(); }
+function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFilters();
+  // these bubbles filter people — if you're on a tab that can't use them, jump to Contacts so they take effect
+  if(!['contacts','leads','hotlist'].includes(UI.tab)){ switchTab('contacts'); return; }
+  renderActive(); }
 function matchQ(str){ if(!UI.q) return true; return (str||'').toLowerCase().includes(UI.q); }
 
 /* ====================== NAV ====================== */
@@ -638,6 +647,7 @@ function renderActive(){
   else if(v==='pipeline') renderPipeline();
   else if(v==='accounts') renderAccounts();
   else if(v==='contacts') renderContacts();
+  else if(v==='intent') renderIntent();
   else if(v==='closed') renderClosed();
   else if(v==='live') renderLive();
   else if(v==='quota') renderQuota();
@@ -661,6 +671,7 @@ function renderCounts(){
   el('p-hot').textContent=hot; el('p-pipe').textContent=pipe;
   el('p-accts').textContent=activeAccts().length; el('p-cts').textContent=activeContacts().length;
   el('p-closed').textContent=closed; el('p-live').textContent=live;
+  const pi=el('p-intent'); if(pi){ try{ pi.textContent=intentRows().filter(r=>r.trending).length; }catch(e){ pi.textContent=0; } }
   const td=el('p-today'); if(td) td.textContent=(store.__apollo&&store.__apollo.totalDue)||0;
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
@@ -682,12 +693,17 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
 function fmtAgo(ts){ if(!ts) return 'never'; const m=Math.round((Date.now()-ts)/60000); if(m<1)return'just now'; if(m<60)return m+'m ago'; const hr=Math.round(m/60); if(hr<24)return hr+'h ago'; return Math.round(hr/24)+'d ago'; }
 const SYNC_FN='https://muidkwqinwcfnfvnducj.functions.supabase.co'; /* Supabase Edge Function base URL — apollo-tasks deployed */
 function byEmail(){ const m={}; contacts().forEach(c=>{ if(c.email) m[c.email.trim().toLowerCase()]=c; }); return m; }
-function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=byEmail(); let n=0;
+function pushSignal(c,kind,ts,src){ store.__signals=Array.isArray(store.__signals)?store.__signals:[];
+  // dedupe: drop any prior signal for same contact+kind, keep newest on top
+  store.__signals=store.__signals.filter(s=>!(s.cid===c.id&&s.kind===kind));
+  store.__signals.unshift({cid:c.id,kind,ts,src:src||'',name:cname(c),acct:(acct(c.accountId)?acct(c.accountId).name:''),seen:false});
+  store.__signals=store.__signals.slice(0,80); }
+function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=byEmail(); let n=0; const RECENT=7*864e5;
   list.forEach(u=>{ const c=u.email&&m[String(u.email).trim().toLowerCase()]; if(!c)return; n++;
     if(u.lastContactedTs){ c.lastContactedTs=u.lastContactedTs; c.lastContacted=fmtD(new Date(u.lastContactedTs)); }
-    if(u.lastEmailOpenTs) c.lastEmailOpenTs=u.lastEmailOpenTs;
+    if(u.lastEmailOpenTs){ const prev=+c.lastEmailOpenTs||0; if(u.lastEmailOpenTs>prev && Date.now()-u.lastEmailOpenTs<RECENT) pushSignal(c,'open',u.lastEmailOpenTs,u.apolloSeq||''); c.lastEmailOpenTs=u.lastEmailOpenTs; }
     if(u.apolloSeq) c.apolloSeq=u.apolloSeq;
-    if(u.replied){ c.lastReplyTs=u.lastReplyTs||Date.now(); }
+    if(u.replied){ const prev=+c.lastReplyTs||0; const ts=u.lastReplyTs||Date.now(); if(ts>prev && Date.now()-ts<RECENT) pushSignal(c,'reply',ts,''); c.lastReplyTs=ts; }
   }); return n; }
 async function syncApollo(bg){
   const key=(store.__keys&&store.__keys.apollo)||'';
@@ -703,6 +719,34 @@ async function syncGmail(bg){
     store.__gmail={syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]};
     const n=applyContactUpdates(d.contacts); save(); if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')); } return n; }
   catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Gmail sync failed'); } return 0; }
+}
+// One-click header sync: pulls new opens/replies from Apollo + Gmail, then shows what changed.
+async function syncNow(){
+  if(!SYNC_FN){ toast('Connect integrations first'); return; }
+  const before=(store.__signals||[]).length;
+  setSync('busy','Syncing opens…');
+  try{ await syncApollo(true); await syncGmail(true); _lastAuto=Date.now();
+    const added=(store.__signals||[]).length-before; save(); setSync('ok','Synced');
+    if(UI.tab!=='today') switchTab('today'); else renderActive();
+    toast(added?'🔥 '+added+' new open'+(added>1?'s':'')+' — see Recent Signals up top':'Synced · no new opens since last check'); }
+  catch(e){ setSync('err','Sync failed'); toast('Sync failed'); }
+}
+function callSignal(cid){ const c=contact(cid); if(!c)return; markSignalsSeen(); openContact(cid); }
+function markSignalsSeen(){ (store.__signals||[]).forEach(s=>s.seen=true); save(); }
+function clearSignals(){ store.__signals=[]; save(); renderActive(); toast('Signals cleared'); }
+function signalsPanel(){
+  const sig=(store.__signals||[]).filter(s=>Date.now()-(+s.ts||0)<7*864e5).slice(0,15);
+  if(!sig.length) return '';
+  const rows=sig.map(s=>{ const c=contact(s.cid); if(!c) return '';
+    const p=telNum(c), icon=s.kind==='reply'?'↩️':'🔥', verb=s.kind==='reply'?'replied to your email':'opened your email'+(s.src?' ('+esc(s.src)+')':'');
+    return '<tr'+(s.seen?' style="opacity:.55"':'')+'><td class="tname">'+icon+' '+esc(s.name)+(s.acct?' <span class="tsub">· '+esc(s.acct)+'</span>':'')+
+      '<div class="tsub">'+verb+' · '+fmtAgo(s.ts)+'</div></td>'+
+      '<td style="text-align:right;white-space:nowrap">'+
+      (p?'<a class="callbtn" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
+      '<button class="btn sm gh" onclick="openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('');
+  return '<div class="panel"><div class="ph"><h3>🔥 Recent Signals</h3><span class="sub">'+sig.length+' recent email opens/replies — likely worth a call</span>'+
+    '<button class="btn sm gh" style="margin-left:auto" onclick="syncNow()">↻ Sync now</button>'+
+    '<button class="btn sm gh" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table></div>';
 }
 function setAutoSync(on){ store.__autoSync=!!on; save(); toast(on?'Auto-refresh on · every 15 min':'Auto-refresh off'); if(on)autoSyncTick(); }
 let _autoBusy=false, _lastAuto=0;
@@ -889,6 +933,9 @@ function renderToday(){
   h+=stat(upcoming.length,'Upcoming demos');
   h+=stat(money(mrr)+' / '+money(q),'MRR vs quota',true);
   h+='</div>';
+
+  // 🔥 Recent signals — new opens/replies worth a call (why the Hot List re-ranked)
+  h+=signalsPanel();
 
   // Gmail replies
   h+='<div class="panel"><div class="ph"><h3>✉️ New Replies</h3><span class="sub">'+replies.length+' · synced '+fmtAgo(gm.syncedAt)+'</span>'+
@@ -1130,9 +1177,9 @@ function prefilter(list){ return list.filter(c=>{
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
 const telNum=c=>{ const p=(c.phone||c.mobile||'').replace(/[^\d+]/g,''); return p; };
-const callCell=r=>{ const p=telNum(r); return p
-  ? '<a class="callbtn" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')"><span class="ph">📞</span>Call</a>'
-  : '<span class="tsub">no #</span>'; };
+const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;align-items:center">'+
+  (telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>')+
+  '<button class="btn sm gh" title="Remove from queue" onclick="event.stopPropagation();dropFromQueue(\''+r.id+'\')">✕</button></div>';
 function logCall(cid){ const c=contact(cid); if(!c)return;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date()); c.callCount=(+c.callCount||0)+1;
   logAuto(c,'📞 Called '+cname(c)); save();  // no re-render: keep the queue card stable mid-call
@@ -1162,8 +1209,10 @@ function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
 // (opens recency & volume, replies, intent, decision-maker, staleness).
 const HOT_CAP=150;
 function callPriority(c){ return heat(c); }
+// a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
+const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
 function hotQueue(){ const now=Date.now();
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c);
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&hasRealPhone(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
@@ -1198,7 +1247,12 @@ function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY
   toast(d.t+' · back '+fmtWhen(c.nextCallAt),()=>{ Object.assign(c,prev); save(); renderActive(); });
 }
 function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; save(); }
-function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; save(); renderActive(); toast('Re-queued to top'); }
+function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; save(); renderActive(); toast('Re-queued to top'); }
+function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); save(); renderActive();
+  toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
+function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
+  if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
+  out.forEach(c=>{ c.queueOut=false; }); save(); renderActive(); toast('Restored '+out.length+' to queue'); }
 const snoozeCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end">'+
   (telNum(r)?'<a class="btn sm gh" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')">📞</a>':'')+
   '<button class="btn sm gh" onclick="event.stopPropagation();clearSnooze(\''+r.id+'\')">↑ Requeue</button></div>';
@@ -1222,16 +1276,26 @@ function callCard(c,dueN,snoozedN){
   h+='<span onclick="openContact(\''+c.id+'\')" style="cursor:pointer;color:var(--mut);font-size:12px">Open contact ↗</span>';
   h+='</div></div>';
   h+='<div class="cc-dispo">'+DISPOS.map(d=>'<button class="btn sm gh" onclick="setDispo(\''+c.id+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
+  h+='<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button>';
   h+='<button class="btn sm pri" onclick="bookDemo(\''+c.id+'\')">✅ Booked demo</button></div></div>';
   return h;
 }
 function renderHotList(){
   const {due,snoozed}=hotQueue();
   const cur=due[0], rest=due.slice(1);
-  let h = cur ? callCard(cur,due.length,snoozed.length)
-    : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>';
+  const coldN=due.filter(c=>c.warmth==='Cold').length, hotN=due.filter(c=>c.warmth==='Hot').length;
+  let exhaust='';
+  if(due.length<HOT_CAP){
+    exhaust='<div class="panel" style="border-color:var(--hot)"><div style="padding:12px 16px;font-size:13px;line-height:1.5">🚨 <b>Book exhausted</b> — only '+due.length+' contacts with real phone numbers are callable right now (target '+HOT_CAP+'). Prospect fresh leads, import a list, or run <span onclick="retierBook()" style="cursor:pointer;color:var(--sig)">Re-tier book</span>.</div></div>';
+  } else if(coldN>0){
+    exhaust='<div class="panel" style="border-color:var(--warm)"><div style="padding:12px 16px;font-size:13px;line-height:1.5">⚠️ <b>Book running low</b> — '+coldN+' cold contact'+(coldN>1?'s':'')+' surfaced into the queue (only '+hotN+' Hot leads have real phones). Sync fresh opens or add prospects to keep 150 warm calls stocked.</div></div>';
+  }
+  let h = exhaust + (cur ? callCard(cur,due.length,snoozed.length)
+    : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
   const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
-  h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness</span>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
+  const droppedN=contacts().filter(c=>c.queueOut).length;
+  const restoreLink=droppedN?' · <span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span>':'';
+  h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+'</span>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
   if(snoozed.length){
     const t2=dataTable('hotlist2',chosenCols('hotlist2'),snoozed,r=>"openContact('"+r.id+"')",snoozeCell);
     h+='<div class="panel"><div class="ph"><h3>💤 Scheduled</h3><span class="sub">'+snoozed.length+' snoozed by disposition — soonest first</span>'+colMenu('hotlist2')+'</div>'+t2.html+'</div>';
@@ -1242,6 +1306,71 @@ function renderContacts(){
   const recs=prefilter(activeContacts());
   const t=dataTable('contacts',chosenCols('contacts'),recs,r=>"openContact('"+r.id+"')");
   el('view-contacts').innerHTML='<div class="panel"><div class="ph"><h3>All Contacts</h3><span class="sub">'+t.count+' active people — customer contacts hidden</span>'+colMenu('contacts')+'</div>'+t.html+'</div>'; restoreFlt();
+}
+/* ====================== INTENT TRACKER ====================== */
+// Roll per-contact signals up to the ACCOUNT so heating-up companies surface
+// before any single contact hits the call queue. Multi-thread depth (distinct
+// contacts engaged in 7d) is the strongest buy signal.
+function hottestContact(a){ return contactsOf(a.id).filter(c=>!c.internal&&telNum(c)).sort((x,y)=>heat(y)-heat(x))[0]||null; }
+function acctIntent(a){
+  const cs=contactsOf(a.id).filter(c=>!c.internal), now=Date.now();
+  let opens7=0,opens30=0,replies=0,calls=0,inSeq=0,owners=0,lastAct=0; const engaged7=new Set();
+  cs.forEach(c=>{
+    const oc=openCount(c)||0, lo=lastOpenTs(c), lc=lastCallTs(c), ls=lastSentTs(c);
+    if(lo){ if(now-lo<=7*_DAY) opens7+=oc||1; if(now-lo<=30*_DAY) opens30+=oc||1; }
+    if(c.replied) replies++;
+    if(lc) calls++;
+    if(c.apolloSeq) inSeq++;
+    if(isOwner(c)) owners++;
+    const act=Math.max(lo||0,lc||0,ls||0,+c.lastContactedTs||0); if(act>lastAct) lastAct=act;
+    const hot7=(lo&&now-lo<=7*_DAY)||c.replied||(lc&&now-lc<=7*_DAY); if(hot7) engaged7.add(c.id);
+  });
+  const depth=engaged7.size;
+  let score=opens7*20+Math.max(0,opens30-opens7)*6+replies*120+calls*8+inSeq*10+owners*40+depth*60;
+  if(lastAct) score+=Math.max(0,120-((now-lastAct)/_DAY)*8);
+  return {a,cs:cs.length,opens7,opens30,replies,calls,inSeq,depth,owners,lastAct,score:Math.round(score),trending:depth>=2};
+}
+function intentRows(){ return activeAccts().map(acctIntent).filter(r=>r.score>0&&r.cs>0).sort((x,y)=>y.score-x.score); }
+function markInternal(cid){ const c=contact(cid); if(!c)return; c.internal=true; c.warmth='Cold'; save(); renderActive();
+  toast('Marked internal — hidden from Intent & call queue',()=>{ c.internal=false; save(); renderActive(); }); }
+function unmarkInternal(cid){ const c=contact(cid); if(!c)return; c.internal=false; save(); renderActive(); toast('Restored as a lead'); }
+function syncAll(){ toast('Refreshing everything…'); renderCounts();
+  const jobs=[]; if(typeof syncApollo==='function') jobs.push(Promise.resolve(syncApollo(true)).catch(()=>0));
+  if(typeof syncGmail==='function') jobs.push(Promise.resolve(syncGmail(true)).catch(()=>0));
+  Promise.all(jobs).then(rs=>{ const n=rs.reduce((a,x)=>a+(+x||0),0); render();
+    toast(n?('Synced — '+n+' contact update'+(n>1?'s':'')+', everything refreshed'):'Refreshed — no new signals'); })
+   .catch(()=>{ render(); toast('Refreshed (sync unavailable)'); }); }
+function renderIntent(){
+  const rows=intentRows();
+  const trending=rows.filter(r=>r.trending);
+  const opens7=rows.reduce((a,r)=>a+r.opens7,0), reps=rows.reduce((a,r)=>a+r.replies,0);
+  let h='<div class="panel"><div class="ph"><h3>🎯 Intent Tracker</h3><span class="sub">accounts heating up — rolled up from every contact\'s opens, replies &amp; calls</span>'+
+    '<button class="btn sm pri" style="margin-left:auto" onclick="syncAll()">↻ Refresh live</button></div>'+
+    '<div style="padding:14px 16px"><div class="grid">'+
+      stat(trending.length,'🔥 Trending (2+ engaged)',true)+stat(rows.length,'Accounts w/ signal')+
+      stat(opens7,'Opens · 7d')+stat(reps,'Replies')+'</div></div></div>';
+  if(!rows.length){ el('view-intent').innerHTML=h+'<div class="panel"><div class="qempty">No intent signals yet — run ↻ Refresh live to pull fresh opens & replies.</div></div>'; return; }
+  const cap=rows.slice(0,150);
+  const body=cap.map(r=>{
+    const a=r.a, best=hottestContact(a), when=r.lastAct?fmtAgo(r.lastAct):'—';
+    const flag=r.trending?'<span class="tag" style="background:rgba(255,90,90,.15);color:var(--hot);border-color:var(--hot)">🔥 '+r.depth+' engaged</span>':(r.depth?'<span class="tsub">'+r.depth+' engaged</span>':'');
+    const callBtn=best&&telNum(best)?'<a class="callbtn" href="tel:'+esc(telNum(best))+'" onclick="event.stopPropagation();logCall(\''+best.id+'\')" title="Call '+esc(cname(best))+'"><span class="ph">📞</span>'+esc((best.first||cname(best)).split(' ')[0])+'</a>':'<span class="tsub">no #</span>';
+    return '<tr onclick="openAccount(\''+a.id+'\')" style="cursor:pointer">'+
+      '<td><span class="tname">'+esc(a.name)+'</span> '+flag+'</td>'+
+      '<td class="num">'+r.cs+'</td>'+
+      '<td class="num">'+(r.opens7||'')+(r.opens30>r.opens7?' <span class="tsub">/'+r.opens30+'·30d</span>':'')+'</td>'+
+      '<td class="num">'+(r.replies||'')+'</td>'+
+      '<td class="num">'+(r.calls||'')+'</td>'+
+      '<td class="num">'+(r.owners?'👑'+r.owners:'')+'</td>'+
+      '<td>'+when+'</td>'+
+      '<td class="num"><b style="color:var(--sig2)">'+r.score+'</b></td>'+
+      '<td style="text-align:right" onclick="event.stopPropagation()">'+callBtn+'</td></tr>';
+  }).join('');
+  h+='<div class="panel"><div class="ph"><h3>⬆ Ranked accounts</h3><span class="sub">'+rows.length+' with signal · showing top '+cap.length+' · 👑=owner engaged</span></div>'+
+    '<table><thead><tr>'+
+    '<th>Account</th><th class="num">Contacts</th><th class="num">Opens 7d</th><th class="num">Replies</th><th class="num">Calls</th><th class="num">Owners</th><th>Last activity</th><th class="num">Intent</th><th></th>'+
+    '</tr></thead><tbody>'+body+'</tbody></table></div>';
+  el('view-intent').innerHTML=h;
 }
 /* ====================== ACCOUNTS ====================== */
 const A_COLS=[
@@ -1510,13 +1639,20 @@ function logBar(t,id){
     ['Call','Email','LinkedIn','Text','Note'].map(k=>'<button class="btn sm gh" onclick="quickLog(\''+t+'\',\''+id+'\',\''+k+'\')">'+k+'</button>').join('')+
     '</div><div class="fld"><input id="logtxt-'+t+id+'" placeholder="Log a note + Enter…" onkeydown="if(event.key===\'Enter\'){quickLog(\''+t+'\',\''+id+'\',\'Note\',this.value);this.value=\'\';}"></div>';
 }
-function logList(o){ const L=(o.log||[]).slice().reverse();
+function logList(o,t,id){ const L=(o.log||[]).map((x,i)=>({x,i})).reverse();
   if(!L.length) return '<div class="tsub" style="padding:4px 0">No activity yet.</div>';
-  return '<ul class="log">'+L.map(x=>'<li>'+esc(x.txt)+'<div class="t">'+new Date(x.ts).toLocaleString()+'</div></li>').join('')+'</ul>';
+  return '<ul class="log">'+L.map(({x,i})=>'<li>'+esc(x.txt)+'<div class="t">'+new Date(x.ts).toLocaleString()+
+    (t?' · <span onclick="event.stopPropagation();delLog(\''+t+'\',\''+id+'\','+i+')" style="cursor:pointer;color:var(--mut)" title="Delete this log entry">✕</span>':'')+
+    '</div></li>').join('')+'</ul>';
+}
+function delLog(t,id,i){ const o=objOf(t,id); if(!o||!o.log||!o.log[i])return; if(!confirm('Delete this log entry?'))return;
+  const removed=o.log.splice(i,1)[0]; save();
+  const cont=el('log-'+t+id); if(cont)cont.innerHTML=logList(o,t,id);
+  toast('Log entry deleted',()=>{ o.log.splice(i,0,removed); save(); const c2=el('log-'+t+id); if(c2)c2.innerHTML=logList(o,t,id); });
 }
 function quickLog(t,id,kind,txt){ const o=objOf(t,id); if(!o)return; o.log=o.log||[];
   o.log.push({ts:Date.now(),txt:(kind+(txt?': '+txt:''))}); save();
-  const cont=el('log-'+t+id); if(cont)cont.innerHTML=logList(o); toast('Logged '+kind);
+  const cont=el('log-'+t+id); if(cont)cont.innerHTML=logList(o,t,id); toast('Logged '+kind);
 }
 function logAuto(o,txt){ o.log=o.log||[]; o.log.push({ts:Date.now(),txt:txt,sys:true}); }
 
@@ -1563,12 +1699,13 @@ function openContact(id){
   b+='<div class="f2">'+fld('Sequence / status',inp("setC('"+id+"','apolloSeq',this.value)",c.apolloSeq))+fld('Apollo link',inp("setC('"+id+"','apolloUrl',this.value)",c.apolloUrl))+'</div>';
   b+=customBlock('c',id);
   b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')">＋ Follow-up task</button>'+(hasCadence('c',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+contactTasks(id);
-  b+='<div class="sec">Activity</div>'+logBar('c',id)+'<div id="log-c'+id+'">'+logList(c)+'</div>';
+  b+='<div class="sec">Activity</div>'+logBar('c',id)+'<div id="log-c'+id+'">'+logList(c,'c',id)+'</div>';
   b+='<div class="sec">AI Follow-up</div><button class="btn sm" onclick="aiEmail(\'c\',\''+id+'\')">✦ Draft email</button><div id="ai-c'+id+'" style="margin-top:10px"></div>';
   el('drawer-body').innerHTML=b;
   const inPipe=['In Pipeline','Customer'].includes(c.status);
   el('drawer-foot').innerHTML=(inPipe?'':'<button class="btn pri" onclick="bookDemo(\''+id+'\')">Book Demo → Pipeline</button>')+
     '<button class="btn gh" onclick="closeDrawer()">Close</button>'+
+    (c.internal?'<button class="btn gh" onclick="unmarkInternal(\''+id+'\')">↩ Not internal</button>':'<button class="btn gh" title="Colleague, not a lead — hide from Intent &amp; call queue" onclick="markInternal(\''+id+'\')">🏠 Internal</button>')+
     '<button class="btn gh" style="margin-left:auto;color:var(--hot)" onclick="delContact(\''+id+'\')">Delete</button>';
   openDrawer();
 }
@@ -1651,7 +1788,7 @@ function openDeal(id){
   b+=fld('Next step',inp("setD('"+id+"','nextStep',this.value)",d.nextStep));
   b+=fld('Notes',ta("setD('"+id+"','notes',this.value)",d.notes));
   b+=customBlock('d',id);
-  b+='<div class="sec">Activity</div>'+logBar('d',id)+'<div id="log-d'+id+'">'+logList(d)+'</div>';
+  b+='<div class="sec">Activity</div>'+logBar('d',id)+'<div id="log-d'+id+'">'+logList(d,'d',id)+'</div>';
   b+='<div class="sec">AI Follow-up</div><button class="btn sm" onclick="aiEmail(\'d\',\''+id+'\')">✦ Draft email</button><div id="ai-d'+id+'" style="margin-top:10px"></div>';
   el('drawer-body').innerHTML=b;
   const isWon=d.stage===WON;
