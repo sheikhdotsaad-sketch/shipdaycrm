@@ -45,6 +45,29 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .dispopop button:hover{background:var(--line)}
 .dispopop button.pri{color:var(--sig);font-weight:700}
 .dispopop-h{font-size:11px;color:var(--mut);padding:2px 10px 6px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+/* ===== Call / disposition modal ===== */
+.cmodal-wrap{position:fixed;inset:0;z-index:400;background:rgba(4,7,12,.62);display:none;align-items:flex-start;justify-content:center;padding:40px 14px;overflow:auto}
+.cmodal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:100%;max-width:460px;box-shadow:0 24px 70px rgba(0,0,0,.55);padding:16px 18px}
+.cm-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.cm-name{font-size:18px;font-weight:800}
+.cm-sub{font-size:12.5px;color:var(--mut);margin-top:1px}
+.cm-x{background:transparent;border:0;color:var(--mut);font-size:18px;cursor:pointer;padding:2px 6px;line-height:1}
+.cm-x:hover{color:var(--ink)}
+.cm-dial{display:inline-flex;align-items:center;gap:6px;margin:10px 0 4px;padding:9px 14px;background:var(--acc);color:#04121f;font-weight:800;border-radius:9px;text-decoration:none;font-size:14px}
+.cm-lbl{font-size:11px;font-weight:800;color:var(--mut);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px}
+.cm-dispos,.cm-reqs{display:flex;flex-wrap:wrap;gap:6px}
+.cm-dispo,.cm-req{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 11px;font-size:13px;cursor:pointer}
+.cm-req{padding:6px 10px;font-size:12.5px}
+.cm-dispo:hover,.cm-req:hover{border-color:var(--acc)}
+.cm-dispo.on{background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:700}
+.cm-req.on{background:var(--sig);color:#04121f;border-color:var(--sig);font-weight:700}
+.cm-note{width:100%;box-sizing:border-box;min-height:70px;background:var(--bg);border:1px solid var(--line);border-radius:9px;color:var(--ink);padding:9px 11px;font-size:13px;font-family:inherit;resize:vertical}
+.cm-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.cadstep{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
+.cadstep-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.cadgrid{display:flex;gap:6px}
+.cadstep input,.cadstep textarea{background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--ink);padding:7px 9px;font-size:13px;font-family:inherit}
+.cadstep input{flex:1}
 .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#2ecc71;margin-right:6px;vertical-align:middle;animation:livePulse 1.4s ease-in-out infinite}
 @keyframes livePulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(46,204,113,.6)}50%{opacity:.5;box-shadow:0 0 0 4px rgba(46,204,113,0)}}
 .qempty{padding:26px;text-align:center;color:var(--mut)}
@@ -202,6 +225,7 @@ a.btn.pri{color:#fff}
 .btn.gh{background:transparent}
 .callbtn{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;background:transparent;color:var(--sig);border:1px solid var(--sig);border-radius:20px;padding:5px 13px;font-size:12px;font-weight:700;text-decoration:none;line-height:1;cursor:pointer}
 .callbtn:hover{background:var(--sig);color:#fff}
+.callbtn.sm{padding:3px 9px;font-size:11.5px;border-radius:14px}
 .callbtn .ph{font-size:11px}
 .tkadd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:11px 15px;border-bottom:1px solid var(--line)}
 .tkadd input,.tkadd select{padding:7px 10px}
@@ -350,18 +374,13 @@ small.hint{color:var(--dim);font-size:11px}
       <input id="q" placeholder="Search everything…" oninput="onSearch()">
     </div>
     <div class="card" id="filter-card">
-      <h4>Warmth</h4>
-      <div class="frow" id="f-warmth"></div>
-      <h4 style="margin-top:12px">Stage</h4>
-      <div class="frow" id="f-stage"></div>
-      <h4 style="margin-top:12px">Contact info</h4>
-      <div class="frow" id="f-have"></div>
-      <h4 style="margin-top:12px">Email opens</h4>
-      <div class="frow" id="f-opens"></div>
-      <h4 style="margin-top:12px">Locations</h4>
-      <div class="frow" id="f-loc"></div>
-      <h4 style="margin-top:12px">Assigned to</h4>
-      <div class="frow" id="f-assignee"></div>
+      <div class="fsec" data-tabs="hotlist pipeline contacts accounts closed live"><h4 style="margin:0 0 6px">Warmth</h4><div class="frow" id="f-warmth"></div></div>
+      <div class="fsec" data-tabs="pipeline"><h4 style="margin:12px 0 6px">Stage</h4><div class="frow" id="f-stage"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Decision-makers 👑</h4><div class="frow" id="f-owner"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Contact info</h4><div class="frow" id="f-have"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts"><h4 style="margin:12px 0 6px">Email opens</h4><div class="frow" id="f-opens"></div></div>
+      <div class="fsec" data-tabs="accounts closed live"><h4 style="margin:12px 0 6px">Locations</h4><div class="frow" id="f-loc"></div></div>
+      <div class="fsec" data-tabs="hotlist pipeline contacts accounts closed live"><h4 style="margin:12px 0 6px">Assigned to</h4><div class="frow" id="f-assignee"></div></div>
     </div>
     <div class="card cfg-toggle">
       <button class="btn sm gh" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="toggleCfg()"><span>⚙ Sync &amp; Integrations</span><span id="cfg-caret">▸</span></button>
@@ -445,7 +464,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z8';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z11';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -517,11 +536,13 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   out.contacts=mergeRecs(base.contacts||{},over.contacts||{},del);
   out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
   const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
-  ['__quota','__keys','__probs','__cal','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
+  ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
   // __cal.reviewed = meeting-review classifications. UNION across reps/pulls so an Ignore/Won/Lost
   // is never clobbered by a newer full-store sync (reviewed is monotonic — only ever added to).
   { const rA=(base.__cal&&base.__cal.reviewed)||{}, rB=(over.__cal&&over.__cal.reviewed)||{};
     out.__cal=Object.assign({},m.__cal||{},{reviewed:Object.assign({},rA,rB)}); }
+  // __inboundIgnore = hidden inbound suggestions. UNION so an Ignore is never clobbered by a newer sync.
+  out.__inboundIgnore=Object.assign({},base.__inboundIgnore||{},over.__inboundIgnore||{});
   out.__seq=Math.max(+base.__seq||1,+over.__seq||1);
   out.__updatedAt=Math.max(+base.__updatedAt||0,+over.__updatedAt||0);
   return out; }
@@ -586,8 +607,10 @@ async function initSync(){
         // Cloud wins WHOLESALE on load — never union the local built-in seed into the cloud book
         // (seed records carry different ids than the imported book → union would duplicate everything).
         const localRev=(store.__cal&&store.__cal.reviewed)||{};   // keep meeting classifications made offline
+        const localIgn=store.__inboundIgnore||{};                 // keep inbound-ignore made offline
         applyingRemote=true; store=norm(inc);
         store.__cal=store.__cal||{}; store.__cal.reviewed=Object.assign({},store.__cal.reviewed||{},localRev);
+        store.__inboundIgnore=Object.assign({},store.__inboundIgnore||{},localIgn);
         try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
       }
     }
@@ -686,7 +709,7 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), assignee:new Set(), loc:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
@@ -695,6 +718,8 @@ function buildFilters(){
     hv.innerHTML=HAVE.map(([k,lbl])=>'<span class="fchip '+(UI.have.has(k)?'on':'')+'" onclick="tgl(\'have\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const op=el('f-opens'); if(op){ const OP=[['any','Opened email'],['since','Opened since touch'],['multi','2+ opens'],['none','Never opened']];
     op.innerHTML=OP.map(([k,lbl])=>'<span class="fchip '+(UI.opens.has(k)?'on':'')+'" onclick="tgl(\'opens\',\''+k+'\')">'+lbl+'</span>').join(''); }
+  const ow=el('f-owner'); if(ow){ const OW=[['own','👑 Owners only'],['non','Other titles']];
+    ow.innerHTML=OW.map(([k,lbl])=>'<span class="fchip '+(UI.owner.has(k)?'on':'')+'" onclick="tgl(\'owner\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const lc=el('f-loc'); if(lc){ const LC=[['multi','🏢 Multi-location'],['single','📍 Single location']];
     lc.innerHTML=LC.map(([k,lbl])=>'<span class="fchip '+(UI.loc.has(k)?'on':'')+'" onclick="tgl(\'loc\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const asg=el('f-assignee'); if(asg){ const AS=[['__none','Unassigned'],...team().map(n=>[n,n])];
@@ -722,8 +747,12 @@ function switchTab(v){
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='view-'+v));
   // stage filter only relevant to pipeline; show filter card contextually
   el('filter-card').style.display=(v==='hotlist'||v==='pipeline'||v==='contacts'||v==='accounts'||v==='closed'||v==='live')?'block':'none';
+  applyFilterTabs();
   renderActive();
 }
+// Show only the filter sections that make sense for the current tab (data-tabs allowlist).
+function applyFilterTabs(){ document.querySelectorAll('#filter-card .fsec').forEach(sec=>{
+  const tabs=(sec.getAttribute('data-tabs')||'').split(/\s+/); sec.style.display=tabs.includes(UI.tab)?'block':'none'; }); }
 function renderActive(){
   const v=UI.tab;
   if(v==='today') renderToday();
@@ -847,9 +876,23 @@ async function syncCalendar(){
     if(d.error) throw new Error(d.error);
     const prevRev=(store.__cal&&store.__cal.reviewed)||{};
     store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[],reviewed:prevRev};
-    save(); renderActive(); setSync('ok','Synced'); toast('Calendar synced · '+(d.events||[]).length+' events'); }
+    const nm=logPastMeetings();   // stamp every past meeting onto the matched account/contact
+    save(); renderActive(); setSync('ok','Synced'); toast('Calendar synced · '+(d.events||[]).length+' events'+(nm?' · '+nm+' meeting'+(nm>1?'s':'')+' logged':'')); }
   catch(e){ setSync('err','Sync failed'); toast('Calendar sync failed'); }
 }
+// Log EVERY past calendar meeting onto its matched contact (and thus the account) so there's a
+// permanent record a meeting happened there — even if it never became a booked demo. Deduped by
+// event id, so re-syncing never doubles up.
+function logPastMeetings(){ const cal=store.__cal||{}, evs=cal.events||[]; if(!evs.length) return 0;
+  const now=Date.now(); let n=0;
+  evs.forEach(e=>{ const st=new Date(e.start).getTime()||0; if(!st||st>now) return;   // past meetings only
+    const c=matchEventContact(e); if(!c) return;                                      // needs a known attendee
+    c.log=c.log||[]; if(c.log.some(l=>l.evId===e.id)) return;                          // already logged
+    c.log.push({ts:st,txt:'🗓 Met: '+(e.summary||'Meeting'),sys:true,evId:e.id});
+    c.log.sort((a,b)=>(+a.ts||0)-(+b.ts||0)); if(c.log.length>60) c.log=c.log.slice(-60);
+    if(st>(+c.lastContactedTs||0)){ c.lastContactedTs=st; c.lastContacted=fmtD(new Date(st)); }
+    stampU(c); n++; });
+  return n; }
 async function pushDemoToCalendar(id){ const d=deal(id); if(!d)return;
   if(!d.demoDate){ toast('Set a demo date first'); return; }
   if(!SYNC_FN){ toast('Connect Google in Integrations first'); return; }
@@ -964,7 +1007,7 @@ function taskWidgetInner(){ const now=today0().getTime(); const list=tasks().sli
   h+='<div class="tkadd">'+
      '<input id="tk-title" placeholder="Add a follow-up…" onkeydown="if(event.key===\'Enter\')quickAddTask()">'+
      '<select id="tk-type"><option value="call">📞 Call</option><option value="email">✉️ Email</option><option value="linkedin">in LinkedIn</option><option value="other">✓ Other</option></select>'+
-     '<select id="tk-assignee"><option value="">Unassigned</option>'+team().map(n=>'<option>'+esc(n)+'</option>').join('')+'</select>'+
+     '<input id="tk-assignee" list="tk-asg-list" placeholder="Assign to… (optional)"><datalist id="tk-asg-list">'+team().map(n=>'<option>'+esc(n)+'</option>').join('')+'</datalist>'+
      '<input id="tk-due" type="date">'+
      '<button class="btn sm pri" onclick="quickAddTask()">＋ Add</button></div>';
   h+='<table><tbody>';
@@ -1000,7 +1043,8 @@ function renderToday(){
   const allReplies=gm.replies||[];
   const replies=allReplies.filter(r=>cmap[emailOf(r.from)]).slice(0,20);
   const NOISE=/(no-?reply|do-?not-?reply|notification|notifications|mailer|bounce|postmaster|@shipday\.com|google\.com|otter\.ai|calendar-|docusign|calendly|zoom\.us|linkedin\.com|slack\.com)/i;
-  const newInbound=allReplies.filter(r=>{ const e=emailOf(r.from); return e&&!cmap[e]&&!NOISE.test(e)&&!NOISE.test(r.from||''); }).slice(0,10);
+  const ignInb=store.__inboundIgnore||{};
+  const newInbound=allReplies.filter(r=>{ const e=emailOf(r.from); return e&&!cmap[e]&&!ignInb[e]&&!NOISE.test(e)&&!NOISE.test(r.from||''); }).slice(0,10);
   const calEvents=(cal.events||[]).filter(e=>new Date(e.start).getTime()>=Date.now()-6*36e5).slice(0,10);
   const upcoming=deals().filter(d=>d.demoDate&&new Date(d.demoDate)>=now&&!CLOSED.includes(d.stage))
     .sort((a,b)=>new Date(a.demoDate)-new Date(b.demoDate));
@@ -1032,7 +1076,7 @@ function renderToday(){
   if(newInbound.length){
     h+='<div class="panel"><div class="ph"><h3>🆕 Potential New Inbound</h3><span class="sub">'+newInbound.length+' external '+(newInbound.length===1?'reply':'replies')+' not in your book</span></div><table><tbody>';
     h+=newInbound.map(r=>{ const e=emailOf(r.from); const nm=(r.from||'').replace(/<[^>]*>/,'').replace(/["']/g,'').trim()||e;
-      return '<tr><td class="tname">'+esc(nm)+'<div class="tsub">'+esc(e)+'</div></td><td class="tsub">'+esc(r.subject||'')+'</td><td style="text-align:right"><button class="btn sm pri" onclick="addInboundLead(\''+esc(e)+'\',\''+esc(nm.replace(/'/g,""))+'\')">＋ Add lead</button></td></tr>'; }).join('');
+      return '<tr><td class="tname">'+esc(nm)+'<div class="tsub">'+esc(e)+'</div></td><td class="tsub">'+esc(r.subject||'')+'</td><td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="addInboundLead(\''+esc(e)+'\',\''+esc(nm.replace(/'/g,""))+'\')">＋ Add lead</button> <button class="btn sm gh" title="Hide — not a lead" onclick="ignoreInbound(\''+esc(e)+'\')">Ignore</button></td></tr>'; }).join('');
     h+='</tbody></table></div>';
   }
 
@@ -1169,7 +1213,8 @@ const COL={
   acct:{k:'acct',t:'Account',val:_acctName,cell:c=>'<span class="tsub">'+esc(_acctName(c))+'</span>'},
   cuisine:{k:'cuisine',t:'Cuisine',val:_acctCuisine},
   email:{k:'email',t:'Email',val:c=>c.email||'',cell:c=>'<span class="tsub">'+esc(c.email||'')+'</span>'},
-  phone:{k:'phone',t:'Phone',val:c=>c.phone||c.mobile||'',cell:c=>'<span class="tsub">'+esc(c.phone||c.mobile||'')+'</span>'},
+  phone:{k:'phone',t:'Phone',val:c=>c.phone||c.mobile||'',cell:c=>{ const pd=(c.phone||c.mobile||''), p=telNum(c);
+    return pd?'<a class="callbtn sm" href="tel:'+esc(p)+'" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')" title="Call &amp; log outcome"><span class="ph">📞</span>'+esc(pd)+'</a>':'<span class="tsub">—</span>'; }},
   mobile:{k:'mobile',t:'Mobile',val:c=>c.mobile||'',cell:c=>'<span class="tsub">'+esc(c.mobile||'')+'</span>'},
   status:{k:'status',t:'Status',val:c=>c.status||'New',cell:c=>'<span class="tag'+(c.status==='Customer'?' cust':'')+'">'+esc(c.status||'New')+'</span>'},
   score:{k:'score',t:'Score',num:true,val:c=>+c.score||0,cell:c=>c.score?esc(c.score):'—'},
@@ -1211,7 +1256,9 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   p+=Math.min(opens,25)*14;                                  // opens volume (repeat opens = real interest)
   p+=(+c.score||0)*4;                                        // intent score
   if(c.replied) p+=220;                                      // replied to an email
-  if(c.apolloSeq) p+=50;                                     // active sequence
+  if(c.apolloSeq) p+=50;                                     // active Apollo sequence
+  else if(c.emailSeq && !c.emailSeq.done) p+=45;             // active manual email cadence — same weight
+  { const ls=lastSentTs(c); if(ls) p+=Math.max(0,60-((now-ls)/_DAY)*8); }  // fresh email touch keeps it warm
   if(isOwner(c)) p+=110;                                     // decision-maker
   if(telNum(c)) p+=15;                                       // reachable by phone
   const staleD=touch?(now-touch)/_DAY:45;
@@ -1262,6 +1309,7 @@ function prefilter(list){ return list.filter(c=>{
     if(UI.opens.has('since')&&!(op&&op>lastTouchTs(c))) return false;
     if(UI.opens.has('multi')&&n<2) return false;
     if(UI.opens.has('none')&&op) return false; }
+  if(UI.owner.size){ const own=isOwner(c); if(UI.owner.has('own')&&!own) return false; if(UI.owner.has('non')&&own) return false; }
   if(UI.assignee.size){ const who=c.assignee||''; const ok=(UI.assignee.has('__none')&&!who)||(who&&UI.assignee.has(who)); if(!ok) return false; }
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
@@ -1269,29 +1317,63 @@ const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
 const telNum=c=>{ const p=(c.phone||c.mobile||'').replace(/[^\d+]/g,''); return p; };
 const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;align-items:center">'+
-  (telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\');openDispoPop(event,\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>')+
-  '<button class="btn sm gh" title="Log a disposition" onclick="event.stopPropagation();openDispoPop(event,\''+r.id+'\')">Dispo ▾</button>'+
-  '<button class="btn sm gh" title="Remove from queue" onclick="event.stopPropagation();dropFromQueue(\''+r.id+'\')">✕</button></div>';
-// Inline disposition popover — call & dispo any lead straight from the Up-next list.
-function openDispoPop(ev,cid){ if(ev) ev.stopPropagation(); const c=contact(cid); if(!c) return;
-  let p=el('dispoPop'); if(!p){ p=document.createElement('div'); p.id='dispoPop'; p.className='dispopop'; document.body.appendChild(p); }
-  p.innerHTML='<div class="dispopop-h">'+esc(cname(c))+'</div>'+
-    DISPOS.map(d=>'<button onclick="dispoPick(\''+cid+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('')+
-    '<button class="pri" onclick="dispoPop2(\'book\',\''+cid+'\')">✅ Booked demo</button>'+
-    '<button onclick="dispoPop2(\'drop\',\''+cid+'\')">✕ Remove from queue</button>';
-  p.style.display='block'; p.style.visibility='hidden';
-  const a=ev&&ev.currentTarget?ev.currentTarget.getBoundingClientRect():{bottom:80,right:window.innerWidth-20};
-  let top=a.bottom+window.scrollY+4, left=a.right+window.scrollX-p.offsetWidth;
-  if(left<8) left=8; p.style.top=top+'px'; p.style.left=left+'px'; p.style.visibility='visible'; }
-function closeDispoPop(){ const p=el('dispoPop'); if(p) p.style.display='none'; }
-function dispoPick(cid,k){ closeDispoPop(); setDispo(cid,k); }
-function dispoPop2(act,cid){ closeDispoPop(); if(act==='book') bookDemo(cid); else dropFromQueue(cid); }
-document.addEventListener('click',function(e){ const p=el('dispoPop'); if(p&&p.style.display==='block'&&!p.contains(e.target)) closeDispoPop(); });
-function logCall(cid){ const c=contact(cid); if(!c)return;
-  c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date()); c.callCount=(+c.callCount||0)+1;
-  claimLead(c);  // dialing refreshes your 30-min lock (own per-lead row)
-  logAuto(c,'📞 Called '+cname(c)); save();  // no re-render: keep the queue card stable mid-call
-  toast('Call logged · set a disposition to re-queue'); }
+  (telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>')+
+  '<button class="btn sm gh" title="Log call outcome" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')">Log ▾</button></div>';
+// ===== Call & disposition modal =====
+// Opening the modal does NOT log anything — dialing (the tel: link) just rings the phone.
+// A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
+let callModalId=null, cmSel={dispo:'',req:'none',note:''};
+function openCallModal(cid){ const c=contact(cid); if(!c) return;
+  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||''};
+  claimLead(c);  // opening to work the lead locks it to you (no log yet)
+  let m=el('callModal'); if(!m){ m=document.createElement('div'); m.id='callModal'; m.className='cmodal-wrap';
+    m.addEventListener('click',function(e){ if(e.target===m) closeCallModal(); }); document.body.appendChild(m); }
+  renderCallModal(); m.style.display='flex'; }
+function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId); if(!m||!c) return;
+  const a=acct(c.accountId), p=telNum(c), pd=(c.phone||c.mobile||'');
+  const dispoBtns=DISPOS.map(d=>'<button type="button" class="cm-dispo'+(cmSel.dispo===d.k?' on':'')+'" onclick="cmPickDispo(\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
+  const reqBtns=REQUEUE.map(r=>'<button type="button" class="cm-req'+(cmSel.req===r.k?' on':'')+'" onclick="cmPickReq(\''+r.k+'\')">'+esc(r.t)+'</button>').join('');
+  const prior=+c.callCount?('<span class="cm-sub">'+c.callCount+' prior call'+(c.callCount>1?'s':'')+(c.dispo?' · last: '+esc(c.dispo):'')+'</span>'):'';
+  m.innerHTML='<div class="cmodal">'+
+    '<div class="cm-head"><div><div class="cm-name">'+esc(cname(c))+'</div><div class="cm-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>'+prior+'</div>'+
+      '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+
+    (p?'<a class="cm-dial" href="tel:'+esc(p)+'">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')+
+    '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
+    '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…" oninput="cmSel.note=this.value">'+esc(cmSel.note)+'</textarea>'+
+    '<div class="cm-lbl">Call back</div><div class="cm-reqs">'+reqBtns+'</div>'+
+    '<div class="cm-foot"><button class="btn gh" onclick="closeCallModal()">Cancel</button>'+
+      '<button class="btn" onclick="bookDemoFromModal()">✅ Booked demo</button>'+
+      '<button class="btn pri" onclick="saveCallModal()">Save outcome</button></div>'+
+    '</div>'; }
+function cmSyncNote(){ const t=el('cmNote'); if(t) cmSel.note=t.value; }
+function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k; const d=DISPO_BY[k];
+  if(d&&d.gone) cmSel.req='none'; else if(d&&d.req) cmSel.req=d.req;   // suggest, rep can override
+  renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
+function cmPickReq(k){ cmSyncNote(); cmSel.req=k; renderCallModal(); }
+function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
+function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal(); return; }
+  cmSyncNote(); if(!cmSel.dispo){ toast('Pick an outcome first'); return; }
+  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req); closeCallModal(); }
+function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
+  if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
+// applyDispo = the SINGLE place a call is recorded: bumps call count, stamps last-contacted,
+// saves the note, and requeues ONLY if the rep chose a call-back window. Fully reversible.
+function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return;
+  if(pinnedLead===c.id) pinnedLead=null;
+  const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,queueOut:c.queueOut,queueOutTs:c.queueOutTs,
+    callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted};
+  c.callCount=(+c.callCount||0)+1;
+  c.dispo=d.t; c.dispoTs=Date.now();
+  c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
+  const nt=(note||'').trim(); if(nt) c.callNote=nt;
+  const rq=REQUEUE_BY[reqKey]||REQUEUE_BY.none;
+  if(d.gone||rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; }
+  else { c.queueOut=false; c.nextCallAt=Date.now()+rq.ms; }
+  stampU(c); logAuto(c,'☎ '+d.t+(nt?' — '+nt:'')); releaseClaim(c);
+  save(); renderActive(); refreshDrawer();
+  const back=(d.gone||rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt);
+  toast(d.t+' · '+back,()=>{ Object.assign(c,prev); stampU(c); save(); renderActive(); refreshDrawer(); }); }
+function logCall(cid){ openCallModal(cid); }   // legacy shim: any old dial hook now opens the modal
 function renderLeads(){
   const recs=prefilter(contacts().filter(c=>PROSPECT.includes(c.status||'New')&&!isCustC(c)));
   const t=dataTable('leads',chosenCols('leads'),recs,r=>"openContact('"+r.id+"')",bookCell);
@@ -1301,15 +1383,36 @@ function renderLeads(){
 const _HR=36e5, _DAY=864e5;
 // Each disposition snoozes the contact for `snz` ms — it drops out of "due now"
 // and reappears (auto re-queues) when the timer elapses. A playlist that self-manages.
+// Outcome only — NO forced auto-requeue. The rep chooses the call-back window
+// (REQUEUE below) per call, so "Connected" never silently snoozes 3 days.
+// req = a SUGGESTED default call-back (rep can override or clear); gone = drop from queue.
 const DISPOS=[
-  {k:'connected',t:'☎ Connected',  snz:3*_DAY},
-  {k:'callback', t:'↩ Callback',   snz:1*_DAY},
-  {k:'voicemail',t:'📩 Left VM',    snz:1*_DAY},
-  {k:'noanswer', t:'📵 No answer',  snz:4*_HR},
-  {k:'notint',   t:'✋ Not now',     snz:30*_DAY},
-  {k:'badnumber',t:'🚫 Bad #',      snz:365*_DAY},
+  {k:'interested', t:'✅ Interested',        req:'2d'},
+  {k:'callback',   t:'↩ Callback set',       req:'1d'},
+  {k:'lvm',        t:'📩 Left voicemail',     req:'2d'},
+  {k:'noanswer',   t:'📵 No answer',          req:'3h'},
+  {k:'gatekeeper', t:'🛡 Gatekeeper',         req:'1d'},
+  {k:'wrongtime',  t:'🕒 Not a good time',    req:'1w'},
+  {k:'thinking',   t:'🤔 Thinking it over',   req:'1w'},
+  {k:'notnow',     t:'💤 Not now / later Q',  req:'30d'},
+  {k:'notint',     t:'🙅 Not interested',     gone:1},
+  {k:'competitor', t:'🏳 Uses competitor',    req:'30d'},
+  {k:'dnc',        t:'⛔ Do not call',         gone:1},
+  {k:'badnumber',  t:'☎ Bad number',          gone:1},
 ];
 const DISPO_BY=Object.fromEntries(DISPOS.map(d=>[d.k,d]));
+// Call-back windows. 'none' = handled, no auto-requeue (drops out of "due now",
+// restorable). Nothing is ever forced — the rep picks.
+const REQUEUE=[
+  {k:'none',t:'No call-back',ms:-1},
+  {k:'3h', t:'Later today',  ms:3*_HR},
+  {k:'1d', t:'Tomorrow',     ms:1*_DAY},
+  {k:'2d', t:'In 2 days',    ms:2*_DAY},
+  {k:'1w', t:'Next week',    ms:7*_DAY},
+  {k:'2w', t:'In 2 weeks',   ms:14*_DAY},
+  {k:'30d',t:'In a month',   ms:30*_DAY},
+];
+const REQUEUE_BY=Object.fromEntries(REQUEUE.map(r=>[r.k,r]));
 function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
   const h=d/36e5; if(h<1) return Math.max(1,Math.round(d/6e4))+'m'; if(h<24) return Math.round(h)+'h';
   const days=Math.round(h/24); if(days===1) return 'tomorrow'; if(days<30) return 'in '+days+'d'; return 'in '+Math.round(days/30)+'mo'; }
@@ -1393,14 +1496,7 @@ function retierBook(){
   toast('Re-tiered → '+hot+' Hot · '+warm+' Warm · '+cold+' Cold',()=>{ prev.forEach(p=>{const c=contact(p.id); if(c)c.warmth=p.w;}); save(); render(); toast('Re-tier undone'); });
 }
 function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY[key]; if(!d)return;
-  if(pinnedLead===cid) pinnedLead=null;  // released — let the next lead surface
-  const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted};
-  c.dispo=d.t; c.dispoTs=Date.now(); c.nextCallAt=Date.now()+d.snz;
-  c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
-  releaseClaim(c);  // done with this lead — free it for the team
-  logAuto(c,'☎ '+d.t); save(); renderActive();
-  toast(d.t+' · back '+fmtWhen(c.nextCallAt),()=>{ Object.assign(c,prev); save(); renderActive(); });
-}
+  applyDispo(c,key,'',(d.gone?'none':(d.req||'none'))); }
 function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; stampU(c); save(); }
 function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; stampU(c); save(); renderActive(); toast('Re-queued to top'); }
 function dropFromQueue(cid){ const c=contact(cid); if(!c)return; if(pinnedLead===cid) pinnedLead=null; c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
@@ -1428,12 +1524,24 @@ const EMAIL_CADENCE=[
   {d:9, label:'ROI / objection'},
   {d:14,label:'Breakup'},
 ];
-const CAD_N=EMAIL_CADENCE.length;
+// The rep can paste their OWN Apollo sequence copy into store.__cadence (synced to the team),
+// so Embert sends Saad's exact steps. Apollo's public API can't read step bodies, so this is a
+// one-time paste. When custom copy exists it fully replaces the built-in templates below.
+function cadDef(){ const c=store&&store.__cadence; return (Array.isArray(c)&&c.length)?c:EMAIL_CADENCE; }
+function isCustomCad(){ const c=store&&store.__cadence; return !!(Array.isArray(c)&&c.length); }
+function cadN(){ return cadDef().length; }
+function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
+  const map={ first:(c.first||cname(c).split(' ')[0]||'there'), account:aname(a), rep:senderName(),
+    apps:(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats',
+    locs:String(a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0) };
+  return String(str).replace(/\{\{\s*(first|account|rep|apps|locs)\s*\}\}/gi,(m,k)=>map[k.toLowerCase()]||''); }
 function senderName(){ return myRep()||store.__rep||'Saad'; }
 function inApolloSeq(c){ return !!(c&&c.apolloSeq); }
 function cadState(c){ if(!c) return 'none'; if(inApolloSeq(c)) return 'apollo';
-  const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=CAD_N) return 'manual'; return 'none'; }
+  const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=cadN()) return 'manual'; return 'none'; }
 function emailStep(c,n){
+  const custom=cadDef()[n-1];
+  if(custom&&(custom.subj||custom.body)) return {subj:fillTokens(custom.subj||'',c), body:fillTokens(custom.body||'',c)};
   const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=senderName();
   const apps=(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats';
   const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
@@ -1454,26 +1562,59 @@ function emailStep(c,n){
 }
 function startEmailCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'✉️ Started 5-step email cadence'); save(); refreshDrawer(); toast('Email cadence started — Email 1 ready to send'); }
 function restartCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'↻ Restarted email cadence'); save(); refreshDrawer(); toast('Cadence restarted'); }
-function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,CAD_N); const e=emailStep(c,n);
+function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadN()); const e=emailStep(c,n);
   const txt='Subject: '+e.subj+'\n\n'+e.body;
   const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
   try{ document.execCommand('copy'); }catch(_){} document.body.removeChild(ta); toast('Email '+n+' copied — paste into your inbox'); }
 function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
-  const n=Math.min(+s.step||1,CAD_N); const e=emailStep(c,n); const by=senderName();
-  logAuto(c,'📧 Email '+n+'/'+CAD_N+' sent by '+by+' — '+e.subj);   // counts as an email touch (lastSentTs)
-  s.lastBy=by; s.lastSentAt=Date.now(); s.step=n+1; if(s.step>CAD_N) s.done=true;
+  const N=cadN(); const n=Math.min(+s.step||1,N); const e=emailStep(c,n); const by=senderName();
+  logAuto(c,'📧 Email '+n+'/'+N+' sent by '+by+' — '+e.subj);   // counts as an email touch (lastSentTs)
+  s.lastBy=by; s.lastSentAt=Date.now(); s.step=n+1; if(s.step>N) s.done=true;
   stampU(c); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget();
-  toast(s.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+EMAIL_CADENCE[n].d+'d')); }
+  const nextD=cadDef()[n]?(+cadDef()[n].d||0):0;
+  toast(s.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+nextD+'d')); }
 function startApolloCadence(id){ toast('Apollo enrollment isn\'t wired yet — use the manual email cadence, or ask to connect your Apollo master key so any rep can enroll without a license.'); }
+// ===== Sequence copy editor: paste your real Apollo steps once, whole team sends them =====
+let cadEdit=null;
+function openCadenceEditor(){ cadEdit=cadDef().map(s=>({label:s.label||'',d:+s.d||0,subj:s.subj||'',body:s.body||''}));
+  if(!cadEdit.length) cadEdit=[{label:'',d:0,subj:'',body:''}];
+  let m=el('cadModal'); if(!m){ m=document.createElement('div'); m.id='cadModal'; m.className='cmodal-wrap';
+    m.addEventListener('click',function(e){ if(e.target===m) closeCadenceEditor(); }); document.body.appendChild(m); }
+  renderCadenceEditor(); m.style.display='flex'; }
+function cadSync(){ if(!cadEdit) return; cadEdit.forEach((s,i)=>{ const g=f=>{ const x=el('cad_'+f+'_'+i); return x?x.value:s[f]; };
+  s.label=g('label'); s.d=+g('d')||0; s.subj=g('subj'); s.body=g('body'); }); }
+function renderCadenceEditor(){ const m=el('cadModal'); if(!m||!cadEdit) return;
+  const rows=cadEdit.map((s,i)=>'<div class="cadstep"><div class="cadstep-h"><b>Step '+(i+1)+'</b>'+(cadEdit.length>1?'<button class="cm-x" onclick="cadDelStep('+i+')" title="Remove step">✕</button>':'')+'</div>'+
+    '<div class="cadgrid"><input id="cad_label_'+i+'" placeholder="Label (e.g. Intro)" value="'+esc(s.label)+'"><input id="cad_d_'+i+'" type="number" min="0" title="wait days before this step" value="'+esc(String(s.d))+'" style="width:96px"></div>'+
+    '<input id="cad_subj_'+i+'" placeholder="Subject line" value="'+esc(s.subj)+'" style="width:100%;box-sizing:border-box;margin-top:6px">'+
+    '<textarea id="cad_body_'+i+'" class="cm-note" placeholder="Email body… tokens: {{first}} {{account}} {{apps}} {{locs}} {{rep}}">'+esc(s.body)+'</textarea></div>').join('');
+  m.innerHTML='<div class="cmodal" style="max-width:640px">'+
+    '<div class="cm-head"><div><div class="cm-name">✉️ Email sequence copy</div><div class="cm-sub">Paste your Apollo steps once — the whole team sends this exact copy. Tokens: {{first}} {{account}} {{apps}} {{locs}} {{rep}}</div></div>'+
+      '<button class="cm-x" onclick="closeCadenceEditor()">✕</button></div>'+
+    '<div style="max-height:52vh;overflow:auto;margin-top:12px">'+rows+'</div>'+
+    '<div class="logbar" style="margin-top:8px"><button class="btn sm gh" onclick="cadAddStep()">＋ Add step</button>'+
+      (isCustomCad()?'<button class="btn sm gh" onclick="resetCadence()" title="Revert to the built-in templates">↺ Reset to default</button>':'')+'</div>'+
+    '<div class="cm-foot"><button class="btn gh" onclick="closeCadenceEditor()">Cancel</button><button class="btn pri" onclick="saveCadence()">Save sequence</button></div></div>'; }
+function cadAddStep(){ cadSync(); cadEdit.push({label:'',d:cadEdit.length?7:0,subj:'',body:''}); renderCadenceEditor(); }
+function cadDelStep(i){ cadSync(); cadEdit.splice(i,1); if(!cadEdit.length) cadEdit=[{label:'',d:0,subj:'',body:''}]; renderCadenceEditor(); }
+function closeCadenceEditor(){ const m=el('cadModal'); if(m) m.style.display='none'; cadEdit=null; }
+function resetCadence(){ if(!confirm('Reset to the built-in templates? Your pasted copy will be removed.')) return; store.__cadence=null; store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); toast('Reverted to default templates'); }
+function saveCadence(){ cadSync();
+  const steps=cadEdit.filter(s=>(s.subj&&s.subj.trim())||(s.body&&s.body.trim())).map(s=>({label:(s.label||'').trim(),d:+s.d||0,subj:(s.subj||'').trim(),body:s.body||''}));
+  if(!steps.length){ store.__cadence=null; toast('No copy entered — using default templates'); }
+  else { store.__cadence=steps; toast('Saved '+steps.length+'-step sequence — the team now sends your copy'); }
+  store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); }
 function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadState(c);
   if(st==='apollo') return '<div class="cadbox in"><b>● In Apollo sequence:</b> '+esc(c.apolloSeq)+'<div class="tsub" style="margin-top:3px">Managed in Apollo — no manual sends needed here.</div></div>';
-  if(st==='none') return '<div class="cadbox"><div><b>Not in a cadence.</b> Start touches to warm this contact.</div>'+
-    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">✉️ Start 5-step email cadence</button>'+
+  if(st==='none') return '<div class="cadbox"><div><b>Not in a cadence.</b> '+(isCustomCad()?'Using <b>your Apollo copy</b> ('+cadN()+' steps).':'Start touches to warm this contact.')+'</div>'+
+    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">✉️ Start '+cadN()+'-step email cadence</button>'+
+    '<button class="btn sm gh" onclick="openCadenceEditor()" title="Paste your real Apollo sequence copy — the whole team then sends it">✎ Edit sequence copy</button>'+
     '<button class="btn sm gh" onclick="startApolloCadence(\''+id+'\')" title="Needs your Apollo master key wired server-side (so Embert can enroll without a license)">⚡ Start in Apollo</button></div></div>';
-  const n=Math.min((+c.emailSeq.step||1),CAD_N), done=!!c.emailSeq.done, e=emailStep(c,n);
+  const N=cadN(), n=Math.min((+c.emailSeq.step||1),N), done=!!c.emailSeq.done, e=emailStep(c,n);
   const lastBy=c.emailSeq.lastBy, lastAt=c.emailSeq.lastSentAt;
-  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>✉️ Email cadence</b><span class="tsub">'+(done?'✓ Complete · '+CAD_N+'/'+CAD_N+' sent':'Email '+n+' of '+CAD_N+' · '+EMAIL_CADENCE[n-1].label)+'</span></div>';
-  h+='<div class="tsub" style="margin-top:4px">Sending as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span>'+(lastBy?' · last sent by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
+  const stepLbl=(cadDef()[n-1]&&cadDef()[n-1].label)||('Email '+n);
+  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>✉️ Email cadence</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' sent':'Email '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
+  h+='<div class="tsub" style="margin-top:4px">Sending as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="openCadenceEditor()" style="cursor:pointer;color:var(--sig)">✎ edit copy</span>'+(isCustomCad()?' · <b>your Apollo copy</b>':'')+(lastBy?' · last sent by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
   if(!done){
     h+='<div style="margin-top:8px;font-size:12.5px"><b>Subject:</b> '+esc(e.subj)+'</div>';
     h+='<div class="cadbody">'+esc(e.body)+'</div>';
@@ -1517,7 +1658,7 @@ function callBrief(c){ if(!c) return '';
   // Cadence status nudge
   const cs=cadState(c); let cad;
   if(cs==='apollo') cad='● Already in Apollo sequence "<b>'+esc(c.apolloSeq)+'</b>" — the call backs up the emails.';
-  else if(cs==='manual') cad='✉️ In your email cadence (Email '+Math.min(+c.emailSeq.step||1,CAD_N)+' of '+CAD_N+') — reference the thread, don\'t restart cold.';
+  else if(cs==='manual') cad='✉️ In your email cadence (Email '+Math.min(+c.emailSeq.step||1,cadN())+' of '+cadN()+') — reference the thread, don\'t restart cold.';
   else if(cs==='done') cad='✉️ Email cadence complete — this call is the follow-through.';
   else cad='⚠️ Not in a cadence yet — after the call, start a 5-step email sequence from the contact drawer.';
   const od=(a?dealsOf(a.id):[]).filter(d=>!CLOSED.includes(d.stage))[0];
@@ -1556,13 +1697,14 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-bits">'+bits.join(' · ')+'</div>';
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
-  h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="logCall(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<span class="tsub">no phone on file</span>';
+  h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="openCallModal(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<span class="tsub">no phone on file</span>';
   h+='<button class="btn cc-open" onclick="openContact(\''+c.id+'\')">👤 Open contact ↗</button>';
   h+='</div></div>';
   h+='<div style="padding:0 16px 4px">'+callBrief(c)+'</div>';
-  h+='<div class="cc-dispo" id="ccDispo"><div class="cc-dispo-lbl">Log a disposition →</div>'+DISPOS.map(d=>'<button class="btn sm gh" onclick="setDispo(\''+c.id+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
-  h+='<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button>';
-  h+='<button class="btn sm pri" onclick="bookDemo(\''+c.id+'\')">✅ Booked demo</button></div></div>';
+  h+='<div class="cc-dispo" id="ccDispo"><div class="cc-dispo-lbl">After the call →</div>'+
+    '<button class="btn sm pri" onclick="openCallModal(\''+c.id+'\')">📋 Log outcome & notes</button>'+
+    '<button class="btn sm gh" onclick="bookDemo(\''+c.id+'\')">✅ Booked demo</button>'+
+    '<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button></div></div>';
   return h;
 }
 function recalcQueue(){
@@ -1652,17 +1794,19 @@ function acctIntent(a){
     if(lo){ if(now-lo<=7*_DAY) opens7+=oc||1; if(now-lo<=30*_DAY) opens30+=oc||1; }
     if(c.replied) replies++;
     if(lc) calls++;
-    if(c.apolloSeq) inSeq++;
+    if(c.apolloSeq || (c.emailSeq && !c.emailSeq.done)) inSeq++;   // Apollo seq OR active manual cadence both count
     if(isOwner(c)) owners++;
     const act=Math.max(lo||0,lc||0,ls||0,+c.lastContactedTs||0); if(act>lastAct) lastAct=act;
-    const hot7=(lo&&now-lo<=7*_DAY)||c.replied||(lc&&now-lc<=7*_DAY); if(hot7) engaged7.add(c.id);
+    const hot7=(lo&&now-lo<=7*_DAY)||c.replied||(lc&&now-lc<=7*_DAY)||(ls&&now-ls<=7*_DAY); if(hot7) engaged7.add(c.id);
   });
   const depth=engaged7.size;
   let score=opens7*20+Math.max(0,opens30-opens7)*6+replies*120+calls*8+inSeq*10+owners*40+depth*60;
   if(lastAct) score+=Math.max(0,120-((now-lastAct)/_DAY)*8);
   return {a,cs:cs.length,opens7,opens30,replies,calls,inSeq,depth,owners,lastAct,score:Math.round(score),trending:depth>=2};
 }
-function intentRows(){ return activeAccts().map(acctIntent).filter(r=>r.score>0&&r.cs>0).sort((x,y)=>y.score-x.score); }
+function intentRows(){ return activeAccts().map(acctIntent).filter(r=>r.score>0&&r.cs>0&&!(r.a.intentMuteAt&&r.lastAct<=r.a.intentMuteAt)).sort((x,y)=>y.score-x.score); }
+function dismissIntent(aid){ const a=acct(aid); if(!a)return; a.intentMuteAt=Date.now(); stampU(a); save(); renderIntent(); renderCounts();
+  toast('Dismissed from Intent — reappears on a new open/reply/call',()=>{ delete a.intentMuteAt; stampU(a); save(); renderIntent(); renderCounts(); }); }
 function markInternal(cid){ const c=contact(cid); if(!c)return; c.internal=true; c.warmth='Cold'; save(); renderActive();
   toast('Marked internal — hidden from Intent & call queue',()=>{ c.internal=false; save(); renderActive(); }); }
 function unmarkInternal(cid){ const c=contact(cid); if(!c)return; c.internal=false; save(); renderActive(); toast('Restored as a lead'); }
@@ -1707,7 +1851,8 @@ function renderIntent(){
       '<td class="num">'+(r.owners?'👑'+r.owners:'')+'</td>'+
       '<td>'+when+'</td>'+
       '<td class="num"><b style="color:var(--sig2)">'+r.score+'</b></td>'+
-      '<td style="text-align:right" onclick="event.stopPropagation()">'+callBtn+'</td></tr>';
+      '<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+callBtn+
+      ' <button class="btn sm gh" title="Dismiss — called already / not interested" onclick="dismissIntent(\''+a.id+'\')">✕</button></td></tr>';
   }).join('');
   h+='<div class="panel"><div class="ph"><h3>⬆ Ranked accounts</h3><span class="sub">'+rows.length+' with signal · showing top '+cap.length+' · 👑=owner engaged</span></div>'+
     '<table><thead><tr>'+
@@ -1790,6 +1935,10 @@ function pipeThisMonth(){ pipeMonth=new Date(); renderPipeline(); }
 const PROB_DEF={"Booked Demo":30,"No Show":10,"Follow Up":50,"Closed Lost":0,"Closed Deal":100};
 function prob(stage){ const p=(store.__probs||{})[stage]; return p!=null?(+p||0):(PROB_DEF[stage]!=null?PROB_DEF[stage]:0); }
 function setProb(stage,v){ store.__probs=store.__probs||{}; let n=Math.max(0,Math.min(100,+v||0)); store.__probs[stage]=n; save(); renderPipeline(); }
+/* per-DEAL chance to close: deal's own % if set, else its stage default. Stages are just
+   kanban tracking — the forecast is driven purely by (deal MRR × its chance to close). */
+function dealProb(d){ if(!d) return 0; if(d.closePct!=null&&d.closePct!=='') return Math.max(0,Math.min(100,+d.closePct||0)); return prob(d.stage); }
+function setDealProb(id,v){ const d=deal(id); if(!d)return; d.closePct=Math.max(0,Math.min(100,+v||0)); stampU(d); save(); renderPipeline(); }
 function renderPipeline(){
   let list=deals().filter(d=>{
     if(UI.warmth.size&&!UI.warmth.has(d.warmth)) return false;
@@ -1806,29 +1955,29 @@ function renderPipeline(){
        '<button class="btn sm'+(pipeMonth&&inMonth(Date.now(),pipeMonth)?' pri':'')+'" onclick="pipeThisMonth()">This month</button>'+
        '<button class="btn sm" onclick="pipeShift(1)">Next ›</button>'+
      '</div></div>';
-  // ---- projection calculator ----
+  // ---- projection calculator: deal amount × that deal's chance to close ----
   const wonMRR=list.filter(d=>d.stage===WON).reduce((a,d)=>a+(+d.mrr||0),0);
-  const openStages=STAGES.filter(s=>!CLOSED.includes(s));
+  const openDeals=list.filter(d=>!CLOSED.includes(d.stage))
+    .sort((a,b)=>(+b.mrr||0)*dealProb(b)-(+a.mrr||0)*dealProb(a));
   let weighted=0;
-  const rows=openStages.map(stage=>{
-    const col=list.filter(d=>d.stage===stage);
-    const mrrSum=col.reduce((a,d)=>a+(+d.mrr||0),0);
-    const pc=prob(stage);
-    const contrib=Math.round(mrrSum*pc/100);
-    weighted+=contrib;
-    return '<tr><td class="tname">'+esc(stage)+'</td><td>'+col.length+'</td><td>'+money(mrrSum)+'/mo</td>'+
+  const rows=openDeals.map(d=>{
+    const a=acct(d.accountId), mrr=+d.mrr||0, pc=dealProb(d);
+    const contrib=Math.round(mrr*pc/100); weighted+=contrib;
+    return '<tr><td class="tname" onclick="openDeal(\''+d.id+'\')" style="cursor:pointer">'+esc(d.name||aname(a))+
+        '<div class="tsub">'+esc(d.stage)+(d.demoDate?' · '+esc(fmtD(d.demoDate)):'')+'</div></td>'+
+      '<td>'+(mrr?money(mrr)+'/mo':'<span class="tsub">no plan</span>')+'</td>'+
       '<td><input type="number" min="0" max="100" value="'+pc+'" style="width:64px" '+
-      'onchange="setProb(\''+esc(stage)+'\',this.value)"> %</td>'+
+      'onchange="setDealProb(\''+d.id+'\',this.value)"> %</td>'+
       '<td class="tname" style="color:var(--acc)">'+money(contrib)+'/mo</td></tr>';
   }).join('');
   const projected=wonMRR+weighted;
   h+='<div class="panel" style="margin-bottom:14px"><div class="ph"><h3>Projected Close · '+esc(mLabel)+'</h3>'+
-     '<span class="sub">weighted by stage odds · <b style="color:var(--acc)">'+BUILD+'</b></span></div>'+
+     '<span class="sub">deal amount × chance to close · <b style="color:var(--acc)">'+BUILD+'</b></span></div>'+
      '<div style="padding:14px 16px">'+
      '<div class="grid">'+stat(money(wonMRR)+'/mo','Won so far',true)+stat(money(weighted)+'/mo','Weighted open')+stat(money(projected)+'/mo','Projected close')+'</div>'+
-     '<table style="margin-top:10px"><thead><tr><th>Stage</th><th>Deals</th><th>Open MRR</th><th>Close odds</th><th>Weighted</th></tr></thead><tbody>'+
-     (rows||'<tr><td class="empty" colspan="5">No open deals'+(pipeMonth?' this month':'')+'.</td></tr>')+'</tbody></table>'+
-     '<div class="tsub" style="margin-top:8px">Edit each stage\'s % to tune your forecast. Projected = Won so far + Σ(open MRR × odds).</div>'+
+     '<table style="margin-top:10px"><thead><tr><th>Deal</th><th>MRR</th><th>Chance to close</th><th>Weighted</th></tr></thead><tbody>'+
+     (rows||'<tr><td class="empty" colspan="4">No open deals'+(pipeMonth?' this month':'')+'.</td></tr>')+'</tbody></table>'+
+     '<div class="tsub" style="margin-top:8px">Each deal\'s % defaults from its stage — edit any deal to tune it. Projected = Won so far + Σ(deal MRR × its chance). Stage columns below are just for tracking where each deal sits (Closed Lost = kept as a record to recall later).</div>'+
      '</div></div>';
   h+='<div class="board">';
   STAGES.forEach(stage=>{
@@ -1838,7 +1987,8 @@ function renderPipeline(){
     const mrrSum=col.reduce((a,d)=>a+(+d.mrr||0),0);
     const cc=isWon?' won':isLost?' lost':'';
     h+='<div class="col'+cc+'" data-stage="'+esc(stage)+'" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropCard(event)">';
-    h+='<div class="ch"><span>'+esc(stage)+'</span><span class="cnt">'+col.length+' · '+((isWon||isLost)&&mrrSum?money(mrrSum)+'/mo':money(sum))+'</span></div>';
+    h+='<div class="ch"><span>'+esc(stage)+'</span><span class="cnt">'+col.length+' · '+((isWon||isLost)&&mrrSum?money(mrrSum)+'/mo':money(sum))+'</span>'+
+       '<button class="btn sm gh" title="Log a deal in '+esc(stage)+'" style="margin-left:6px;padding:1px 7px" onclick="quickAddDeal(\''+esc(stage)+'\')">＋</button></div>';
     h+='<div class="cb">';
     h+=col.map(d=>{ const a=acct(d.accountId),c=contact(d.contactId);
       const dc=d.stage===WON?' won':d.stage===LOST?' lost':'';
@@ -2067,6 +2217,14 @@ function accountPicker(setter,cur){
   const list=accounts().sort((a,b)=>a.name.localeCompare(b.name));
   return '<select onchange="'+setter+'">'+list.map(a=>'<option value="'+esc(a.id)+'"'+(a.id===cur?' selected':'')+'>'+esc(a.name)+'</option>').join('')+'</select>';
 }
+/* deal-drawer account selector: allows "none" (for a just-logged deal) + create-new inline */
+function dealAccountPicker(id,cur){ const list=accounts().sort((a,b)=>a.name.localeCompare(b.name));
+  return '<select onchange="setDaccount(\''+id+'\',this.value)"><option value=""'+(!cur?' selected':'')+'>— none —</option>'+
+    list.map(a=>'<option value="'+esc(a.id)+'"'+(a.id===cur?' selected':'')+'>'+esc(a.name)+'</option>').join('')+
+    '<option value="__add">＋ New account…</option></select>'; }
+function setDaccount(id,v){ const d=deal(id); if(!d)return;
+  if(v==='__add'){ const n=prompt('New account name:'); if(n&&n.trim()){ d.accountId=newAccount(n.trim()); d.contactId=''; if(!d.name)d.name=n.trim(); stampU(d); save(); } if(drawerOpen())openDeal(id); return; }
+  d.accountId=v; d.contactId=''; const a=acct(v); if(a&&!d.name)d.name=a.name; stampU(d); save(); if(drawerOpen())openDeal(id); }
 
 /* ====================== ACCOUNT DRAWER ====================== */
 function openAccount(id){
@@ -2137,10 +2295,12 @@ function openDeal(id){
     '<span class="stg">'+esc(d.stage)+'</span><button class="x" onclick="closeDrawer()">×</button>';
   let b='';
   b+='<div class="f2">'+fld('Stage',sel("setDstage('"+id+"',this.value)",STAGES,d.stage))+(CLOSED.includes(d.stage)?'':fld('Warmth',sel("setD('"+id+"','warmth',this.value)",WARMTHS,d.warmth||'Warm')))+'</div>';
+  if(!CLOSED.includes(d.stage)) b+='<div class="f2">'+fld('Chance to close %',inp("setDealProb('"+id+"',this.value)",dealProb(d),'number'))+'<div class="tsub" style="align-self:center">Drives the pipeline forecast (MRR × this %). Defaults from stage.</div></div>';
   b+='<div class="f3">'+fld('Deal value',inp("setD('"+id+"','value',+this.value)",d.value,'number'))+fld('Plan $/mo',selN("setDplan('"+id+"',this.value)",PLANS.map(String),d.plan?String(d.plan):''))+fld('Demo date',inp("setD('"+id+"','demoDate',this.value)",d.demoDate,'datetime-local'))+'</div>';
   if(d.demoDate) b+='<div style="margin:-4px 0 10px">'+(d.calEventId?'<span class="tag cust">📅 On Google Calendar</span>'+(d.calLink?' <a href="'+esc(d.calLink)+'" target="_blank" style="font-size:11px">Open ↗</a>':''):'<button class="btn sm" onclick="pushDemoToCalendar(\''+id+'\')">📅 Add to Google Calendar</button>')+'</div>';
   if(CLOSED.includes(d.stage)) b+='<div class="f2">'+fld('Close date',inp("setDclosed('"+id+"',this.value)",dateInputVal(d.closedAt),'date'))+'</div>';
-  b+='<div class="f2">'+fld('Contact',contactPicker("setD('"+id+"','contactId',this.value)",d.accountId,d.contactId))+fld('Assigned to',assignPicker("setAssignee('d','"+id+"',this.value)",d.assignee))+'</div>';
+  b+='<div class="f2">'+fld('Account',dealAccountPicker(id,d.accountId))+fld('Contact',contactPicker("setD('"+id+"','contactId',this.value)",d.accountId,d.contactId))+'</div>';
+  b+='<div class="f2">'+fld('Assigned to',assignPicker("setAssignee('d','"+id+"',this.value)",d.assignee))+'</div>';
   b+=fld('Next step',inp("setD('"+id+"','nextStep',this.value)",d.nextStep));
   b+=fld('Notes',ta("setD('"+id+"','notes',this.value)",d.notes));
   b+=customBlock('d',id);
@@ -2172,9 +2332,19 @@ function addContact(aid){ const id=uid('c'); store.contacts[id]={id,accountId:ai
 function addInboundLead(email,name){ name=(name||'').trim(); const parts=name.split(/\s+/); const first=parts.shift()||''; const last=parts.join(' ');
   const id=uid('c'); store.contacts[id]={id,accountId:'',first,last,email:email||'',warmth:'Warm',status:'New',source:'Inbound',log:[]};
   logAuto(store.contacts[id],'🆕 Added from inbound email'); save(); toast('Lead added — set their account'); render(); openContact(id); }
+function ignoreInbound(email){ email=String(email||'').trim().toLowerCase(); if(!email)return;
+  store.__inboundIgnore=store.__inboundIgnore||{}; store.__inboundIgnore[email]=Date.now(); store.__updatedAt=Date.now();
+  save(); renderToday(); toast('Hidden from inbound',()=>{ delete store.__inboundIgnore[email]; save(); renderToday(); }); }
 function addDeal(aid){ const c=contactsOf(aid)[0]; const id=uid('d');
   store.deals[id]={id,accountId:aid,contactId:c?c.id:'',name:acct(aid)?acct(aid).name:'Deal',stage:'Booked Demo',value:0,warmth:'Warm',log:[],createdAt:Date.now(),_u:Date.now()};
   save(); openDeal(id); }
+/* Quick-log a deal straight into a stage (e.g. a past Closed Lost you never tracked).
+   Fill in account/plan in the drawer that opens. Closed deals get a close date now. */
+function quickAddDeal(stage){ const id=uid('d'); const closed=CLOSED.includes(stage);
+  store.deals[id]={id,accountId:'',contactId:'',name:'',stage:stage||'Booked Demo',value:0,warmth:'Warm',
+    log:[],createdAt:Date.now(),_u:Date.now()};
+  if(closed) store.deals[id].closedAt=Date.now();
+  logAuto(store.deals[id],'Logged in '+stage); save(); openDeal(id); }
 function bookDemo(cid){ const c=contact(cid); if(!c)return;
   if(pinnedLead===cid) pinnedLead=null;
   const id=uid('d'); const prevStatus=c.status;
@@ -2299,9 +2469,31 @@ function importCSV(text){
   const iAcc=col('account','restaurant','company'),iFirst=col('first'),iLast=col('last'),iName=col('contact name','owner','name'),
     iTitle=col('title'),iEmail=col('email'),iPhone=col('phone'),iCity=col('city','area'),iState=col('state'),
     iWeb=col('website'),iPos=col('pos','platform'),iWarm=col('warmth','tier','health','priority'),iStage=col('stage'),iVal=col('value');
-  let na=0,nc=0;
+  // ---- Engagement columns → intent signals (so an imported list shows up in Intent) ----
+  const iOpens=col('opens','opened','pixel_visits','pixel visits','email opens'),
+    iOpenAt=col('last opened','opened at','last_open','last open'),
+    iReplied=col('replied','reply','has replied'),
+    iSeq=col('sequence','campaign','sequence name'),
+    iLastAct=col('last contacted','last activity','last touch','lastcontacted','last engaged');
+  const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='y'||v==='1'; };
+  let na=0,nc=0,nsig=0;
   const byName={}; accounts().forEach(a=>byName[a.name.toLowerCase()]=a.id);
   const byEmail={}; contacts().forEach(c=>{if(c.email)byEmail[c.email.toLowerCase()]=c.id;});
+  // Second dedup key: same person name under the same account (for rows with no email).
+  const byNameAcct={}; contacts().forEach(c=>{ const nm=((c.first||'')+' '+(c.last||'')).toLowerCase().trim(); if(nm) byNameAcct[c.accountId+'|'+nm]=c.id; });
+  const byPhone={}; contacts().forEach(c=>{ const p=norm10(c.phone||c.mobile); if(p) byPhone[p]=c.id; });
+  // Stamp opens/replies/sequence/last-activity onto a contact from its CSV row.
+  function stampEngage(c,r){ if(!c) return false; let hit=false;
+    const opensN=iOpens>=0?(parseInt(String(r[iOpens]).replace(/[^\d]/g,''))||(yes(r[iOpens])?1:0)):0;
+    let openTs=iOpenAt>=0?(Date.parse(r[iOpenAt]||'')||0):0;
+    if(opensN>0&&!openTs) openTs=Date.now();
+    if(openTs){ if(openTs>(+c.lastEmailOpenTs||0)) c.lastEmailOpenTs=openTs;
+      c.log=c.log||[]; const txt='👀 Opened email'+(opensN>1?' ('+opensN+'x)':''); if(!c.log.some(l=>l.txt===txt&&l.ts===openTs)) c.log.push({ts:openTs,txt,sys:true}); hit=true; }
+    if(iReplied>=0&&yes(r[iReplied])){ c.replied=true; hit=true; }
+    if(iSeq>=0){ const s=String(r[iSeq]||'').trim(); if(s){ c.apolloSeq=s; hit=true; } }
+    const laTs=iLastAct>=0?(Date.parse(r[iLastAct]||'')||0):0;
+    if(laTs&&laTs>(+c.lastContactedTs||0)){ c.lastContactedTs=laTs; c.lastContacted=fmtD(new Date(laTs)); hit=true; }
+    if(hit){ stampU(c); nsig++; } return hit; }
   rows.slice(1).forEach(r=>{
     const an=(iAcc>=0?r[iAcc]:'').trim(); if(!an)return;
     let aid=byName[an.toLowerCase()];
@@ -2310,12 +2502,17 @@ function importCSV(text){
     let first='',last='';
     if(iFirst>=0){first=(r[iFirst]||'').trim();last=(iLast>=0?r[iLast]:'').trim();}
     else if(iName>=0){const p=(r[iName]||'').trim().split(/\s+/);first=p[0]||'';last=p.slice(1).join(' ');}
-    if(email||first){ if(!(email&&byEmail[email.toLowerCase()])){ const cid=uid('c');
+    if(email||first){ const phone=(iPhone>=0?r[iPhone]:'').trim(), pk=norm10(phone), nm=((first||'')+' '+(last||'')).toLowerCase().trim();
+      // Dedup: match on email, else same name under the same account, else same phone number.
+      const exist=(email&&byEmail[email.toLowerCase()]) || (nm&&byNameAcct[aid+'|'+nm]) || (pk&&byPhone[pk]);
+      if(exist){ const c=contact(exist); if(c){ if(email&&!c.email){ c.email=email; byEmail[email.toLowerCase()]=exist; } if(phone&&!c.phone&&!c.mobile){ c.phone=phone; if(pk)byPhone[pk]=exist; } stampEngage(c,r); } }
+      else { const cid=uid('c');
       let warm='Cold'; const wv=(iWarm>=0?r[iWarm]:'').toLowerCase(); if(wv.includes('hot')||wv.includes('a ')||wv.includes('high'))warm='Hot'; else if(wv.includes('warm')||wv.includes('b ')||wv.includes('med'))warm='Warm';
-      store.contacts[cid]={id:cid,accountId:aid,first,last,title:(iTitle>=0?r[iTitle]:'').trim(),email,phone:(iPhone>=0?r[iPhone]:'').trim(),warmth:warm,status:'New',log:[]};
-      if(email)byEmail[email.toLowerCase()]=cid; nc++; } }
+      store.contacts[cid]={id:cid,accountId:aid,first,last,title:(iTitle>=0?r[iTitle]:'').trim(),email,phone,warmth:warm,status:'New',log:[]};
+      stampEngage(contact(cid),r);
+      if(email)byEmail[email.toLowerCase()]=cid; if(nm)byNameAcct[aid+'|'+nm]=cid; if(pk)byPhone[pk]=cid; nc++; } }
   });
-  save(); render(); toast('Imported '+na+' accounts, '+nc+' contacts');
+  save(); render(); toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':''));
 }
 /* ---- Universal CSV importer: auto-detect calls / emails / contacts ---- */
 function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10?d.slice(-10):''; }
