@@ -466,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z23';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z25';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -912,10 +912,18 @@ function authToken(){ try{ return (sb&&sb.auth&&sb.auth.session&&sb.auth.session
 
 /* ===== Meeting review: classify synced calendar events (since May) into outcomes ===== */
 const CAL_RED='11';                                   // Google "Tomato" colour = your no-show marker
-const MEET_NOISE=/(no-?reply|notification|mailer|bounce|postmaster|calendar-|@shipday\.com|group\.calendar|resource\.calendar|@google\.com)/i;
+const MEET_NOISE=/(no-?reply|notification|mailer|bounce|postmaster|calendar-|@shipday\.com|group\.calendar|resource\.calendar|@google\.com|@calendly\.com|invitations@|@chilipiper\.com|@hubspot\.com)/i;
 function _selfEmail(){ return (store.__email||'').toLowerCase().trim(); }
 function eventExtEmails(e){ const self=_selfEmail(); return (e.attendees||[]).map(a=>typeof a==='string'?a:(a&&a.email)).filter(x=>x&&String(x).toLowerCase()!==self&&!MEET_NOISE.test(x)); }
-function matchEventContact(e){ const cm=byEmail(); for(const em of eventExtEmails(e)){ const c=cm[String(em).toLowerCase().trim()]; if(c) return c; } return null; }
+const _EMAIL_RX=/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi;
+// All external guest emails on an event — attendees PLUS any pulled from the description/location.
+// Calendly bookings often put the invitee's email in the description, not the formal guest list.
+function eventGuestEmails(e){ const self=_selfEmail(), seen={}, out=[];
+  const fromAtt=(e.attendees||[]).map(a=>typeof a==='string'?a:(a&&a.email));
+  const fromText=String((e.description||'')+' '+(e.location||'')).match(_EMAIL_RX)||[];
+  [...fromAtt,...fromText].forEach(x=>{ if(!x)return; x=String(x).toLowerCase().trim(); if(x===self||MEET_NOISE.test(x)||seen[x])return; seen[x]=1; out.push(x); });
+  return out; }
+function matchEventContact(e){ const cm=byEmail(); for(const em of eventGuestEmails(e)){ const c=cm[String(em).toLowerCase().trim()]; if(c) return c; } return null; }
 function calReviewed(){ store.__cal=store.__cal||{}; store.__cal.reviewed=store.__cal.reviewed||{}; return store.__cal.reviewed; }
 function classifyEvent(e){
   const st=new Date(e.start).getTime()||0, past=st<Date.now();
@@ -949,38 +957,64 @@ function meetingReviewPanel(){
   return h;
 }
 
-/* ===== Booked-on-calendar → Pipeline: upcoming meetings that match a book contact but have no deal yet ===== */
+/* ===== Booked-on-calendar → Pipeline: upcoming meetings with a real guest, not in the pipeline yet ===== */
+// Derive a prospect {email,name} from a calendar event when the guest isn't in the book yet.
+function _prospectFromEvent(e){
+  const email=(eventGuestEmails(e)[0]||'').toLowerCase();
+  let nm=String(e.summary||'').replace(/[|/:–—-]+/g,' ');
+  const rep=(senderName()||'').trim();
+  [rep,'saad sheikh','saad','abba','embert','shipday','intro','introduction','introductions','demo','meeting','call'].forEach(t=>{
+    if(t) nm=nm.replace(new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','gi'),' '); });
+  nm=nm.replace(/\bwith\b|\band\b|&/gi,' ').replace(/\s+/g,' ').trim();
+  if(nm.length<2){ nm=(email.split('@')[0]||'lead').replace(/[._0-9]+/g,' ').trim().replace(/\b\w/g,ch=>ch.toUpperCase()); }
+  return {email,name:nm};
+}
+// Upcoming events → {e, c?}  (c set = known contact; else it's a new prospect with an external guest).
 function calDemosToAdopt(){
   const cal=store.__cal||{}, evs=cal.events||[], now=Date.now(); const out=[];
   evs.forEach(e=>{ const st=new Date(e.start).getTime()||0; if(st<now-6*36e5) return;   // upcoming (incl. last 6h)
-    const c=matchEventContact(e); if(!c) return;                                        // must map to a known contact
-    if(findEventDeal(c)) return;                                                        // already in the pipeline
-    out.push({e,c}); });
+    const c=matchEventContact(e);
+    if(c){ if(findEventDeal(c)) return; out.push({e,c}); return; }                       // known contact, no deal yet
+    if(!eventGuestEmails(e).length) return;                                              // no external guest = internal block, skip
+    out.push({e,c:null}); });                                                            // new prospect demo
   out.sort((a,b)=>new Date(a.e.start)-new Date(b.e.start));
   return out;
 }
 function _makeDemoDeal(e,c){ const id=uid('d');
   store.deals[id]={id,accountId:c.accountId,contactId:c.id,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now(),demoDate:e.start,calEventId:e.id,calLink:e.htmlLink||''};
   stampU(store.deals[id]); return id; }
+// Create a fresh account+contact for an unknown guest, then return the contact.
+function _newContactFromEvent(e){
+  const p=_prospectFromEvent(e); const parts=p.name.split(/\s+/); const first=parts.shift()||''; const last=parts.join(' ');
+  const aid=newAccount(p.name); const cid=uid('c');
+  store.contacts[cid]={id:cid,accountId:aid,first,last,email:p.email,warmth:'Warm',status:'New',source:'Calendar',log:[]};
+  stampU(store.contacts[cid]); logAuto(store.contacts[cid],'📅 Added from calendar demo');
+  return store.contacts[cid];
+}
 function adoptCalendarDemo(eventId){
   const cal=store.__cal||{}; const e=(cal.events||[]).find(x=>x.id===eventId); if(!e){ toast('Event not found'); return; }
-  const c=matchEventContact(e); if(!c){ toast('No matching contact for this event'); return; }
-  if(findEventDeal(c)){ toast('Already in pipeline'); renderActive(); return; }
+  let c=matchEventContact(e), newRecs=null;
+  if(c){ if(findEventDeal(c)){ toast('Already in pipeline'); renderActive(); return; } }
+  else { c=_newContactFromEvent(e); newRecs={cid:c.id,aid:c.accountId}; }
   const id=_makeDemoDeal(e,c); logAuto(c,'📅 Demo adopted from calendar: '+(e.summary||''));
   save(); renderActive();
-  toast('Added to pipeline — Booked Demo', ()=>{ delete store.deals[id]; save(); renderActive(); });
+  toast('Added to pipeline — Booked Demo', ()=>{ delete store.deals[id]; if(newRecs){ delete store.contacts[newRecs.cid]; delete store.accounts[newRecs.aid]; } save(); renderActive(); });
 }
 function adoptAllCalDemos(){
   const list=calDemosToAdopt(); if(!list.length){ toast('No new calendar demos'); return; }
-  const ids=list.map(({e,c})=>_makeDemoDeal(e,c)); save(); renderActive();
-  toast('Added '+ids.length+' demos to pipeline', ()=>{ ids.forEach(id=>delete store.deals[id]); save(); renderActive(); });
+  const dealIds=[], recIds=[];
+  list.forEach(({e,c})=>{ let cc=c, nr=null; if(!cc){ cc=_newContactFromEvent(e); nr={cid:cc.id,aid:cc.accountId}; recIds.push(nr); } dealIds.push(_makeDemoDeal(e,cc)); });
+  save(); renderActive();
+  toast('Added '+dealIds.length+' demos to pipeline', ()=>{ dealIds.forEach(id=>delete store.deals[id]); recIds.forEach(nr=>{ delete store.contacts[nr.cid]; delete store.accounts[nr.aid]; }); save(); renderActive(); });
 }
 function calDemoPanel(){
   const list=calDemosToAdopt(); if(!list.length) return '';
   let h='<div class="panel"><div class="ph"><h3>📅 Booked on Calendar</h3><span class="sub">'+list.length+' demo'+(list.length===1?'':'s')+' on your calendar not in the pipeline yet</span>'+
     (list.length>1?'<button class="btn sm pri" style="margin-left:auto" onclick="adoptAllCalDemos()">＋ Add all '+list.length+'</button>':'')+'</div><table><tbody>';
-  h+=list.slice(0,20).map(({e,c})=>'<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')"><td class="tname">'+esc(e.summary||cname(c))+'<div class="tsub">'+esc(fmtDT(e.start))+' · '+esc(cname(c))+(acct(c.accountId)?' · '+esc(acct(c.accountId).name):'')+'</div></td>'+
-    '<td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Add to pipeline</button></td></tr>').join('');
+  h+=list.slice(0,20).map(({e,c})=>{ const nm=c?cname(c):_prospectFromEvent(e).name; const acc=c&&acct(c.accountId)?acct(c.accountId).name:'';
+    const tag=c?'':' <span class="tag">new</span>'; const click=c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'';
+    return '<tr'+click+'><td class="tname">'+esc(e.summary||nm)+tag+'<div class="tsub">'+esc(fmtDT(e.start))+' · '+esc(nm)+(acc?' · '+esc(acc):'')+'</div></td>'+
+    '<td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Add to pipeline</button></td></tr>'; }).join('');
   h+='</tbody></table></div>';
   return h;
 }
@@ -3374,9 +3408,11 @@ function boot(){
   if(!valid.includes(t)) t='today';
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget();
   switchTab(t);
-  syncRail(); checkBackupBanner(); initSync();
-  // Refresh Apollo task count live on load so the pill isn't a stale saved number.
-  if(SYNC_FN){ Promise.resolve(syncApollo(true)).then(n=>{ renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); }).catch(()=>{}); }
+  syncRail(); checkBackupBanner();
+  // Pull the cloud book FIRST, then refresh the live Apollo count so the fresh number isn't clobbered by
+  // the stale count baked into the cloud blob (that load-time race was why the pill showed 269 until a manual ↻).
+  Promise.resolve(initSync()).catch(()=>{}).then(()=>{ if(SYNC_FN) return syncApollo(true); })
+    .then(()=>{ renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); }).catch(()=>{});
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
