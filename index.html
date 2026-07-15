@@ -32,7 +32,11 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cc-note input{width:100%}
 .cc-actions{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:4px}
 .cc-call{font-size:15px;padding:11px 18px;white-space:nowrap}
-.cc-dispo{display:flex;gap:6px;flex-wrap:wrap;padding:0 16px 14px;border-top:1px solid var(--line);padding-top:12px;margin-top:2px}
+.cc-dispo{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 16px 14px;border-top:1px solid var(--line);padding-top:12px;margin-top:2px;border-radius:8px;transition:background .3s,box-shadow .3s}
+.cc-dispo-lbl{font-size:12px;font-weight:700;color:var(--mut);margin-right:4px}
+.cc-flash{animation:ccFlash 1.6s ease-out 2}
+.cc-flash .cc-dispo-lbl{color:var(--sig)}
+@keyframes ccFlash{0%{background:var(--sig);box-shadow:0 0 0 2px var(--sig)}40%{background:rgba(255,140,0,.12)}100%{background:transparent;box-shadow:none}}
 .qempty{padding:26px;text-align:center;color:var(--mut)}
 a{color:var(--cold);text-decoration:none}
 a:hover{text-decoration:underline}
@@ -431,7 +435,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·y';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z2';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -1247,7 +1251,10 @@ function logCall(cid){ const c=contact(cid); if(!c)return;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date()); c.callCount=(+c.callCount||0)+1;
   claimLead(c);  // dialing refreshes your 30-min lock (own per-lead row)
   logAuto(c,'📞 Called '+cname(c)); save();  // no re-render: keep the queue card stable mid-call
-  toast('Call logged · set a disposition to re-queue'); }
+  toast('Call logged · set a disposition to re-queue');
+  setTimeout(function(){ const dz=el('ccDispo'); if(!dz) return;
+    dz.scrollIntoView({block:'center',behavior:'smooth'});
+    dz.classList.remove('cc-flash'); void dz.offsetWidth; dz.classList.add('cc-flash'); }, 300); }
 function renderLeads(){
   const recs=prefilter(contacts().filter(c=>PROSPECT.includes(c.status||'New')&&!isCustC(c)));
   const t=dataTable('leads',chosenCols('leads'),recs,r=>"openContact('"+r.id+"')",bookCell);
@@ -1302,7 +1309,10 @@ function subscribeClaims(){
       const id=String((p.new&&p.new.id)||(p.old&&p.old.id)||''); if(!id.startsWith('claim:')) return;
       const cid=id.slice(6); const d=(p.new&&p.new.data)||null;
       if(!d||!d.at) delete claimsMap[cid]; else claimsMap[cid]={rep:d.rep,at:+d.at};
-      if(UI.tab==='hotlist'&&!drawerOpen()) renderHotList();
+      // Only re-render for ANOTHER rep's claim. Your OWN claim (from dialing) must NOT
+      // advance the card — that would drop the lead you're on before you can disposition it.
+      const mine = d && d.at && d.rep===myRep();
+      if(UI.tab==='hotlist'&&!drawerOpen()&&!mine) renderHotList();
     }).subscribe();
 }
 async function claimLead(c){ const me=myRep(); if(!me||!c||!claimsReady()) return;
@@ -1424,7 +1434,7 @@ function callCard(c,dueN,snoozedN){
   h+='<span onclick="openContact(\''+c.id+'\')" style="cursor:pointer;color:var(--mut);font-size:12px">Open contact ↗</span>';
   h+='</div></div>';
   h+='<div style="padding:0 16px 4px">'+callBrief(c)+'</div>';
-  h+='<div class="cc-dispo">'+DISPOS.map(d=>'<button class="btn sm gh" onclick="setDispo(\''+c.id+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
+  h+='<div class="cc-dispo" id="ccDispo"><div class="cc-dispo-lbl">Log a disposition →</div>'+DISPOS.map(d=>'<button class="btn sm gh" onclick="setDispo(\''+c.id+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
   h+='<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button>';
   h+='<button class="btn sm pri" onclick="bookDemo(\''+c.id+'\')">✅ Booked demo</button></div></div>';
   return h;
