@@ -464,7 +464,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z11';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z12';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -958,7 +958,8 @@ function quickAddTask(){ const ti=el('tk-title'),ty=el('tk-type'),du=el('tk-due'
   if(!title){ toast('Add a task title first'); if(ti)ti.focus(); return; }
   addTask({title,type:(ty&&ty.value)||'call',assignee:(as&&as.value)||'',due:parseDueInput(du&&du.value)}); toast('Task added'); renderActive(); renderTaskWidget(); }
 function completeTask(id){ const t=tasks().find(x=>x.id===id); if(!t)return; t.done=!t.done; t.doneTs=t.done?Date.now():0;
-  if(t.done&&t.contactId){ const c=contact(t.contactId); if(c) logAuto(c,'✓ Task done: '+t.title); }
+  if(t.done&&t.emailCad&&t.contactId){ const c=contact(t.contactId); if(c) markEmailStepSent(c,+t.cadStep||1,senderName()); }  // checking an email step advances the cadence
+  else if(t.done&&t.contactId){ const c=contact(t.contactId); if(c) logAuto(c,'✓ Task done: '+t.title); }
   save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
 function snoozeTask(id,days){ const t=tasks().find(x=>x.id===id); if(!t)return; t.due=(+t.due||today0().getTime())+days*864e5; t.done=false; save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
 function deleteTask(id){ const i=tasks().findIndex(x=>x.id===id); if(i<0)return; tasks().splice(i,1); save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
@@ -1249,6 +1250,8 @@ const OWNER_RX=/\b(owner|co-?founder|founder|ceo|president|proprietor|principal|
 function isOwner(c){ return !!(c && OWNER_RX.test(c.title||'')); }
 // Composite "heat" — the master Hot List ranking. Blends recency & volume of
 // email opens, replies, intent score, decision-maker status, reachability, staleness.
+// A contact is "in a call cadence" if it — or its account — has an open cadence call task.
+function hasOpenCallCad(c){ if(!c) return false; return tasks().some(t=>t.cadence&&!t.done&&(t.contactId===c.id||(c.accountId&&t.accountId===c.accountId))); }
 function heat(c){ if(!c) return 0; const now=Date.now();
   const open=lastOpenTs(c), touch=lastTouchTs(c), opens=openCount(c); let p=0;
   if(open && open>touch) p+=300;                             // opened email since last outreach = hottest
@@ -1258,6 +1261,7 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   if(c.replied) p+=220;                                      // replied to an email
   if(c.apolloSeq) p+=50;                                     // active Apollo sequence
   else if(c.emailSeq && !c.emailSeq.done) p+=45;             // active manual email cadence — same weight
+  if(hasOpenCallCad(c)) p+=45;                               // active call cadence keeps it in the dialer rotation
   { const ls=lastSentTs(c); if(ls) p+=Math.max(0,60-((now-ls)/_DAY)*8); }  // fresh email touch keeps it warm
   if(isOwner(c)) p+=110;                                     // decision-maker
   if(telNum(c)) p+=15;                                       // reachable by phone
@@ -1369,10 +1373,16 @@ function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return
   const rq=REQUEUE_BY[reqKey]||REQUEUE_BY.none;
   if(d.gone||rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; }
   else { c.queueOut=false; c.nextCallAt=Date.now()+rq.ms; }
-  stampU(c); logAuto(c,'☎ '+d.t+(nt?' — '+nt:'')); releaseClaim(c);
+  // "Already a Shipday customer" → flag the whole ACCOUNT as an existing customer (NOT our win,
+  // no MRR/quota credit) so it drops out of the prospect queue and nobody dials it again.
+  let aPrev=null; const a=d.cust?acct(c.accountId):null;
+  if(a){ aPrev={id:a.id,isCustomer:a.isCustomer,existingCust:a.existingCust,notOwned:a.notOwned};
+    a.isCustomer=true; a.existingCust=true; a.notOwned=true; stampU(a); }
+  stampU(c); logAuto(c,'☎ '+d.t+(nt?' — '+nt:'')); if(a) logAuto(a,'🏢 Marked existing Shipday customer (not owned) via call');
+  releaseClaim(c);
   save(); renderActive(); refreshDrawer();
   const back=(d.gone||rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt);
-  toast(d.t+' · '+back,()=>{ Object.assign(c,prev); stampU(c); save(); renderActive(); refreshDrawer(); }); }
+  toast(d.t+' · '+back,()=>{ Object.assign(c,prev); if(aPrev){ const aa=acct(aPrev.id); if(aa){ aa.isCustomer=aPrev.isCustomer; aa.existingCust=aPrev.existingCust; aa.notOwned=aPrev.notOwned; stampU(aa); } } stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function logCall(cid){ openCallModal(cid); }   // legacy shim: any old dial hook now opens the modal
 function renderLeads(){
   const recs=prefilter(contacts().filter(c=>PROSPECT.includes(c.status||'New')&&!isCustC(c)));
@@ -1397,6 +1407,7 @@ const DISPOS=[
   {k:'notnow',     t:'💤 Not now / later Q',  req:'30d'},
   {k:'notint',     t:'🙅 Not interested',     gone:1},
   {k:'competitor', t:'🏳 Uses competitor',    req:'30d'},
+  {k:'existing',   t:'🏢 Already a Shipday customer', gone:1, cust:1},
   {k:'dnc',        t:'⛔ Do not call',         gone:1},
   {k:'badnumber',  t:'☎ Bad number',          gone:1},
 ];
@@ -1560,19 +1571,31 @@ function emailStep(c,n){
 'Hi '+fn+',\n\nI don\'t want to keep crowding your inbox. If running delivery in-house isn\'t a priority for '+an+' right now, just say the word and I\'ll close things out.\n\nIf it\'s worth 15 minutes, I\'ll make it easy.');
   }
 }
-function startEmailCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'✉️ Started 5-step email cadence'); save(); refreshDrawer(); toast('Email cadence started — Email 1 ready to send'); }
-function restartCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'↻ Restarted email cadence'); save(); refreshDrawer(); toast('Cadence restarted'); }
+// Email cadence also drops one checkable task per step into the task dashboard, so the SDR can
+// work the whole email sequence from their worklist. emailSeq stays the source of truth for the
+// step/copy; the tasks mirror it. Completing a task advances the cadence and vice-versa.
+function buildEmailTasks(id){ const c=contact(id); if(!c)return; const def=cadDef(), N=def.length; const start=today0().getTime(), day=864e5;
+  store.__tasks=tasks().filter(t=>!(t.emailCad&&t.contactId===id));   // clear any prior email tasks for this contact
+  def.forEach((s,i)=>{ const lbl=s.label?(' — '+s.label):'';
+    addTask({title:'Email '+(i+1)+'/'+N+lbl,type:'email',contactId:id,due:start+(+s.d||0)*day,emailCad:true,cadStep:i+1,assignee:c.assignee||''}); }); }
+function markEmailStepSent(c,n,by){ if(!c) return; const N=cadN(); const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
+  if(s.done && (+s.step||1)>n) return;                                // already fully sent past this step
+  const e=emailStep(c,n);
+  logAuto(c,'📧 Email '+n+'/'+N+' sent by '+by+' — '+e.subj);         // counts as an email touch (lastSentTs)
+  s.lastBy=by; s.lastSentAt=Date.now(); if((+s.step||1)<=n) s.step=n+1; if(s.step>N) s.done=true; stampU(c); }
+function startEmailCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'✉️ Started '+cadN()+'-step email cadence'); buildEmailTasks(id); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Email cadence started — Email 1 is in your task list'); }
+function restartCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'↻ Restarted email cadence'); buildEmailTasks(id); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Cadence restarted'); }
 function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadN()); const e=emailStep(c,n);
   const txt='Subject: '+e.subj+'\n\n'+e.body;
   const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
   try{ document.execCommand('copy'); }catch(_){} document.body.removeChild(ta); toast('Email '+n+' copied — paste into your inbox'); }
 function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
-  const N=cadN(); const n=Math.min(+s.step||1,N); const e=emailStep(c,n); const by=senderName();
-  logAuto(c,'📧 Email '+n+'/'+N+' sent by '+by+' — '+e.subj);   // counts as an email touch (lastSentTs)
-  s.lastBy=by; s.lastSentAt=Date.now(); s.step=n+1; if(s.step>N) s.done=true;
-  stampU(c); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget();
+  const N=cadN(); const n=Math.min(+s.step||1,N); const by=senderName();
+  markEmailStepSent(c,n,by);
+  const tk=tasks().find(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===n&&!t.done); if(tk){ tk.done=true; tk.doneTs=Date.now(); }  // mirror to the worklist
+  save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   const nextD=cadDef()[n]?(+cadDef()[n].d||0):0;
-  toast(s.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+nextD+'d')); }
+  toast(c.emailSeq.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+nextD+'d')); }
 function startApolloCadence(id){ toast('Apollo enrollment isn\'t wired yet — use the manual email cadence, or ask to connect your Apollo master key so any rep can enroll without a license.'); }
 // ===== Sequence copy editor: paste your real Apollo steps once, whole team sends them =====
 let cadEdit=null;
@@ -1794,7 +1817,7 @@ function acctIntent(a){
     if(lo){ if(now-lo<=7*_DAY) opens7+=oc||1; if(now-lo<=30*_DAY) opens30+=oc||1; }
     if(c.replied) replies++;
     if(lc) calls++;
-    if(c.apolloSeq || (c.emailSeq && !c.emailSeq.done)) inSeq++;   // Apollo seq OR active manual cadence both count
+    if(c.apolloSeq || (c.emailSeq && !c.emailSeq.done) || hasOpenCallCad(c)) inSeq++;   // Apollo seq, active manual email cadence, OR call cadence all count
     if(isOwner(c)) owners++;
     const act=Math.max(lo||0,lc||0,ls||0,+c.lastContactedTs||0); if(act>lastAct) lastAct=act;
     const hot7=(lo&&now-lo<=7*_DAY)||c.replied||(lc&&now-lc<=7*_DAY)||(ls&&now-ls<=7*_DAY); if(hot7) engaged7.add(c.id);
@@ -1871,7 +1894,7 @@ const A_COLS=[
   {k:'employees',t:'# Locations',val:a=>a.employees||''},
   {k:'website',t:'Website',val:a=>a.website||''},
   {k:'contacts',t:'Contacts',num:true,val:a=>contactsOf(a.id).length},
-  {k:'type',t:'Type',val:a=>a.isCustomer?'Customer':'Prospect',cell:a=>a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>'},
+  {k:'type',t:'Type',val:a=>a.existingCust?'Existing customer':a.isCustomer?'Customer':'Prospect',cell:a=>a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing cust</span>':a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>'},
   {k:'onboard',t:'Onboarding',val:a=>a.onboard||'',cell:a=>a.onboard?'<span class="tag'+(a.onboard==='Live'?' cust':'')+'">'+esc(a.onboard)+'</span>':'—'},
   {k:'mrr',t:'MRR',num:true,val:a=>a.isCustomer&&a.mrr?a.mrr:0,cell:a=>(a.isCustomer&&a.mrr?money(a.mrr):'—')},
   {k:'source',t:'Source',val:a=>a.source||''},
@@ -2128,6 +2151,11 @@ function setDplan(id,v){ const d=deal(id); if(!d)return; d.plan=+v||0; d.mrr=+v|
 function setDclosed(id,v){ const d=deal(id); if(!d)return; d.closedAt = v? new Date(v+'T12:00:00').getTime() : 0; stampU(d); touch(); }
 function setAplan(id,v){ const a=acct(id); if(!a)return; a.plan=+v||0; a.mrr=+v||0; stampU(a); touch(); if(drawerOpen())openAccount(id); }
 function setAcust(id,v){ const a=acct(id); if(!a)return; a.isCustomer=v; stampU(a); touch(); openAccount(id); }
+function setAcustType(id,v){ const a=acct(id); if(!a)return;
+  if(v==='Existing — not mine'){ a.isCustomer=true; a.existingCust=true; a.notOwned=true; }
+  else if(v==='Yes — my customer'){ a.isCustomer=true; a.existingCust=false; a.notOwned=false; }
+  else { a.isCustomer=false; a.existingCust=false; a.notOwned=false; }
+  stampU(a); touch(); openAccount(id); }
 
 /* ====================== ACTIVITY LOG ====================== */
 function objOf(t,id){ return t==='c'?contact(id):t==='a'?acct(id):deal(id); }
@@ -2183,10 +2211,15 @@ function openContact(id){
   if(c.phone||c.mobile){
     b+='<div class="callbar">'+dialBtn('📞','Direct',c.phone)+dialBtn('📱','Mobile',c.mobile)+'</div>';
   }
+  // Inline call button beside a number: dials that specific line, opens the ONE dispo modal.
+  // If a contact has both phone + mobile the SDR can call either; a single outcome (set after
+  // the call) logs it and drives the requeue.
+  const callBtn=(num)=> num? '<a class="callbtn sm" href="tel:'+esc(num)+'" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Call &amp; log outcome">📞</a>' : '';
+  const phoneFld=(lab,field,val)=> fld(lab,'<div style="display:flex;gap:6px;align-items:center"><div style="flex:1">'+inp("setC('"+id+"','"+field+"',this.value)",val)+'</div>'+callBtn(val)+'</div>');
   b+='<div class="f2">'+fld('First',inp("setC('"+id+"','first',this.value)",c.first))+fld('Last',inp("setC('"+id+"','last',this.value)",c.last))+'</div>';
   b+=fld('Title',inp("setC('"+id+"','title',this.value)",c.title));
-  b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+fld('Phone',inp("setC('"+id+"','phone',this.value)",c.phone))+'</div>';
-  b+='<div class="f2">'+fld('Mobile',inp("setC('"+id+"','mobile',this.value)",c.mobile))+fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin))+'</div>';
+  b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+phoneFld('Phone','phone',c.phone)+'</div>';
+  b+='<div class="f2">'+phoneFld('Mobile','mobile',c.mobile)+fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin))+'</div>';
   b+='<div class="f3">'+fld('Warmth',sel("setC('"+id+"','warmth',this.value)",WARMTHS,c.warmth||'Cold'))+
      fld('Status',sel("setC('"+id+"','status',this.value)",C_STATUS,c.status||'New'))+
      fld('Account',accountPicker("setC('"+id+"','accountId',this.value)",c.accountId))+'</div>';
@@ -2232,7 +2265,7 @@ function openAccount(id){
   el('drawer-head').innerHTML='<div><div style="font-weight:800;font-size:16px">'+esc(a.name)+'</div>'+
     '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+'</div></div>'+
     (isBrand(a)?'<span class="tag">🏢 '+childLocs(id).length+' loc</span>':isLocation(a)?'<span class="tag">📍 Location</span>':'')+
-    (a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
+    (a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing customer</span>':a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
     '<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
   b+=fld('Name',inp("setA('"+id+"','name',this.value)",a.name));
@@ -2262,8 +2295,9 @@ function openAccount(id){
      '<a class="btn sm gh" target="_blank" href="https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||a.state||'')+' facebook')+'">f Facebook</a>'+
      '</div>';
   b+='<div class="sec">Customer</div>';
-  b+=fld('Is customer',sel("setAcust('"+id+"',this.value==='Yes')",['No','Yes'],a.isCustomer?'Yes':'No'));
-  if(a.isCustomer){
+  b+=fld('Customer status',sel("setAcustType('"+id+"',this.value)",['No','Yes — my customer','Existing — not mine'],a.existingCust?'Existing — not mine':a.isCustomer?'Yes — my customer':'No'));
+  if(a.existingCust) b+='<div class="tsub" style="margin:-4px 0 8px">🏢 Already on Shipday — kept out of your call queue, not counted as your win.</div>';
+  if(a.isCustomer&&!a.existingCust){
     b+='<div class="f2">'+fld('Plan $/mo',selN("setAplan('"+id+"',this.value)",PLANS.map(String),a.plan?String(a.plan):''))+fld('MRR',inp("setA('"+id+"','mrr',+this.value)",a.mrr,'number'))+'</div>';
     b+='<div class="f3">'+fld('Onboarding',selN("setA('"+id+"','onboard',this.value)",['Closed Won','Onboarding','Live','Paused','Churned'],a.onboard))+
        fld('Health',selN("setA('"+id+"','health',this.value)",['Green','Yellow','Red'],a.health))+
