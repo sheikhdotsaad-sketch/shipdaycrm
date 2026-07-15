@@ -422,7 +422,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·h';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·i';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -736,7 +736,7 @@ function classifyEvent(e){
   const rev=calReviewed()[e.id]; if(rev) return {state:'done',outcome:rev};
   if(!past) return {state:'upcoming'};
   const c=matchEventContact(e);
-  if(e.colorId===CAL_RED) return {state:'todo',suggest:'noshow',c};       // red = no-show
+  if(e.colorId===CAL_RED) return {state:'todo',suggest:'review',c};       // red = didn't close → you pick Lost vs No-show
   return {state:'todo',suggest:c?'held':'ignore',c};                       // held → you set won/lost
 }
 function findEventDeal(c){ if(!c)return null; const ds=deals().filter(d=>d.contactId===c.id||d.accountId===c.accountId); return ds.length?ds.sort((a,b)=>(+b.createdAt||0)-(+a.createdAt||0))[0]:null; }
@@ -753,7 +753,7 @@ function meetingReviewPanel(){
   const todo=evs.map(e=>({e,cls:classifyEvent(e)})).filter(x=>x.cls.state==='todo');
   if(!todo.length) return '';
   todo.sort((a,b)=>new Date(b.e.start)-new Date(a.e.start));
-  let h='<div class="panel"><div class="ph"><h3>🗓 Meeting review</h3><span class="sub">'+todo.length+' past meetings to classify · 🔴 red = no-show</span></div><table><tbody>';
+  let h='<div class="panel"><div class="ph"><h3>🗓 Meeting review</h3><span class="sub">'+todo.length+' past meetings to classify · 🔴 red = didn\'t close (Lost or No-show — you decide)</span></div><table><tbody>';
   h+=todo.slice(0,50).map(({e,cls})=>{ const c=cls.c, nm=c?cname(c):(eventExtEmails(e)[0]||''), sug=cls.suggest;
     const btn=(o,lbl)=>'<button class="btn sm '+(sug===o?'pri':'gh')+'" onclick="event.stopPropagation();applyMeetingOutcome(\''+esc(e.id)+'\',\''+o+'\')">'+lbl+'</button>';
     return '<tr'+(c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'')+'><td class="tname">'+(e.colorId===CAL_RED?'🔴 ':'')+esc(e.summary)+'<div class="tsub">'+esc(fmtDT(e.start))+(nm?' · '+esc(nm):'')+'</div></td>'+
