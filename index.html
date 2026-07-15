@@ -466,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z25';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z27';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -539,6 +539,10 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
   const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
   ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV','__dedupeKeep'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
+  // __apollo/__gmail are live-fetched counts — keep whichever pull is NEWER (by syncedAt) regardless of which
+  // store is base/over, so a stale cloud copy never reverts a fresh sync (was the 269-vs-241 flap on load/push).
+  ['__apollo','__gmail'].forEach(k=>{ const a=base[k], b=over[k];
+    out[k] = (!b)?a : (!a)?b : ((+((b.syncedAt)||0))>=(+((a.syncedAt)||0)) ? b : a); });
   // __cal.reviewed = meeting-review classifications. UNION across reps/pulls so an Ignore/Won/Lost
   // is never clobbered by a newer full-store sync (reviewed is monotonic — only ever added to).
   { const rA=(base.__cal&&base.__cal.reviewed)||{}, rB=(over.__cal&&over.__cal.reviewed)||{};
@@ -610,9 +614,13 @@ async function initSync(){
         // (seed records carry different ids than the imported book → union would duplicate everything).
         const localRev=(store.__cal&&store.__cal.reviewed)||{};   // keep meeting classifications made offline
         const localIgn=store.__inboundIgnore||{};                 // keep inbound-ignore made offline
+        const localAp=store.__apollo, localGm=store.__gmail;      // Apollo/Gmail counts are live-fetched (below)
         applyingRemote=true; store=norm(inc);
         store.__cal=store.__cal||{}; store.__cal.reviewed=Object.assign({},store.__cal.reviewed||{},localRev);
         store.__inboundIgnore=Object.assign({},store.__inboundIgnore||{},localIgn);
+        // Never let an OLDER cloud copy of the live Apollo/Gmail sync revert a fresher local one (fixes 269→241 flap).
+        if(localAp && (+(localAp.syncedAt||0))>(+((store.__apollo&&store.__apollo.syncedAt)||0))) store.__apollo=localAp;
+        if(localGm && (+(localGm.syncedAt||0))>(+((store.__gmail&&store.__gmail.syncedAt)||0))) store.__gmail=localGm;
         try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
       }
     }
@@ -3408,11 +3416,10 @@ function boot(){
   if(!valid.includes(t)) t='today';
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget();
   switchTab(t);
-  syncRail(); checkBackupBanner();
-  // Pull the cloud book FIRST, then refresh the live Apollo count so the fresh number isn't clobbered by
-  // the stale count baked into the cloud blob (that load-time race was why the pill showed 269 until a manual ↻).
-  Promise.resolve(initSync()).catch(()=>{}).then(()=>{ if(SYNC_FN) return syncApollo(true); })
-    .then(()=>{ renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); }).catch(()=>{});
+  syncRail(); checkBackupBanner(); initSync();
+  // Refresh the live Apollo count on load; the cloud pull preserves whichever sync is newer (see initSync),
+  // so this fresh number is never reverted to the stale saved one — fixes the 269-until-manual-↻ flap.
+  if(SYNC_FN){ Promise.resolve(syncApollo(true)).then(()=>{ renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); }).catch(()=>{}); }
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
