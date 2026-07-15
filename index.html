@@ -464,7 +464,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z20';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z21';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -1351,7 +1351,7 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
 let callModalId=null, cmSel={dispo:'',req:'none',note:''};
 function openCallModal(cid){ const c=contact(cid); if(!c) return;
-  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',customTs:0};
+  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||''};
   claimLead(c);  // opening to work the lead locks it to you (no log yet)
   let m=el('callModal'); if(!m){ m=document.createElement('div'); m.id='callModal'; m.className='cmodal-wrap';
     m.addEventListener('click',function(e){ if(e.target===m) closeCallModal(); }); document.body.appendChild(m); }
@@ -1368,26 +1368,23 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
     '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…" oninput="cmSel.note=this.value">'+esc(cmSel.note)+'</textarea>'+
     '<div class="cm-lbl">Call back</div><div class="cm-reqs">'+reqBtns+'</div>'+
-    (cmSel.req==='custom'?'<input type="datetime-local" id="cmCustom" class="cm-note" style="margin-top:6px" value="'+(cmSel.customTs?esc(dtLocal(cmSel.customTs)):'')+'" onchange="cmSel.customTs=this.value?new Date(this.value).getTime():0">':'')+
     '<div class="cm-foot"><button class="btn gh" onclick="closeCallModal()">Cancel</button>'+
       '<button class="btn" onclick="bookDemoFromModal()">✅ Booked demo</button>'+
       '<button class="btn pri" onclick="saveCallModal()">Save outcome</button></div>'+
     '</div>'; }
 function cmSyncNote(){ const t=el('cmNote'); if(t) cmSel.note=t.value; }
-function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k; const d=DISPO_BY[k];
-  if(d&&d.gone) cmSel.req='none'; else if(d&&d.req) cmSel.req=d.req;   // suggest, rep can override
+function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;   // disposition = warmth signal only; it never sets the call-back window
   renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
 function cmPickReq(k){ cmSyncNote(); cmSel.req=k; renderCallModal(); }
 function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
 function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal(); return; }
   cmSyncNote(); if(!cmSel.dispo){ toast('Pick an outcome first'); return; }
-  if(cmSel.req==='custom'&&!cmSel.customTs){ toast('Pick a custom call-back time'); return; }
-  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req,cmSel.customTs); closeCallModal(); }
+  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req); closeCallModal(); }
 function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
   if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
 // applyDispo = the SINGLE place a call is recorded: bumps call count, stamps last-contacted,
 // saves the note, and requeues ONLY if the rep chose a call-back window. Fully reversible.
-function applyDispo(c,key,note,reqKey,customTs){ const d=DISPO_BY[key]; if(!c||!d) return;
+function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return;
   if(pinnedLead===c.id) pinnedLead=null;
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,queueOut:c.queueOut,queueOutTs:c.queueOutTs,
     callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted,warmth:c.warmth};
@@ -1396,9 +1393,10 @@ function applyDispo(c,key,note,reqKey,customTs){ const d=DISPO_BY[key]; if(!c||!
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
   const nt=(note||'').trim(); if(nt) c.callNote=nt;
   const rq=REQUEUE_BY[reqKey]||REQUEUE_BY.none;
-  if(d.gone||rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; }
-  else { c.queueOut=false; c.nextCallAt=(reqKey==='custom'&&customTs)?(+customTs):(Date.now()+(+rq.ms||0)); }
-  // Disposition nudges warmth (complementary): good call heats, bad call cools; Hot List re-ranks.
+  // Call-back timing is ONLY what the rep chose here — the disposition never forces it.
+  if(rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; }
+  else { c.queueOut=false; c.nextCallAt=Date.now()+(+rq.ms||0); }
+  // Disposition + notes are purely a warmth signal: they set how hot the lead is; the Hot List re-ranks.
   if(d.w) c.warmth=d.w;
   // "Already a Shipday customer" → flag the whole ACCOUNT as an existing customer (NOT our win,
   // no MRR/quota credit) so it drops out of the prospect queue and nobody dials it again.
@@ -1410,7 +1408,7 @@ function applyDispo(c,key,note,reqKey,customTs){ const d=DISPO_BY[key]; if(!c||!
   const cadTaskId=advanceCallCadence(c); if(cadTaskId) logAuto(c,'☑ Call-cadence step completed');
   releaseClaim(c);
   save(); renderActive(); refreshDrawer();
-  const back=(d.gone||rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt);
+  const back=(rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt);
   toast(d.t+' · '+back,()=>{ Object.assign(c,prev); if(aPrev){ const aa=acct(aPrev.id); if(aa){ aa.isCustomer=aPrev.isCustomer; aa.existingCust=aPrev.existingCust; aa.notOwned=aPrev.notOwned; stampU(aa); } } if(cadTaskId){ const tk=tasks().find(x=>x.id===cadTaskId); if(tk){ tk.done=false; tk.doneTs=0; } } stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function logCall(cid){ openCallModal(cid); }   // legacy shim: any old dial hook now opens the modal
 function renderLeads(){
@@ -1450,8 +1448,8 @@ const DISPO_BY=Object.fromEntries(DISPOS.map(d=>[d.k,d]));
 const REQUEUE=[
   {k:'next',  t:'⚡ Call next',    ms:0},
   {k:'4h',    t:'In 4 hours',      ms:4*_HR},
-  {k:'custom',t:'Custom time…',    ms:null},
   {k:'1d',    t:'In a day',        ms:1*_DAY},
+  {k:'2d',    t:'In 2 days',       ms:2*_DAY},
   {k:'1w',    t:'Next week',       ms:7*_DAY},
   {k:'30d',   t:'In a month',      ms:30*_DAY},
   {k:'none',  t:'No call-back',    ms:-1},
