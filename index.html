@@ -32,6 +32,12 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cc-note input{width:100%}
 .cc-actions{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:4px}
 .cc-call{font-size:15px;padding:11px 18px;white-space:nowrap}
+.cc-open{margin-top:6px;white-space:nowrap;font-size:13px}
+.callbar{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 14px}
+.callbar .callbtn{font-size:14px;padding:10px 16px;white-space:nowrap}
+.cadbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px}
+.cadbox.in{border-left:3px solid var(--sig)}
+.cadbody{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:6px;font-size:12px;line-height:1.5;max-height:220px;overflow:auto;color:#cdd6e0}
 .cc-dispo{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 16px 14px;border-top:1px solid var(--line);padding-top:12px;margin-top:2px}
 .cc-dispo-lbl{font-size:12px;font-weight:700;color:var(--mut);margin-right:4px}
 .dispopop{position:absolute;z-index:200;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.45);display:none;min-width:172px}
@@ -39,6 +45,8 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .dispopop button:hover{background:var(--line)}
 .dispopop button.pri{color:var(--sig);font-weight:700}
 .dispopop-h{font-size:11px;color:var(--mut);padding:2px 10px 6px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#2ecc71;margin-right:6px;vertical-align:middle;animation:livePulse 1.4s ease-in-out infinite}
+@keyframes livePulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(46,204,113,.6)}50%{opacity:.5;box-shadow:0 0 0 4px rgba(46,204,113,0)}}
 .qempty{padding:26px;text-align:center;color:var(--mut)}
 a{color:var(--cold);text-decoration:none}
 a:hover{text-decoration:underline}
@@ -437,7 +445,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z4';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z8';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -510,6 +518,10 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
   const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
   ['__quota','__keys','__probs','__cal','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
+  // __cal.reviewed = meeting-review classifications. UNION across reps/pulls so an Ignore/Won/Lost
+  // is never clobbered by a newer full-store sync (reviewed is monotonic — only ever added to).
+  { const rA=(base.__cal&&base.__cal.reviewed)||{}, rB=(over.__cal&&over.__cal.reviewed)||{};
+    out.__cal=Object.assign({},m.__cal||{},{reviewed:Object.assign({},rA,rB)}); }
   out.__seq=Math.max(+base.__seq||1,+over.__seq||1);
   out.__updatedAt=Math.max(+base.__updatedAt||0,+over.__updatedAt||0);
   return out; }
@@ -573,7 +585,10 @@ async function initSync(){
       } else if((inc.__updatedAt||0)>(store.__updatedAt||0)){
         // Cloud wins WHOLESALE on load — never union the local built-in seed into the cloud book
         // (seed records carry different ids than the imported book → union would duplicate everything).
-        applyingRemote=true; store=norm(inc); try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
+        const localRev=(store.__cal&&store.__cal.reviewed)||{};   // keep meeting classifications made offline
+        applyingRemote=true; store=norm(inc);
+        store.__cal=store.__cal||{}; store.__cal.reviewed=Object.assign({},store.__cal.reviewed||{},localRev);
+        try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
       }
     }
     subscribeRealtime(c.row);
@@ -1201,6 +1216,13 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   if(telNum(c)) p+=15;                                       // reachable by phone
   const staleD=touch?(now-touch)/_DAY:45;
   p+=Math.min(staleD,30)*2;                                  // staleness, capped so ancients don't hog
+  // Just-worked dampener: a lead you already dialed shouldn't reclaim the TOP of the
+  // queue the instant its snooze expires. It re-enters ranked as if it just fell in
+  // fresh, then climbs back up naturally over ~7d. A NEW signal (email open = +300)
+  // still overrides this instantly, so re-engaged leads jump back to the front.
+  const lc=lastCallTs(c);
+  if(lc) p-=Math.max(0,150-((now-lc)/_DAY)*22);              // recent-call penalty, ~7d decay
+  p-=Math.min(+c.callCount||0,6)*12;                         // repeated no-connect calls cool it off
   return Math.round(p);
 }
 const LEAD_COLS=[COL.warmth,COL.name,COL.acct,COL.phone,COL.status,COL.apollo,COL.next];
@@ -1396,6 +1418,71 @@ function posAngle(a){ const p=((a&&a.pos)||'').toLowerCase();
   if(/clover/.test(p)) return 'Works alongside Clover to turn in-store ordering into direct delivery.';
   if(/olo|chownow|deliverect|ubereats|doordash/.test(p)) return 'Connects to their '+esc(a.pos)+' stack to run self-delivery and keep the margin.';
   return ''; }
+/* ===== Manual email cadence — SDR copies/pastes & sends from their own inbox, logged on the
+   contact as Email N sent (by whoever sent it). Works with no Apollo license. Real Apollo
+   enrollment (via Saad's master key) can be wired later behind startApolloCadence(). ===== */
+const EMAIL_CADENCE=[
+  {d:0, label:'Intro'},
+  {d:2, label:'How it works'},
+  {d:5, label:'Social proof'},
+  {d:9, label:'ROI / objection'},
+  {d:14,label:'Breakup'},
+];
+const CAD_N=EMAIL_CADENCE.length;
+function senderName(){ return myRep()||store.__rep||'Saad'; }
+function inApolloSeq(c){ return !!(c&&c.apolloSeq); }
+function cadState(c){ if(!c) return 'none'; if(inApolloSeq(c)) return 'apollo';
+  const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=CAD_N) return 'manual'; return 'none'; }
+function emailStep(c,n){
+  const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=senderName();
+  const apps=(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats';
+  const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
+  const sign='\n\nBest,\n'+rep+'\nShipday';
+  const S=(subj,body)=>({subj,body:body+sign});
+  switch(n){
+    case 1: return S('Quick idea for '+an+' deliveries',
+'Hi '+fn+',\n\nI\'m '+rep+' with Shipday. We help restaurants like '+an+' run delivery on their own drivers — live dispatch, order tracking, and none of the 15-30% third-party commissions.\n\nWorth a quick 15-minute look this week?');
+    case 2: return S('How '+an+' could own its delivery',
+'Hi '+fn+',\n\nFollowing up. Here\'s the gist: you keep taking orders exactly how you do today, but dispatch to your own drivers (or our on-demand network) with live tracking your customers actually see — so you stop renting your delivery to '+apps+'.\n\nOpen to a short walkthrough?');
+    case 3: return S(an+' — restaurants already doing this',
+'Hi '+fn+',\n\nThought this might resonate: independent spots'+(locs>1?' and '+locs+'-location brands':'')+' near you are moving delivery in-house with Shipday, keeping the margin they used to hand to '+apps+' and owning their customer data.\n\nHappy to show exactly what that looks like for '+an+'. 15 minutes?');
+    case 4: return S('The math on '+an+' delivery fees',
+'Hi '+fn+',\n\nQuick ROI angle: even 50 delivery orders a week at a $30 ticket can mean $500-$1,000+/month in third-party commissions. Shipday is a flat platform fee — that difference goes back in your pocket.\n\nWant me to run the numbers for your volume on a quick call?');
+    default: return S('Should I close your file, '+fn+'?',
+'Hi '+fn+',\n\nI don\'t want to keep crowding your inbox. If running delivery in-house isn\'t a priority for '+an+' right now, just say the word and I\'ll close things out.\n\nIf it\'s worth 15 minutes, I\'ll make it easy.');
+  }
+}
+function startEmailCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'✉️ Started 5-step email cadence'); save(); refreshDrawer(); toast('Email cadence started — Email 1 ready to send'); }
+function restartCadence(id){ const c=contact(id); if(!c)return; c.emailSeq={step:1,startedAt:Date.now()}; stampU(c); logAuto(c,'↻ Restarted email cadence'); save(); refreshDrawer(); toast('Cadence restarted'); }
+function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,CAD_N); const e=emailStep(c,n);
+  const txt='Subject: '+e.subj+'\n\n'+e.body;
+  const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); }catch(_){} document.body.removeChild(ta); toast('Email '+n+' copied — paste into your inbox'); }
+function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
+  const n=Math.min(+s.step||1,CAD_N); const e=emailStep(c,n); const by=senderName();
+  logAuto(c,'📧 Email '+n+'/'+CAD_N+' sent by '+by+' — '+e.subj);   // counts as an email touch (lastSentTs)
+  s.lastBy=by; s.lastSentAt=Date.now(); s.step=n+1; if(s.step>CAD_N) s.done=true;
+  stampU(c); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget();
+  toast(s.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+EMAIL_CADENCE[n].d+'d')); }
+function startApolloCadence(id){ toast('Apollo enrollment isn\'t wired yet — use the manual email cadence, or ask to connect your Apollo master key so any rep can enroll without a license.'); }
+function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadState(c);
+  if(st==='apollo') return '<div class="cadbox in"><b>● In Apollo sequence:</b> '+esc(c.apolloSeq)+'<div class="tsub" style="margin-top:3px">Managed in Apollo — no manual sends needed here.</div></div>';
+  if(st==='none') return '<div class="cadbox"><div><b>Not in a cadence.</b> Start touches to warm this contact.</div>'+
+    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">✉️ Start 5-step email cadence</button>'+
+    '<button class="btn sm gh" onclick="startApolloCadence(\''+id+'\')" title="Needs your Apollo master key wired server-side (so Embert can enroll without a license)">⚡ Start in Apollo</button></div></div>';
+  const n=Math.min((+c.emailSeq.step||1),CAD_N), done=!!c.emailSeq.done, e=emailStep(c,n);
+  const lastBy=c.emailSeq.lastBy, lastAt=c.emailSeq.lastSentAt;
+  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>✉️ Email cadence</b><span class="tsub">'+(done?'✓ Complete · '+CAD_N+'/'+CAD_N+' sent':'Email '+n+' of '+CAD_N+' · '+EMAIL_CADENCE[n-1].label)+'</span></div>';
+  h+='<div class="tsub" style="margin-top:4px">Sending as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span>'+(lastBy?' · last sent by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
+  if(!done){
+    h+='<div style="margin-top:8px;font-size:12.5px"><b>Subject:</b> '+esc(e.subj)+'</div>';
+    h+='<div class="cadbody">'+esc(e.body)+'</div>';
+    h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="copyEmailStep(\''+id+'\')">⧉ Copy Email '+n+'</button><button class="btn sm" onclick="logEmailSent(\''+id+'\')">✓ Log Email '+n+' sent</button></div>';
+  } else {
+    h+='<div class="logbar" style="margin-top:8px"><button class="btn sm gh" onclick="restartCadence(\''+id+'\')">↻ Restart cadence</button></div>';
+  }
+  return h+'</div>';
+}
 function callBrief(c){ if(!c) return '';
   const a=acct(c.accountId), rep=store.__rep||'Saad';
   const open=lastOpenTs(c), opens=openCount(c), touch=lastTouchTs(c), fn=(c.first||cname(c).split(' ')[0]||'there');
@@ -1414,17 +1501,40 @@ function callBrief(c){ if(!c) return '';
   if(a){ if(a.pos) snap.push('POS <b>'+esc(a.pos)+'</b>'); if(a.cuisine) snap.push(esc(a.cuisine));
     const locs=isBrand(a)?childLocs(a.id).length:(+a.employees||0); if(locs>1) snap.push('🏢 <b>'+locs+' locations</b>');
     if(a.delivery) snap.push('on '+esc(a.delivery)); if(a.city) snap.push(esc([a.city,a.state].filter(Boolean).join(', '))); }
+  const an=aname(a), apps=(a&&a.delivery)?esc(a.delivery):'DoorDash/Uber Eats';
+  const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
   const ang=posAngle(a)||((a&&a.delivery)?'They\'re paying 15-30% to '+esc(a.delivery)+' — Shipday lets them keep that margin with their own drivers.':'Position Shipday as their own delivery ops: dispatch, live tracking, no third-party fees.');
+  // Discovery questions — tailored to what we know about the account
+  const disc=[];
+  disc.push('Who\'s running delivery for you now — your own drivers or '+apps+'?');
+  disc.push('Roughly how many delivery orders a week'+(locs>1?' across your '+locs+' locations':'')+'?');
+  disc.push('What are third-party commissions costing you a month right now?');
+  disc.push('If you owned that delivery, what would you do with the margin back?');
+  // Likely objection + rebuttal
+  const obj='<b>"We already use '+apps+'."</b> → Keep them for discovery — but Shipday runs delivery on the orders you already get direct (web, phone, QR), so you stop paying 15-30% on those and you own the customer + the data.';
+  // Close
+  const close='"Can I grab <b>15 minutes</b> later this week to show exactly what this would look like for '+esc(an)+'? What does '+(new Date().getDay()<4?'Thursday':'Monday')+' look like?"';
+  // Cadence status nudge
+  const cs=cadState(c); let cad;
+  if(cs==='apollo') cad='● Already in Apollo sequence "<b>'+esc(c.apolloSeq)+'</b>" — the call backs up the emails.';
+  else if(cs==='manual') cad='✉️ In your email cadence (Email '+Math.min(+c.emailSeq.step||1,CAD_N)+' of '+CAD_N+') — reference the thread, don\'t restart cold.';
+  else if(cs==='done') cad='✉️ Email cadence complete — this call is the follow-through.';
+  else cad='⚠️ Not in a cadence yet — after the call, start a 5-step email sequence from the contact drawer.';
   const od=(a?dealsOf(a.id):[]).filter(d=>!CLOSED.includes(d.stage))[0];
   const dealLine=od?'<div style="margin-top:5px">📌 Open deal: <b>'+esc(od.stage)+'</b>'+(od.demoDate?' · demo '+esc(fmtD(new Date(+od.demoDate))):'')+'</div>':'';
   const noteLine=c.notes?'<div style="margin-top:5px;color:var(--mut)">📝 '+esc(c.notes)+'</div>':'';
   const K='color:var(--mut);text-transform:uppercase;font-size:10px;letter-spacing:.04em;font-weight:700;margin-right:5px';
+  const SEC='margin-top:7px';
   return '<div style="background:var(--panel2);border-left:3px solid var(--sig);border-radius:8px;padding:11px 13px;margin-top:10px;font-size:12.5px;line-height:1.5">'+
-    '<div style="color:var(--sig);font-weight:800;font-size:11px;letter-spacing:.05em;margin-bottom:6px">✦ AI CALL BRIEF · '+esc(aname(a))+'</div>'+
+    '<div style="color:var(--sig);font-weight:800;font-size:11px;letter-spacing:.05em;margin-bottom:6px">✦ AI CALL BRIEF · '+esc(an)+'</div>'+
     '<div>'+head+'</div>'+
     (snap.length?'<div style="margin-top:5px;color:#cdd6e0">'+snap.join(' · ')+'</div>':'')+
-    '<div style="margin-top:6px"><span style="'+K+'">Open with</span>'+opener+'</div>'+
-    '<div style="margin-top:5px"><span style="'+K+'">Angle</span>'+ang+'</div>'+
+    '<div style="'+SEC+'"><span style="'+K+'">Open</span>'+opener+'</div>'+
+    '<div style="'+SEC+'"><span style="'+K+'">Angle</span>'+ang+'</div>'+
+    '<div style="'+SEC+'"><span style="'+K+'">Discovery</span></div><ul style="margin:2px 0 0;padding-left:16px">'+disc.map(q=>'<li>'+esc(q)+'</li>').join('')+'</ul>'+
+    '<div style="'+SEC+'"><span style="'+K+'">If they push back</span>'+obj+'</div>'+
+    '<div style="'+SEC+'"><span style="'+K+'">Close for the demo</span>'+close+'</div>'+
+    '<div style="'+SEC+';color:var(--mut)"><span style="'+K+'">Cadence</span>'+cad+'</div>'+
     dealLine+noteLine+'</div>';
 }
 function showBrief(cid){ const c=contact(cid); const box=el('brief-c'+cid); if(!c||!box) return;
@@ -1447,7 +1557,7 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
   h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="logCall(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<span class="tsub">no phone on file</span>';
-  h+='<span onclick="openContact(\''+c.id+'\')" style="cursor:pointer;color:var(--mut);font-size:12px">Open contact ↗</span>';
+  h+='<button class="btn cc-open" onclick="openContact(\''+c.id+'\')">👤 Open contact ↗</button>';
   h+='</div></div>';
   h+='<div style="padding:0 16px 4px">'+callBrief(c)+'</div>';
   h+='<div class="cc-dispo" id="ccDispo"><div class="cc-dispo-lbl">Log a disposition →</div>'+DISPOS.map(d=>'<button class="btn sm gh" onclick="setDispo(\''+c.id+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
@@ -1467,6 +1577,23 @@ function recalcQueue(){
    .catch(()=>{ renderHotList(); toast('Queue recalculated'); });
 }
 let pinnedLead=null;  // device-local: id of the Now-up lead pinned until dispositioned
+function elapsedMMSS(ts){ let s=Math.max(0,Math.floor((Date.now()-(+ts||0))/1000)); const m=Math.floor(s/60); s=s%60; return m+':'+(s<10?'0':'')+s; }
+// "On calls now" — leads a teammate is actively working (claimed, within TTL), hidden from
+// your queue. Rendered into #onCallsBox and re-painted every second so the timers tick live.
+function onCallsHtml(){
+  const me=myRep();
+  const ids=Object.keys(claimsMap).filter(id=>{const r=claimsMap[id]; return claimRecActive(r)&&r.rep!==me;});
+  const locked=ids.map(id=>contact(id)).filter(Boolean).sort((a,b)=>claimsMap[b.id].at-claimsMap[a.id].at);
+  if(!locked.length) return '';
+  return '<div class="panel"><div class="ph"><h3>🔒 On calls now</h3><span class="sub"><span class="live-dot"></span>'+locked.length+' lead'+(locked.length>1?'s':'')+' a teammate is working — live · hidden from your queue</span></div><table><thead><tr><th>Contact</th><th>Account</th><th>Rep</th><th>On call</th></tr></thead><tbody>'+
+    locked.slice(0,50).map(c=>{const a=acct(c.accountId),r=claimsMap[c.id];return '<tr><td><span class="tname">'+esc(cname(c))+'</span></td><td>'+esc(a?a.name:'—')+'</td><td>🔒 '+esc(r.rep)+'</td><td class="tsub">'+elapsedMMSS(r.at)+'</td></tr>';}).join('')+
+    '</tbody></table></div>';
+}
+// 1s ticker: repaint just the live box so the "On call" timers advance to the second.
+setInterval(function(){ if(UI.tab!=='hotlist'||drawerOpen()) return; const box=el('onCallsBox'); if(box) box.innerHTML=onCallsHtml(); },1000);
+// 30s reconcile: re-rank the queue so a lead a teammate just claimed drops off yours even if
+// a realtime claim event was missed. Skipped while you're typing so notes aren't wiped.
+setInterval(function(){ if(UI.tab!=='hotlist'||drawerOpen()) return; const ae=document.activeElement; if(ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName||'')) return; renderHotList(); },30000);
 function renderHotList(){
   const {due,snoozed}=hotQueue();
   // PIN the Now-up lead: once a lead surfaces to the top it STAYS the top card until
@@ -1495,14 +1622,8 @@ function renderHotList(){
   }
   let h = idBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
     : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
-  // Leads teammates are actively on (claimed by someone else, still within TTL) — hidden from your queue above.
-  const lockedIds=Object.keys(claimsMap).filter(id=>{const r=claimsMap[id]; return claimRecActive(r)&&r.rep!==me;});
-  const locked=lockedIds.map(id=>contact(id)).filter(Boolean).sort((a,b)=>claimsMap[b.id].at-claimsMap[a.id].at);
-  if(locked.length){
-    h+='<div class="panel"><div class="ph"><h3>🔒 On calls now</h3><span class="sub">'+locked.length+' lead'+(locked.length>1?'s':'')+' a teammate is working — hidden from your queue</span></div><table><thead><tr><th>Contact</th><th>Account</th><th>Rep</th><th>Locked</th></tr></thead><tbody>'+
-      locked.slice(0,50).map(c=>{const a=acct(c.accountId),r=claimsMap[c.id];return '<tr><td><span class="tname">'+esc(cname(c))+'</span></td><td>'+esc(a?a.name:'—')+'</td><td>🔒 '+esc(r.rep)+'</td><td class="tsub">'+fmtAgo(r.at)+'</td></tr>';}).join('')+
-      '</tbody></table></div>';
-  }
+  // Leads teammates are actively on — live box, ticks every second (see onCallsHtml + ticker below).
+  h+='<div id="onCallsBox">'+onCallsHtml()+'</div>';
   const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
   const droppedN=contacts().filter(c=>c.queueOut).length;
   const restoreLink=droppedN?' · <span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span>':'';
@@ -1907,6 +2028,11 @@ function openContact(id){
     '<div class="tsub">'+esc(c.title||'')+(a?' · <a onclick="event.stopPropagation();openAccount(\''+a.id+'\')">'+esc(a.name)+'</a>':'')+'</div></div>'+
     warmBadge(c.warmth)+'<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
+  // Tap-to-call bar — dial the direct line or mobile straight from the drawer (logs the call).
+  const dialBtn=(ico,lab,num)=>num?'<a class="btn pri callbtn" href="tel:'+esc(num)+'" onclick="logCall(\''+id+'\')">'+ico+' '+lab+' '+esc(num)+'</a>':'';
+  if(c.phone||c.mobile){
+    b+='<div class="callbar">'+dialBtn('📞','Direct',c.phone)+dialBtn('📱','Mobile',c.mobile)+'</div>';
+  }
   b+='<div class="f2">'+fld('First',inp("setC('"+id+"','first',this.value)",c.first))+fld('Last',inp("setC('"+id+"','last',this.value)",c.last))+'</div>';
   b+=fld('Title',inp("setC('"+id+"','title',this.value)",c.title));
   b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+fld('Phone',inp("setC('"+id+"','phone',this.value)",c.phone))+'</div>';
@@ -1923,6 +2049,7 @@ function openContact(id){
   b+=outreachBar(c);
   b+='<div class="sec">Apollo'+(c.apolloUrl?' <a href="'+esc(c.apolloUrl)+'" target="_blank" style="float:right;font-size:11px">Open in Apollo ↗</a>':'')+'</div>';
   b+='<div class="f2">'+fld('Sequence / status',inp("setC('"+id+"','apolloSeq',this.value)",c.apolloSeq))+fld('Apollo link',inp("setC('"+id+"','apolloUrl',this.value)",c.apolloUrl))+'</div>';
+  b+='<div class="sec">Cadence</div>'+cadenceBlock(id);
   b+=customBlock('c',id);
   b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')">＋ Follow-up task</button>'+(hasCadence('c',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+contactTasks(id);
   b+='<div class="sec">Activity</div>'+logBar('c',id)+'<div id="log-c'+id+'">'+logList(c,'c',id)+'</div>';
