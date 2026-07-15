@@ -464,7 +464,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z19';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z20';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -3235,6 +3235,8 @@ function boot(){
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget();
   switchTab(t);
   syncRail(); checkBackupBanner(); initSync();
+  // Refresh Apollo task count live on load so the pill isn't a stale saved number.
+  if(SYNC_FN){ Promise.resolve(syncApollo(true)).then(n=>{ renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); }).catch(()=>{}); }
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
