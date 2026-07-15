@@ -431,7 +431,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·v';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·w';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -536,6 +536,8 @@ async function initSync(){
       } else if((inc.__updatedAt||0)>(store.__updatedAt||0)){ applyingRemote=true; store=norm(inc); render(); syncRail(); applyingRemote=false; }
     }
     subscribeRealtime(c.row);
+    subscribeClaims();
+    await loadClaims(); if(UI.tab==='hotlist'&&!drawerOpen()) renderHotList();
     setSync('ok','Synced');
     if((store.__updatedAt||0) && Object.keys(store.accounts).length) pushCloudNow();
   }catch(e){ console.warn(e); setSync('err','Sync error'); }
@@ -1192,7 +1194,7 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
   '<button class="btn sm gh" title="Remove from queue" onclick="event.stopPropagation();dropFromQueue(\''+r.id+'\')">✕</button></div>';
 function logCall(cid){ const c=contact(cid); if(!c)return;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date()); c.callCount=(+c.callCount||0)+1;
-  const me=myRep(); if(me){ c.claimedBy=me; c.claimedAt=Date.now(); }  // dialing refreshes your 30-min lock
+  claimLead(c);  // dialing refreshes your 30-min lock (own per-lead row)
   logAuto(c,'📞 Called '+cname(c)); save();  // no re-render: keep the queue card stable mid-call
   toast('Call logged · set a disposition to re-queue'); }
 function renderLeads(){
@@ -1220,18 +1222,47 @@ function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
 // (opens recency & volume, replies, intent, decision-maker, staleness).
 const HOT_CAP=150;
 /* ---- Lead claiming: stops two SDRs dialing the same person on the shared book ----
-   The rep's name lives in a DEVICE-local key (not the shared blob) so each browser
-   knows who it is. Claiming a lead stamps claimedBy/claimedAt on the contact and
-   pushes to the shared cloud row; realtime drops it off every other rep's queue.
-   A 30-min TTL auto-frees a lead if a rep closes their browser mid-call. */
+   CRITICAL: claims live in their OWN per-lead rows in crm_state (id 'claim:<contactId>'),
+   NOT inside the big book blob. If they lived in the blob, one rep's whole-book save
+   would overwrite another rep's just-made claim (last-write-wins clobber). Separate
+   rows = each claim is written/cleared independently, immune to that. Reuses the
+   existing crm_state table + realtime (no new table/SQL needed). Rep name is a
+   DEVICE-local key so each browser knows who it is. 30-min TTL auto-frees a lead. */
 const CLAIM_TTL=30*60*1000;
+let claimsMap={}, claimSub=null;
 function myRep(){ try{ return (localStorage.getItem('shipday_crm_rep')||'').trim(); }catch(e){ return ''; } }
 function setMyRep(){ const v=prompt('Your name — locks the leads you call to you so teammates don\'t double-dial:',myRep()); if(v==null) return; try{ localStorage.setItem('shipday_crm_rep',v.trim()); }catch(e){} renderActive(); }
-function claimActive(c){ return !!c.claimedBy && (Date.now()-(+c.claimedAt||0)<CLAIM_TTL); }
-function claimedByOther(c){ return claimActive(c) && c.claimedBy!==myRep(); }
-function claimMine(c){ return claimActive(c) && c.claimedBy===myRep(); }
-function claimLead(c){ const me=myRep(); if(!me||!c) return; c.claimedBy=me; c.claimedAt=Date.now(); save(); }
-function releaseClaim(c){ if(c && c.claimedBy===myRep()){ c.claimedBy=''; c.claimedAt=0; save(); } }
+function claimsReady(){ return !!sb && syncReady(); }
+function claimRecActive(r){ return !!r && (Date.now()-(+r.at||0)<CLAIM_TTL); }
+function claimOf(c){ const r=c&&claimsMap[c.id]; return claimRecActive(r)?r:null; }
+function claimedByOther(c){ const r=claimOf(c); return !!r && r.rep!==myRep(); }
+function claimMine(c){ const r=claimOf(c); return !!r && r.rep===myRep(); }
+async function loadClaims(){
+  if(!claimsReady()) return;
+  try{ const {data}=await sb.from('crm_state').select('id,data').like('id','claim:%');
+    const m={}; (data||[]).forEach(r=>{ const cid=String(r.id).slice(6); const d=r.data||{}; if(d.at) m[cid]={rep:d.rep,at:+d.at}; });
+    claimsMap=m;
+  }catch(e){ console.warn('loadClaims',e); }
+}
+function subscribeClaims(){
+  if(!sb) return; if(claimSub) sb.removeChannel(claimSub);
+  claimSub=sb.channel('crm-claims')
+    .on('postgres_changes',{event:'*',schema:'public',table:'crm_state'},p=>{
+      const id=String((p.new&&p.new.id)||(p.old&&p.old.id)||''); if(!id.startsWith('claim:')) return;
+      const cid=id.slice(6); const d=(p.new&&p.new.data)||null;
+      if(!d||!d.at) delete claimsMap[cid]; else claimsMap[cid]={rep:d.rep,at:+d.at};
+      if(UI.tab==='hotlist'&&!drawerOpen()) renderHotList();
+    }).subscribe();
+}
+async function claimLead(c){ const me=myRep(); if(!me||!c||!claimsReady()) return;
+  const now=Date.now(); claimsMap[c.id]={rep:me,at:now};  // optimistic
+  try{ await sb.from('crm_state').upsert({id:'claim:'+c.id,data:{rep:me,at:now,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('claimLead',e); }
+}
+async function releaseClaim(c){ if(!c||!claimsReady()) return; const r=claimsMap[c.id]; if(r&&r.rep!==myRep()) return;
+  delete claimsMap[c.id];  // optimistic
+  // tombstone (at:0) rather than DELETE so anon key never needs delete grants
+  try{ await sb.from('crm_state').upsert({id:'claim:'+c.id,data:{rep:'',at:0,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('releaseClaim',e); }
+}
 function callPriority(c){ return heat(c); }
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
@@ -1267,13 +1298,13 @@ function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted};
   c.dispo=d.t; c.dispoTs=Date.now(); c.nextCallAt=Date.now()+d.snz;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
-  if(claimMine(c)){ c.claimedBy=''; c.claimedAt=0; }  // done with this lead — free it
+  releaseClaim(c);  // done with this lead — free it for the team
   logAuto(c,'☎ '+d.t); save(); renderActive();
   toast(d.t+' · back '+fmtWhen(c.nextCallAt),()=>{ Object.assign(c,prev); save(); renderActive(); });
 }
 function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; save(); }
 function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; save(); renderActive(); toast('Re-queued to top'); }
-function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); if(claimMine(c)){ c.claimedBy=''; c.claimedAt=0; } save(); renderActive();
+function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); releaseClaim(c); save(); renderActive();
   toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
 function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
   if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
@@ -1364,7 +1395,8 @@ function renderHotList(){
   const me=myRep();
   // Claim-on-surface: the lead in front of you locks to you (heartbeat re-stamps
   // while it stays your Now-up so a long call doesn't hit the 30-min TTL).
-  if(cur && me && (!claimMine(cur) || Date.now()-(+cur.claimedAt||0) > CLAIM_TTL/2)) claimLead(cur);
+  const _cr=claimOf(cur);
+  if(cur && me && (!claimMine(cur) || Date.now()-(_cr?_cr.at:0) > CLAIM_TTL/2)) claimLead(cur);
   const idBar = me
     ? '<div class="panel" style="border-color:var(--sig)"><div style="padding:9px 14px;font-size:12.5px">👤 Calling as <b>'+esc(me)+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> — leads you open lock to you for 30 min so teammates don\'t double-dial.</div></div>'
     : '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">⚠️ <b>Set your name</b> to turn on lead-locking (stops you and teammates calling the same person) · <span onclick="setMyRep()" style="cursor:pointer;color:var(--hot)"><b>set name</b></span></div></div>';
@@ -1378,10 +1410,11 @@ function renderHotList(){
   let h = idBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
     : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
   // Leads teammates are actively on (claimed by someone else, still within TTL) — hidden from your queue above.
-  const locked=contacts().filter(c=>claimedByOther(c)).sort((a,b)=>(+b.claimedAt||0)-(+a.claimedAt||0));
+  const lockedIds=Object.keys(claimsMap).filter(id=>{const r=claimsMap[id]; return claimRecActive(r)&&r.rep!==me;});
+  const locked=lockedIds.map(id=>contact(id)).filter(Boolean).sort((a,b)=>claimsMap[b.id].at-claimsMap[a.id].at);
   if(locked.length){
     h+='<div class="panel"><div class="ph"><h3>🔒 On calls now</h3><span class="sub">'+locked.length+' lead'+(locked.length>1?'s':'')+' a teammate is working — hidden from your queue</span></div><table><thead><tr><th>Contact</th><th>Account</th><th>Rep</th><th>Locked</th></tr></thead><tbody>'+
-      locked.slice(0,50).map(c=>{const a=acct(c.accountId);return '<tr><td><span class="tname">'+esc(cname(c))+'</span></td><td>'+esc(a?a.name:'—')+'</td><td>🔒 '+esc(c.claimedBy)+'</td><td class="tsub">'+fmtAgo(+c.claimedAt)+'</td></tr>';}).join('')+
+      locked.slice(0,50).map(c=>{const a=acct(c.accountId),r=claimsMap[c.id];return '<tr><td><span class="tname">'+esc(cname(c))+'</span></td><td>'+esc(a?a.name:'—')+'</td><td>🔒 '+esc(r.rep)+'</td><td class="tsub">'+fmtAgo(r.at)+'</td></tr>';}).join('')+
       '</tbody></table></div>';
   }
   const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
@@ -1875,6 +1908,7 @@ function openAccount(id){
   b+='<div class="sec">Deals <button class="btn sm gh" style="float:right" onclick="addDeal(\''+id+'\')">+ Add</button></div>';
   const ds=dealsOf(id);
   b+= ds.length? ds.map(d=>'<div class="mini" onclick="openDeal(\''+d.id+'\')"><div class="mn">'+esc(d.name||a.name)+'</div><div class="ms"><span class="stg">'+esc(d.stage)+'</span> '+(d.value?money(d.value):'')+(d.mrr?' · '+money(d.mrr)+'/mo':'')+'</div></div>').join('') : '<div class="tsub">No deals.</div>';
+  b+='<div class="sec">Activity</div>'+logBar('a',id)+'<div id="log-a'+id+'">'+logList(a,'a',id)+'</div>';
   el('drawer-body').innerHTML=b;
   el('drawer-foot').innerHTML='<button class="btn pri" onclick="saveNow()">💾 Save</button>'+
     '<button class="btn gh" onclick="closeDrawer()">Close</button>'+
@@ -1933,7 +1967,7 @@ function bookDemo(cid){ const c=contact(cid); if(!c)return;
   store.deals[id]={id,accountId:c.accountId,contactId:cid,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now()};
   logAuto(store.deals[id],'Demo booked from '+cname(c));
   c.status='In Pipeline';
-  if(claimMine(c)){ c.claimedBy=''; c.claimedAt=0; }  // booked — release the lock
+  releaseClaim(c);  // booked — release the lock
   save(); toast('Deal created in Pipeline',()=>undoBook(id,cid,prevStatus)); switchTab('pipeline'); render(); openDeal(id);
 }
 function undoBook(dealId,cid,prevStatus){ const c=contact(cid);
