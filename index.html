@@ -219,6 +219,32 @@ tr.tdone td{opacity:.5}
   padding:9px 13px;font-size:12px;margin-bottom:14px;display:none;align-items:center;gap:10px}
 .banner.on{display:flex}
 
+/* Floating task widget */
+#taskfab{position:fixed;bottom:20px;right:20px;z-index:58;width:54px;height:54px;border-radius:50%;
+  background:var(--sig);color:#fff;border:none;font-size:22px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.4);
+  display:flex;align-items:center;justify-content:center;transition:transform .15s ease}
+#taskfab:hover{transform:scale(1.07)}
+#taskfab.open{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
+#taskfab.due{box-shadow:0 0 0 3px rgba(255,77,77,.4),0 6px 20px rgba(0,0,0,.4)}
+#taskfab-badge{position:absolute;top:-4px;right:-4px;min-width:21px;height:21px;padding:0 5px;border-radius:20px;
+  background:var(--hot);color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg)}
+#taskwidget{position:fixed;bottom:86px;right:20px;z-index:58;width:min(420px,94vw);max-height:74vh;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 46px rgba(0,0,0,.55);
+  display:none;flex-direction:column;overflow:hidden}
+#taskwidget .tw-head{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+#taskwidget .tw-head h3{font-size:14px;margin:0}
+.tw-x{margin-left:auto;background:none;border:none;color:var(--mut);font-size:22px;line-height:1;cursor:pointer}
+.tw-x:hover{color:var(--ink)}
+#taskwidget .tw-body{overflow-y:auto;flex:1}
+#taskwidget .tw-sub{padding:8px 16px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--line)}
+#taskwidget .tw-od{color:var(--hot);font-weight:700}
+.twtabs{display:flex;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.twchip{font-size:12px;padding:5px 11px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);color:var(--mut);font-weight:600;cursor:pointer}
+.twchip.on{background:var(--sig);border-color:var(--sig);color:#fff}
+.twchip b{font-weight:800}
+#taskwidget .tw-ap{display:flex;align-items:center;gap:8px;padding:11px 16px;border-top:1px solid var(--line);font-size:12px}
+@media(max-width:640px){#taskwidget{right:3vw;left:3vw;width:auto;bottom:82px}}
+
 /* Login gate */
 #gate{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;align-items:center;justify-content:center}
 #gate.hidden{display:none}
@@ -308,6 +334,8 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="frow" id="f-warmth"></div>
       <h4 style="margin-top:12px">Stage</h4>
       <div class="frow" id="f-stage"></div>
+      <h4 style="margin-top:12px">Contact info</h4>
+      <div class="frow" id="f-have"></div>
     </div>
     <div class="card cfg-toggle">
       <button class="btn sm gh" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="toggleCfg()"><span>⚙ Sync &amp; Integrations</span><span id="cfg-caret">▸</span></button>
@@ -338,7 +366,8 @@ small.hint{color:var(--dim);font-size:11px}
     <div class="card">
       <h4>Data</h4>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="exportBackup()">Backup JSON</button>
-      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="importBackupPrompt()">Import JSON / CSV</button>
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="importBackupPrompt()">Import CSV / JSON</button>
+      <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">Drops in call logs (OpenPhone), email opens (Mailtracker), or contact sheets — auto-detected.</div>
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="restoreAutoBackup()">Restore auto-backup</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="reloadSeed()">Reload imported data</button>
@@ -372,6 +401,12 @@ small.hint{color:var(--dim);font-size:11px}
   <div class="df" id="drawer-foot"></div>
 </div>
 
+<button id="taskfab" onclick="toggleTaskWidget()" title="Tasks">✅<span id="taskfab-badge">0</span></button>
+<div id="taskwidget">
+  <div class="tw-head"><h3>✅ Tasks</h3><button class="tw-x" onclick="toggleTaskWidget(false)">×</button></div>
+  <div class="tw-body" id="taskwidget-body"></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -381,7 +416,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·c';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·e';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -549,11 +584,13 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
   const s=el('f-stage'); s.innerHTML=STAGES.map(x=>'<span class="fchip '+(UI.stage.has(x)?'on':'')+'" onclick="tgl(\'stage\',\''+x+'\')">'+x+'</span>').join('');
+  const hv=el('f-have'); if(hv){ const HAVE=[['email','Has email'],['noemail','No email'],['phone','Has phone'],['nophone','No phone']];
+    hv.innerHTML=HAVE.map(([k,lbl])=>'<span class="fchip '+(UI.have.has(k)?'on':'')+'" onclick="tgl(\'have\',\''+k+'\')">'+lbl+'</span>').join(''); }
 }
 function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFilters(); renderActive(); }
 function matchQ(str){ if(!UI.q) return true; return (str||'').toLowerCase().includes(UI.q); }
@@ -583,7 +620,7 @@ function renderActive(){
 }
 
 /* ====================== RENDER DISPATCH ====================== */
-function render(){ buildFilters(); renderStats(); renderCounts(); renderActive(); checkBackupBanner(); }
+function render(){ buildFilters(); renderStats(); renderCounts(); renderActive(); renderTaskWidget(); checkBackupBanner(); }
 function renderStats(){
   const openPipe=deals().filter(d=>!CLOSED.includes(d.stage)).reduce((a,d)=>a+(+d.value||0),0);
   const mrr=deals().filter(d=>d.stage===WON).reduce((a,d)=>a+(+d.mrr||0),0);
@@ -675,25 +712,23 @@ function addTask(f){ const t=Object.assign({id:uid('t'),type:'call',title:'',due
   tasks().push(t); save(); return t; }
 function quickAddTask(){ const ti=el('tk-title'),ty=el('tk-type'),du=el('tk-due'); const title=(ti&&ti.value.trim())||'';
   if(!title){ toast('Add a task title first'); if(ti)ti.focus(); return; }
-  addTask({title,type:(ty&&ty.value)||'call',due:parseDueInput(du&&du.value)}); toast('Task added'); renderActive(); }
-function addCadence(){ const ti=el('tk-title'),n=el('cad-n'),d=el('cad-d'),du=el('tk-due');
-  const label=(ti&&ti.value.trim())||''; const N=Math.max(1,Math.min(20,+(n&&n.value)||5)); const D=Math.max(0,Math.min(120,+(d&&d.value)||14));
-  if(!label){ toast('Add a cadence label in the title box'); if(ti)ti.focus(); return; }
-  const start=parseDueInput(du&&du.value); const day=864e5;
-  for(let i=0;i<N;i++){ const off=(N>1)?Math.round(i*D/(N-1)):0; addTask({title:label+' — call '+(i+1)+'/'+N,type:'call',due:start+off*day}); }
-  toast(N+' calls scheduled over '+D+' days'); renderActive(); }
+  addTask({title,type:(ty&&ty.value)||'call',due:parseDueInput(du&&du.value)}); toast('Task added'); renderActive(); renderTaskWidget(); }
 function completeTask(id){ const t=tasks().find(x=>x.id===id); if(!t)return; t.done=!t.done; t.doneTs=t.done?Date.now():0;
   if(t.done&&t.contactId){ const c=contact(t.contactId); if(c) logAuto(c,'✓ Task done: '+t.title); }
-  save(); renderActive(); refreshDrawer(); }
-function snoozeTask(id,days){ const t=tasks().find(x=>x.id===id); if(!t)return; t.due=(+t.due||today0().getTime())+days*864e5; t.done=false; save(); renderActive(); refreshDrawer(); }
-function deleteTask(id){ const i=tasks().findIndex(x=>x.id===id); if(i<0)return; tasks().splice(i,1); save(); renderActive(); refreshDrawer(); }
+  save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
+function snoozeTask(id,days){ const t=tasks().find(x=>x.id===id); if(!t)return; t.due=(+t.due||today0().getTime())+days*864e5; t.done=false; save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
+function deleteTask(id){ const i=tasks().findIndex(x=>x.id===id); if(i<0)return; tasks().splice(i,1); save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
 function addTaskFor(ent,id){ const title=(prompt('Follow-up task:')||'').trim(); if(!title)return;
-  addTask({title,type:'call',contactId:ent==='c'?id:'',accountId:ent==='a'?id:''}); toast('Task added'); renderActive(); refreshDrawer(); }
-function addCadenceFor(ent,id){ const label=(prompt('Call cadence label (e.g. "Q3 outreach"):')||'').trim(); if(!label)return;
-  const N=Math.max(1,Math.min(20,+(prompt('How many calls?','5')||5))); const D=Math.max(0,Math.min(120,+(prompt('Over how many days?','14')||14)));
-  const start=today0().getTime(), day=864e5;
-  for(let i=0;i<N;i++){ const off=(N>1)?Math.round(i*D/(N-1)):0; addTask({title:label+' — call '+(i+1)+'/'+N,type:'call',contactId:ent==='c'?id:'',accountId:ent==='a'?id:'',due:start+off*day}); }
-  toast(N+' calls scheduled over '+D+' days'); renderActive(); refreshDrawer(); }
+  addTask({title,type:'call',contactId:ent==='c'?id:'',accountId:ent==='a'?id:''}); toast('Task added'); renderActive(); refreshDrawer(); renderTaskWidget(); }
+// Preset 5-step call cadence (days 0,3,6,10,14), auto-linked to an account or contact
+const CADENCE_OFFSETS=[0,3,6,10,14];
+function startCadence(ent,id,silent){
+  const start=today0().getTime(), day=864e5, N=CADENCE_OFFSETS.length;
+  CADENCE_OFFSETS.forEach((off,i)=>addTask({title:'Call '+(i+1)+'/'+N+' (cadence)',type:'call',
+    contactId:ent==='c'?id:'',accountId:ent==='a'?id:'',due:start+off*day,cadence:true}));
+  if(!silent){ toast('5-step call cadence started'); renderActive(); refreshDrawer(); renderTaskWidget(); } }
+function addCadenceFor(ent,id){ startCadence(ent,id); }
+function hasCadence(ent,id){ return tasks().some(t=>t.cadence&&(ent==='c'?t.contactId===id:t.accountId===id)); }
 function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.due<now); const lk=taskLink(t);
   const when=t.done?'done':(overdue?'overdue '+fmtWhen(+t.due):fmtWhen(+t.due));
   const badge=t.done?'<span class="tag">done</span>':'<span class="tag'+(overdue?' od':'')+'">'+esc(when)+'</span>';
@@ -707,34 +742,48 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
       (tel?'<a class="btn sm gh" href="tel:'+esc(tel)+'">📞</a> ':'')+
       '<button class="btn sm gh" title="Snooze 1 day" onclick="snoozeTask(\''+t.id+'\',1)">+1d</button> '+
       '<button class="btn sm gh" title="Delete" onclick="deleteTask(\''+t.id+'\')">×</button></td></tr>'; }
-function taskPanel(){ const now=today0().getTime(); const list=tasks().slice();
+function openTaskCount(){ return tasks().filter(t=>!t.done).length; }
+let twFilter='all';
+function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
+function taskWidgetInner(){ const now=today0().getTime(); const list=tasks().slice();
   const open=list.filter(t=>!t.done).sort((a,b)=>(+a.due)-(+b.due));
-  const done=list.filter(t=>t.done).sort((a,b)=>(+b.doneTs||0)-(+a.doneTs||0)).slice(0,5);
   const overdue=open.filter(t=>+t.due<now).length; const dueToday=open.filter(t=>+t.due>=now&&+t.due<now+864e5).length;
-  const ap=store.__apollo||{}; const apSeqs=ap.sequences||[]; const apSample=(ap.sample||[]);
-  let h='<div class="panel"><div class="ph"><h3>✅ Tasks</h3><span class="sub">'+open.length+' open'+(overdue?' · '+overdue+' overdue':'')+(dueToday?' · '+dueToday+' today':'')+'</span></div>';
+  const nCall=open.filter(t=>t.type==='call').length, nEmail=open.filter(t=>t.type==='email').length;
+  const nDone=list.filter(t=>t.done).length;
+  const chip=(k,lbl,n)=>'<button class="twchip'+(twFilter===k?' on':'')+'" onclick="setTwFilter(\''+k+'\')">'+lbl+(n?' <b>'+n+'</b>':'')+'</button>';
+  let rows;
+  if(twFilter==='done') rows=list.filter(t=>t.done).sort((a,b)=>(+b.doneTs||0)-(+a.doneTs||0)).slice(0,25);
+  else if(twFilter==='call') rows=open.filter(t=>t.type==='call');
+  else if(twFilter==='email') rows=open.filter(t=>t.type==='email');
+  else rows=open;
+  let h='<div class="tw-sub">'+open.length+' open'+(overdue?' · <span class="tw-od">'+overdue+' overdue</span>':'')+(dueToday?' · '+dueToday+' today':'')+'</div>';
+  h+='<div class="twtabs">'+chip('all','All',open.length)+chip('call','📞 Calls',nCall)+chip('email','✉️ Emails',nEmail)+chip('done','✓ Done',nDone)+'</div>';
   // quick add
   h+='<div class="tkadd">'+
-     '<input id="tk-title" placeholder="Follow-up task or cadence label…" onkeydown="if(event.key===\'Enter\')quickAddTask()">'+
+     '<input id="tk-title" placeholder="Add a follow-up…" onkeydown="if(event.key===\'Enter\')quickAddTask()">'+
      '<select id="tk-type"><option value="call">📞 Call</option><option value="email">✉️ Email</option><option value="linkedin">in LinkedIn</option><option value="other">✓ Other</option></select>'+
      '<input id="tk-due" type="date">'+
-     '<button class="btn sm pri" onclick="quickAddTask()">＋ Add</button></div>'+
-     '<div class="tkadd cad"><span class="tsub">Or a call cadence:</span>'+
-     '<input id="cad-n" type="number" value="5" min="1" max="20" style="width:56px"> calls over '+
-     '<input id="cad-d" type="number" value="14" min="0" max="120" style="width:56px"> days'+
-     '<button class="btn sm" onclick="addCadence()">＋ Schedule cadence</button></div>';
+     '<button class="btn sm pri" onclick="quickAddTask()">＋ Add</button></div>';
   h+='<table><tbody>';
-  h+= open.length? open.map(taskRow).join('') : '<tr><td class="empty" colspan="4">No open tasks. Add one above.</td></tr>';
-  if(done.length){ h+='<tr><td colspan="4" class="tsub" style="padding-top:10px">Recently completed</td></tr>'+done.map(taskRow).join(''); }
+  h+= rows.length? rows.map(taskRow).join('') : '<tr><td class="empty" colspan="4">'+(twFilter==='done'?'Nothing completed yet.':'No tasks here.')+'</td></tr>';
   h+='</tbody></table>';
   // Apollo (synced, read-only)
-  h+='<div class="ph" style="border-top:1px solid var(--line)"><h3 style="font-size:12px">📋 From Apollo</h3><span class="sub">'+(ap.totalDue||0)+' due'+(ap.overdue?' · '+ap.overdue+' overdue':'')+' · synced '+fmtAgo(ap.syncedAt)+'</span>'+
-     '<button class="btn sm gh" style="margin-left:auto" onclick="syncApollo()">↻ Sync</button></div><table><tbody>';
-  if(apSeqs.length) apSeqs.forEach(sq=>{ h+='<tr><td class="tname">'+esc(sq.name)+'</td><td style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>'; });
-  apSample.forEach(t=>{ h+='<tr><td>'+esc(t.name)+'</td><td class="tsub" style="text-align:right">'+esc(t.type||'')+' · due '+esc(t.due||'')+'</td></tr>'; });
-  if(!apSeqs.length&&!apSample.length) h+='<tr><td class="empty" colspan="2">No Apollo tasks synced yet.</td></tr>';
-  h+='</tbody></table><div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div></div>';
+  const ap=store.__apollo||{}; const apSeqs=ap.sequences||[];
+  if(apSeqs.length||ap.syncedAt){
+    h+='<div class="tw-ap"><b>📋 From Apollo</b> <span class="tsub">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span><button class="btn sm gh" style="margin-left:auto" onclick="syncApollo()">↻</button></div><table><tbody>';
+    if(apSeqs.length) apSeqs.forEach(sq=>{ h+='<tr><td class="tname">'+esc(sq.name)+'</td><td style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>'; });
+    else h+='<tr><td class="empty" colspan="2">No Apollo tasks synced yet.</td></tr>';
+    h+='</tbody></table><div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>';
+  }
   return h; }
+function renderTaskWidget(){ const b=el('taskwidget-body'); if(b) b.innerHTML=taskWidgetInner();
+  const o=openTaskCount(), bd=el('taskfab-badge'), fab=el('taskfab');
+  if(bd){ bd.textContent=o; bd.style.display=o?'flex':'none'; }
+  if(fab){ const dueSoon=tasks().some(t=>!t.done&&(+t.due<today0().getTime()+864e5)); fab.classList.toggle('due',dueSoon); } }
+function toggleTaskWidget(force){ const w=el('taskwidget'); if(!w)return;
+  const show=(force===undefined)?w.style.display!=='flex':!!force;
+  w.style.display=show?'flex':'none'; const fab=el('taskfab'); if(fab) fab.classList.toggle('open',show);
+  if(show) renderTaskWidget(); }
 function recordTasks(pred){ const list=tasks().filter(pred).sort((a,b)=>(a.done-b.done)||((+a.due)-(+b.due)));
   if(!list.length) return '<div class="tsub" style="padding:2px 0 6px">No tasks yet.</div>';
   return '<table><tbody>'+list.map(taskRow).join('')+'</tbody></table>'; }
@@ -765,9 +814,6 @@ function renderToday(){
   h+=stat(upcoming.length,'Upcoming demos');
   h+=stat(money(mrr)+' / '+money(q),'MRR vs quota',true);
   h+='</div>';
-
-  // Tasks (manual + Apollo synced)
-  h+=taskPanel();
 
   // Gmail replies
   h+='<div class="panel"><div class="ph"><h3>✉️ New Replies</h3><span class="sub">'+replies.length+' · synced '+fmtAgo(gm.syncedAt)+'</span>'+
@@ -848,7 +894,7 @@ function setFlt(v,k,val){ TFILT[v]=TFILT[v]||{}; TFILT[v][k]=val; lastFlt='flt-'
 function restoreFlt(){ if(!lastFlt)return; const i=el(lastFlt); if(i){ i.focus(); const n=i.value.length; try{i.setSelectionRange(n,n);}catch(e){} } lastFlt=null; }
 /* ---- inline "scratch pad" editing ---- */
 function entOf(v){ return (v==='accounts'||v==='closed'||v==='live')?'a':(v==='pipeline'?'d':'c'); }
-const EDIT_C={title:'title',email:'email',phone:'phone',mobile:'mobile',score:'score',angle:'angle',next:'nextStep',last:'lastContacted',apollo:'apolloSeq'};
+const EDIT_C={title:'title',email:'email',phone:'phone',mobile:'mobile',score:'score',angle:'angle',next:'nextStep',apollo:'apolloSeq'};
 const SEL_C={status:C_STATUS,warmth:WARMTHS};
 const EDIT_A={cuisine:'cuisine',address:'address',pos:'pos',delivery:'delivery',employees:'employees',website:'website',mrr:'mrr',source:'source'};
 const SEL_A={onboard:['Closed Won','Onboarding','Live','Paused','Churned'],type:['Prospect','Customer']};
@@ -961,6 +1007,11 @@ function colMenu(v){
 document.addEventListener('click',()=>document.querySelectorAll('.colpop.on').forEach(p=>p.classList.remove('on')));
 function prefilter(list){ return list.filter(c=>{
   if(UI.warmth.size&&!UI.warmth.has(c.warmth)) return false;
+  if(UI.have.size){ const hasE=!!(c.email&&c.email.trim()), hasP=!!((c.phone&&c.phone.trim())||(c.mobile&&c.mobile.trim()));
+    if(UI.have.has('email')&&!hasE) return false;
+    if(UI.have.has('noemail')&&hasE) return false;
+    if(UI.have.has('phone')&&!hasP) return false;
+    if(UI.have.has('nophone')&&hasP) return false; }
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
@@ -1382,7 +1433,7 @@ function openContact(id){
   b+='<div class="sec">Apollo'+(c.apolloUrl?' <a href="'+esc(c.apolloUrl)+'" target="_blank" style="float:right;font-size:11px">Open in Apollo ↗</a>':'')+'</div>';
   b+='<div class="f2">'+fld('Sequence / status',inp("setC('"+id+"','apolloSeq',this.value)",c.apolloSeq))+fld('Apollo link',inp("setC('"+id+"','apolloUrl',this.value)",c.apolloUrl))+'</div>';
   b+=customBlock('c',id);
-  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')">＋ Follow-up task</button><button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ Call cadence</button></div>'+contactTasks(id);
+  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')">＋ Follow-up task</button>'+(hasCadence('c',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+contactTasks(id);
   b+='<div class="sec">Activity</div>'+logBar('c',id)+'<div id="log-c'+id+'">'+logList(c)+'</div>';
   b+='<div class="sec">AI Follow-up</div><button class="btn sm" onclick="aiEmail(\'c\',\''+id+'\')">✦ Draft email</button><div id="ai-c'+id+'" style="margin-top:10px"></div>';
   el('drawer-body').innerHTML=b;
@@ -1427,7 +1478,7 @@ function openAccount(id){
        fld('Renewal',inp("setA('"+id+"','renewal',this.value)",a.renewal,'date'))+'</div>';
   }
   b+=customBlock('a',id);
-  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'a\',\''+id+'\')">＋ Follow-up task</button><button class="btn sm gh" onclick="addCadenceFor(\'a\',\''+id+'\')">＋ Call cadence</button></div>'+acctTasks(id);
+  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'a\',\''+id+'\')">＋ Follow-up task</button>'+(hasCadence('a',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'a\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+acctTasks(id);
   // contacts under account
   b+='<div class="sec">Contacts <button class="btn sm gh" style="float:right" onclick="addContact(\''+id+'\')">+ Add</button></div>';
   const cs=contactsOf(id);
@@ -1544,7 +1595,7 @@ function qaContact(){ const first=(el('qa-first').value||'').trim(), last=(el('q
   aid = aid ? aid.id : newAccount(an||((first+' '+last).trim()+' (account)'));
   const id=uid('c');
   store.contacts[id]={id,accountId:aid,first,last,title:(el('qa-title').value||'').trim(),email:(el('qa-email').value||'').trim(),phone:(el('qa-phone').value||'').trim(),warmth:'Warm',status:'New',log:[]};
-  save(); render(); openContact(id);
+  save(); startCadence('c',id,true); render(); openContact(id);
 }
 /* ====================== CSV EXPORT ====================== */
 function csvQ(v){ v=(v==null?'':String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
@@ -1577,7 +1628,7 @@ function onFile(e){ const f=e.target.files[0]; if(!f)return; const r=new FileRea
   r.onload=()=>{ try{
     if(f.name.endsWith('.json')){ const s=JSON.parse(r.result);
       if(!confirm('Replace all data with this backup?'))return; store=norm(s); save(); render(); toast('Backup restored'); }
-    else { importCSV(r.result); }
+    else { smartImport(r.result); }
   }catch(err){ alert('Import failed: '+err.message); } e.target.value=''; };
   r.readAsText(f);
 }
@@ -1611,6 +1662,86 @@ function importCSV(text){
       if(email)byEmail[email.toLowerCase()]=cid; nc++; } }
   });
   save(); render(); toast('Imported '+na+' accounts, '+nc+' contacts');
+}
+/* ---- Universal CSV importer: auto-detect calls / emails / contacts ---- */
+function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10?d.slice(-10):''; }
+function fmtDur(s){ s=+s||0; const m=Math.floor(s/60),ss=s%60; return m?(m+'m '+ss+'s'):(ss+'s'); }
+function fmtPhone10(n){ return '('+n.slice(0,3)+') '+n.slice(3,6)+'-'+n.slice(6); }
+function phoneIndex(){ const m={}; contacts().forEach(c=>{ [c.phone,c.mobile].forEach(p=>{const n=norm10(p); if(n&&!m[n])m[n]=c.id;}); }); return m; }
+function emailIndex(){ const m={}; contacts().forEach(c=>{ if(c.email)m[c.email.toLowerCase().trim()]=c.id; }); return m; }
+function ensureCallContact(n){ const aid=newAccount(fmtPhone10(n)); const cid=uid('c');
+  store.contacts[cid]={id:cid,accountId:aid,first:'Main',last:'Line',title:'',email:'',phone:'+1'+n,warmth:'Warm',status:'New',source:'CSV import',log:[]}; return cid; }
+function ensureEmailContact(email){ const aid=newAccount(email.split('@')[1]||'Imported'); const cid=uid('c');
+  store.contacts[cid]={id:cid,accountId:aid,first:email.split('@')[0],last:'',title:'',email:email,warmth:'Warm',status:'New',source:'CSV import',log:[]}; return cid; }
+let __applyImport=null;
+function runImport(){ const f=__applyImport; __applyImport=null; closeDrawer(); if(f)f(); }
+function openImportPreview(kind,stats,applyFn){ __applyImport=applyFn;
+  const label={call:'📞 Call log',email:'✉️ Email log'}[kind]||kind;
+  el('drawer-head').innerHTML='<div style="font-weight:800;font-size:16px">Import preview</div><button class="x" onclick="closeDrawer()">×</button>';
+  el('drawer-body').innerHTML='<div class="sec">'+label+' detected</div>'+
+    '<p style="margin:4px 0"><b>'+stats.entries+'</b> log entries will be added.</p>'+
+    '<p style="margin:4px 0"><b>'+stats.match+'</b> match existing contacts · <b>'+stats.create+'</b> new contact'+(stats.create===1?'':'s')+' will be created.</p>'+
+    '<p class="tsub">Matched by '+(kind==='call'?'phone number':'email address')+'. Unmatched rows create a new contact (and account). Duplicate entries are skipped.</p>';
+  el('drawer-foot').innerHTML='<button class="btn gh" onclick="closeDrawer()">Cancel</button> <button class="btn pri" onclick="runImport()">Import '+stats.entries+' entries</button>';
+  openDrawer();
+}
+function smartImport(text){
+  const rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
+  const H=rows[0].map(h=>h.toLowerCase().trim());
+  const has=(...n)=>n.some(x=>H.some(h=>h===x||h.includes(x)));
+  const idx=(...n)=>{for(const x of n){const i=H.findIndex(h=>h===x||h.includes(x));if(i>=0)return i;}return -1;};
+  if(has('direction') && (has('duration')||has('answered'))) return prepCallImport(rows,idx);
+  if(has('subject') && (has('recipient')||has('sent')||has('pixel')||has('opened'))) return prepEmailImport(rows,idx);
+  importCSV(text); // fall back to accounts/contacts sheet
+}
+function prepCallImport(rows,idx){
+  const iDir=idx('direction'),iFrom=idx('from'),iTo=idx('to'),iDur=idx('duration'),
+        iWhen=idx('answeredat','completedat','createdat','date','time'),iType=idx('type');
+  const plan=[], all=new Set(), p2c=phoneIndex();
+  rows.slice(1).forEach(r=>{
+    if(iType>=0 && String(r[iType]||'').toLowerCase()!=='call') return;
+    const dir=String(iDir>=0?r[iDir]:'').toLowerCase(), out=dir.includes('out');
+    const n=norm10(out?(iTo>=0?r[iTo]:''):(iFrom>=0?r[iFrom]:'')); if(!n) return;
+    const dur=parseInt(iDur>=0?r[iDur]:0)||0, ts=Date.parse((iWhen>=0?r[iWhen]:'')||'')||0;
+    const txt=dur>0?((out?'📞 Called → ':'📞 Inbound call ← ')+fmtDur(dur)):(out?'📞 Called → no answer':'📞 Missed call ←');
+    plan.push({n,ts,txt}); all.add(n);
+  });
+  if(!plan.length){toast('No call rows found');return;}
+  let create=0; all.forEach(n=>{ if(!p2c[n])create++; });
+  openImportPreview('call',{entries:plan.length,match:all.size-create,create}, ()=>applyLogImport(plan,'call'));
+}
+function prepEmailImport(rows,idx){
+  const iSub=idx('subject'),iTo=idx('recipient','to','email'),iSent=idx('sent_at','sent','date'),
+        iOpen=idx('last_opened','first_opened','opened'),iCnt=idx('pixel_visits','opens','visits','count');
+  const plan=[], all=new Set(), e2c=emailIndex();
+  rows.slice(1).forEach(r=>{
+    let email=String(iTo>=0?r[iTo]:'').toLowerCase().trim(); const m=email.match(/<([^>]+)>/); if(m)email=m[1];
+    email=email.split(/[;, ]/)[0].trim(); if(!email||!email.includes('@'))return;
+    const sub=(iSub>=0?r[iSub]:'')||'(no subject)';
+    const sentTs=Date.parse((iSent>=0?r[iSent]:'')||'')||0, openTs=Date.parse((iOpen>=0?r[iOpen]:'')||'')||0;
+    const cnt=parseInt(iCnt>=0?r[iCnt]:0)||0;
+    if(sentTs) plan.push({email,ts:sentTs,txt:'📧 Sent: '+sub,kind:'sent'});
+    if(openTs&&cnt>0) plan.push({email,ts:openTs,txt:'👀 Opened: '+sub+(cnt>1?' ('+cnt+'x)':''),kind:'open'});
+    all.add(email);
+  });
+  if(!plan.length){toast('No email rows found');return;}
+  let create=0; all.forEach(e=>{ if(!e2c[e])create++; });
+  openImportPreview('email',{entries:plan.length,match:all.size-create,create}, ()=>applyLogImport(plan,'email'));
+}
+function applyLogImport(plan,kind){
+  const map=kind==='call'?phoneIndex():emailIndex(), touched={}; let added=0;
+  plan.forEach(p=>{ const key=kind==='call'?p.n:p.email; let cid=map[key];
+    if(!cid){ cid=kind==='call'?ensureCallContact(p.n):ensureEmailContact(p.email); map[key]=cid; }
+    const c=contact(cid); if(!c)return; c.log=c.log||[];
+    if(p.ts&&c.log.some(l=>l.ts===p.ts&&l.txt===p.txt))return;
+    c.log.push({ts:p.ts||Date.now(),txt:p.txt,sys:true}); added++;
+    if(kind==='call'){ c.callCount=(+c.callCount||0)+1; if(p.ts>(+c.lastContactedTs||0)){ c.lastContactedTs=p.ts; c.lastContacted=fmtD(new Date(p.ts)); } }
+    else { if(p.kind==='open'&&p.ts>(+c.lastEmailOpenTs||0)) c.lastEmailOpenTs=p.ts;
+           if(p.kind==='sent'&&p.ts>(+c.lastContactedTs||0)){ c.lastContactedTs=p.ts; c.lastContacted=fmtD(new Date(p.ts)); } }
+    touched[cid]=1;
+  });
+  Object.keys(touched).forEach(cid=>{ const c=contact(cid); if(c&&c.log){ c.log.sort((a,b)=>(+a.ts||0)-(+b.ts||0)); if(c.log.length>50)c.log=c.log.slice(-50); } });
+  save(); render(); toast('Imported '+added+' '+kind+' log entries');
 }
 function restoreAutoBackup(){
   const baks=Object.keys(localStorage).filter(k=>k.startsWith('shipday_crm_bak_')).sort().reverse();
