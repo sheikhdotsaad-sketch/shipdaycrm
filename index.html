@@ -344,6 +344,8 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="frow" id="f-have"></div>
       <h4 style="margin-top:12px">Email opens</h4>
       <div class="frow" id="f-opens"></div>
+      <h4 style="margin-top:12px">Locations</h4>
+      <div class="frow" id="f-loc"></div>
       <h4 style="margin-top:12px">Assigned to</h4>
       <div class="frow" id="f-assignee"></div>
     </div>
@@ -429,7 +431,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·q';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·s';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -610,7 +612,7 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), assignee:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), assignee:new Set(), loc:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
@@ -619,13 +621,20 @@ function buildFilters(){
     hv.innerHTML=HAVE.map(([k,lbl])=>'<span class="fchip '+(UI.have.has(k)?'on':'')+'" onclick="tgl(\'have\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const op=el('f-opens'); if(op){ const OP=[['any','Opened email'],['since','Opened since touch'],['multi','2+ opens'],['none','Never opened']];
     op.innerHTML=OP.map(([k,lbl])=>'<span class="fchip '+(UI.opens.has(k)?'on':'')+'" onclick="tgl(\'opens\',\''+k+'\')">'+lbl+'</span>').join(''); }
+  const lc=el('f-loc'); if(lc){ const LC=[['multi','🏢 Multi-location'],['single','📍 Single location']];
+    lc.innerHTML=LC.map(([k,lbl])=>'<span class="fchip '+(UI.loc.has(k)?'on':'')+'" onclick="tgl(\'loc\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const asg=el('f-assignee'); if(asg){ const AS=[['__none','Unassigned'],...team().map(n=>[n,n])];
     asg.innerHTML=AS.map(([k,lbl])=>'<span class="fchip '+(UI.assignee.has(k)?'on':'')+'" onclick="tgl(\'assignee\',\''+esc(k).replace(/'/g,"\\'")+'\')">'+esc(lbl)+'</span>').join(''); }
 }
 function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFilters();
-  // these bubbles filter people — if you're on a tab that can't use them, jump to Contacts so they take effect
-  if(!['contacts','leads','hotlist'].includes(UI.tab)){ switchTab('contacts'); return; }
+  // location bubbles filter accounts; the rest filter people — jump to the right tab so the filter takes effect
+  const acctTabs=['accounts','closed','live'], peopleTabs=['contacts','leads','hotlist'];
+  if(k==='loc'){ if(!acctTabs.includes(UI.tab)){ switchTab('accounts'); return; } }
+  else if(!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; }
   renderActive(); }
+// multi = brand parent or one of its locations; single = standalone account
+function matchLoc(a){ if(!UI.loc||!UI.loc.size) return true; const multi=isBrand(a)||isLocation(a);
+  return (UI.loc.has('multi')&&multi)||(UI.loc.has('single')&&!multi); }
 function matchQ(str){ if(!UI.q) return true; return (str||'').toLowerCase().includes(UI.q); }
 
 /* ====================== NAV ====================== */
@@ -1393,13 +1402,13 @@ COLDEF.accounts=['name','cuisine','loc','pos','delivery','contacts','type','mrr'
 COLDEF.closed=['name','onboard','pos','contacts','mrr','source'];
 COLDEF.live=['name','onboard','mrr','pos','contacts','source'];
 function renderAccounts(){
-  let recs=activeAccts().filter(a=>matchQ(a.name+' '+(a.city||'')+' '+(a.state||'')));
+  let recs=activeAccts().filter(a=>matchLoc(a)&&matchQ(a.name+' '+(a.city||'')+' '+(a.state||'')));
   if(!(TSORT.accounts&&TSORT.accounts.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('accounts',chosenCols('accounts'),recs,r=>"openAccount('"+r.id+"')");
   el('view-accounts').innerHTML='<div class="panel"><div class="ph"><h3>Accounts</h3><span class="sub">'+t.count+' active prospects — customers live on the Closed / Live tabs</span>'+colMenu('accounts')+'</div>'+t.html+'</div>'; restoreFlt();
 }
 function renderClosed(){
-  let recs=closedAccts().filter(a=>matchQ(a.name+' '+(a.city||'')));
+  let recs=closedAccts().filter(a=>matchLoc(a)&&matchQ(a.name+' '+(a.city||'')));
   if(!(TSORT.closed&&TSORT.closed.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('closed',chosenCols('closed'),recs,r=>"openAccount('"+r.id+"')");
   el('view-closed').innerHTML='<div class="panel"><div class="ph"><h3>Closed Won</h3><span class="sub">'+t.count+' closed — set Onboarding to “Live” once onboarded</span>'+colMenu('closed')+'</div>'+t.html+'</div>'; restoreFlt();
@@ -1431,7 +1440,7 @@ function liveDash(){
     '</div></div></div>';
 }
 function renderLive(){
-  let recs=liveAccts().filter(a=>matchQ(a.name+' '+(a.city||'')));
+  let recs=liveAccts().filter(a=>matchLoc(a)&&matchQ(a.name+' '+(a.city||'')));
   if(!(TSORT.live&&TSORT.live.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('live',chosenCols('live'),recs,r=>"openAccount('"+r.id+"')");
   el('view-live').innerHTML=liveDash()+'<div class="panel"><div class="ph"><h3>Live Accounts</h3><span class="sub">'+t.count+' onboarded & running</span>'+colMenu('live')+'</div>'+t.html+'</div>'; restoreFlt();
@@ -1624,6 +1633,10 @@ function selN(setter,opts,cur,ph){ return '<select onchange="'+setter+'"><option
 /* setters — write field, debounced save, refresh header only (avoid re-render while typing) */
 let saveT;
 function touch(){ clearTimeout(saveT); saveT=setTimeout(()=>{ save(); renderStats(); renderCounts(); renderActive(); },400); }
+// Explicit Save: flush pending edits, force an immediate cloud push, confirm it landed on every browser.
+function saveNow(){ clearTimeout(saveT); save(); renderStats(); renderCounts(); renderActive();
+  if(syncReady()){ pushCloudNow().then(()=>toast('Saved & synced — visible on every browser')).catch(()=>toast('Saved on this device — cloud sync failed, retrying')); }
+  else toast('Saved on this device (cloud sync not connected)'); }
 function setC(id,k,v){ const c=contact(id); if(!c)return; c[k]=v; touch(); }
 function setA(id,k,v){ const a=acct(id); if(!a)return; a[k]=v; touch(); }
 function setD(id,k,v){ const d=deal(id); if(!d)return; d[k]=v; touch(); }
@@ -1703,7 +1716,8 @@ function openContact(id){
   b+='<div class="sec">AI Follow-up</div><button class="btn sm" onclick="aiEmail(\'c\',\''+id+'\')">✦ Draft email</button><div id="ai-c'+id+'" style="margin-top:10px"></div>';
   el('drawer-body').innerHTML=b;
   const inPipe=['In Pipeline','Customer'].includes(c.status);
-  el('drawer-foot').innerHTML=(inPipe?'':'<button class="btn pri" onclick="bookDemo(\''+id+'\')">Book Demo → Pipeline</button>')+
+  el('drawer-foot').innerHTML='<button class="btn pri" onclick="saveNow()">💾 Save</button>'+
+    (inPipe?'':'<button class="btn" onclick="bookDemo(\''+id+'\')">Book Demo → Pipeline</button>')+
     '<button class="btn gh" onclick="closeDrawer()">Close</button>'+
     (c.internal?'<button class="btn gh" onclick="unmarkInternal(\''+id+'\')">↩ Not internal</button>':'<button class="btn gh" title="Colleague, not a lead — hide from Intent &amp; call queue" onclick="markInternal(\''+id+'\')">🏠 Internal</button>')+
     '<button class="btn gh" style="margin-left:auto;color:var(--hot)" onclick="delContact(\''+id+'\')">Delete</button>';
@@ -1768,7 +1782,8 @@ function openAccount(id){
   const ds=dealsOf(id);
   b+= ds.length? ds.map(d=>'<div class="mini" onclick="openDeal(\''+d.id+'\')"><div class="mn">'+esc(d.name||a.name)+'</div><div class="ms"><span class="stg">'+esc(d.stage)+'</span> '+(d.value?money(d.value):'')+(d.mrr?' · '+money(d.mrr)+'/mo':'')+'</div></div>').join('') : '<div class="tsub">No deals.</div>';
   el('drawer-body').innerHTML=b;
-  el('drawer-foot').innerHTML='<button class="btn gh" onclick="closeDrawer()">Close</button>'+
+  el('drawer-foot').innerHTML='<button class="btn pri" onclick="saveNow()">💾 Save</button>'+
+    '<button class="btn gh" onclick="closeDrawer()">Close</button>'+
     '<button class="btn gh" style="margin-left:auto;color:var(--hot)" onclick="delAccount(\''+id+'\')">Delete</button>';
   openDrawer();
 }
@@ -2006,17 +2021,27 @@ function prepCallImport(rows,idx){
   openImportPreview('call',{entries:plan.length,match:all.size-create,create}, ()=>applyLogImport(plan,'call'));
 }
 function prepEmailImport(rows,idx){
-  const iSub=idx('subject'),iTo=idx('recipient','to','email'),iSent=idx('sent_at','sent','date'),
-        iOpen=idx('last_opened','first_opened','opened'),iCnt=idx('pixel_visits','opens','visits','count');
+  const iSub=idx('subject'),iTo=idx('recipient','to email','to','email'),iSent=idx('sent at','sent_at','sent','date'),
+        iOpenAt=idx('last_opened','first_opened','opened at'),iOpen=idx('open'),
+        iCnt=idx('pixel_visits','opens','visits','count'),
+        iClick=idx('click'),iRep=idx('replied','reply'),iSeq=idx('sequence','campaign');
+  const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='1'; };
   const plan=[], all=new Set(), e2c=emailIndex();
   rows.slice(1).forEach(r=>{
     let email=String(iTo>=0?r[iTo]:'').toLowerCase().trim(); const m=email.match(/<([^>]+)>/); if(m)email=m[1];
     email=email.split(/[;, ]/)[0].trim(); if(!email||!email.includes('@'))return;
     const sub=(iSub>=0?r[iSub]:'')||'(no subject)';
-    const sentTs=Date.parse((iSent>=0?r[iSent]:'')||'')||0, openTs=Date.parse((iOpen>=0?r[iOpen]:'')||'')||0;
-    const cnt=parseInt(iCnt>=0?r[iCnt]:0)||0;
-    if(sentTs) plan.push({email,ts:sentTs,txt:'📧 Sent: '+sub,kind:'sent'});
-    if(openTs&&cnt>0) plan.push({email,ts:openTs,txt:'👀 Opened: '+sub+(cnt>1?' ('+cnt+'x)':''),kind:'open'});
+    const sentTs=Date.parse((iSent>=0?r[iSent]:'')||'')||0;
+    let openTs=Date.parse((iOpenAt>=0?r[iOpenAt]:'')||'')||0;
+    let cnt=parseInt(iCnt>=0?r[iCnt]:0)||0;
+    const openedBool=iOpen>=0&&yes(r[iOpen]);
+    if(!openTs&&openedBool) openTs=sentTs||Date.now();   // Apollo gives no open time → use send date as proxy
+    if(openedBool&&!cnt) cnt=1;
+    const seq=iSeq>=0?String(r[iSeq]||'').trim():'';
+    if(sentTs) plan.push({email,ts:sentTs,txt:'📧 Sent: '+sub,kind:'sent',seq});
+    if(openTs&&cnt>0) plan.push({email,ts:openTs,txt:'👀 Opened: '+sub+(cnt>1?' ('+cnt+'x)':''),kind:'open',seq});
+    if(iClick>=0&&yes(r[iClick])) plan.push({email,ts:openTs||sentTs||Date.now(),txt:'🔗 Clicked link: '+sub,kind:'open',seq});
+    if(iRep>=0&&yes(r[iRep])) plan.push({email,ts:sentTs||Date.now(),txt:'↩️ Replied: '+sub,kind:'reply',seq});
     all.add(email);
   });
   if(!plan.length){toast('No email rows found');return;}
@@ -2028,6 +2053,7 @@ function applyLogImport(plan,kind){
   plan.forEach(p=>{ const key=kind==='call'?p.n:p.email; let cid=map[key];
     if(!cid){ cid=kind==='call'?ensureCallContact(p.n):ensureEmailContact(p.email); map[key]=cid; }
     const c=contact(cid); if(!c)return; c.log=c.log||[];
+    if(kind==='email'){ if(p.seq) c.apolloSeq=p.seq; if(p.kind==='reply') c.replied=true; }
     if(p.ts&&c.log.some(l=>l.ts===p.ts&&l.txt===p.txt))return;
     c.log.push({ts:p.ts||Date.now(),txt:p.txt,sys:true}); added++;
     if(kind==='call'){ c.callCount=(+c.callCount||0)+1; if(p.ts>(+c.lastContactedTs||0)){ c.lastContactedTs=p.ts; c.lastContacted=fmtD(new Date(p.ts)); } }
