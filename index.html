@@ -32,11 +32,13 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cc-note input{width:100%}
 .cc-actions{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:4px}
 .cc-call{font-size:15px;padding:11px 18px;white-space:nowrap}
-.cc-dispo{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 16px 14px;border-top:1px solid var(--line);padding-top:12px;margin-top:2px;border-radius:8px;transition:background .3s,box-shadow .3s}
+.cc-dispo{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 16px 14px;border-top:1px solid var(--line);padding-top:12px;margin-top:2px}
 .cc-dispo-lbl{font-size:12px;font-weight:700;color:var(--mut);margin-right:4px}
-.cc-flash{animation:ccFlash 1.6s ease-out 2}
-.cc-flash .cc-dispo-lbl{color:var(--sig)}
-@keyframes ccFlash{0%{background:var(--sig);box-shadow:0 0 0 2px var(--sig)}40%{background:rgba(255,140,0,.12)}100%{background:transparent;box-shadow:none}}
+.dispopop{position:absolute;z-index:200;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.45);display:none;min-width:172px}
+.dispopop button{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--ink);padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px}
+.dispopop button:hover{background:var(--line)}
+.dispopop button.pri{color:var(--sig);font-weight:700}
+.dispopop-h{font-size:11px;color:var(--mut);padding:2px 10px 6px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
 .qempty{padding:26px;text-align:center;color:var(--mut)}
 a{color:var(--cold);text-decoration:none}
 a:hover{text-decoration:underline}
@@ -435,7 +437,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z2';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z4';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -1245,16 +1247,29 @@ const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
 const telNum=c=>{ const p=(c.phone||c.mobile||'').replace(/[^\d+]/g,''); return p; };
 const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;align-items:center">'+
-  (telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>')+
+  (telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\');openDispoPop(event,\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>')+
+  '<button class="btn sm gh" title="Log a disposition" onclick="event.stopPropagation();openDispoPop(event,\''+r.id+'\')">Dispo ▾</button>'+
   '<button class="btn sm gh" title="Remove from queue" onclick="event.stopPropagation();dropFromQueue(\''+r.id+'\')">✕</button></div>';
+// Inline disposition popover — call & dispo any lead straight from the Up-next list.
+function openDispoPop(ev,cid){ if(ev) ev.stopPropagation(); const c=contact(cid); if(!c) return;
+  let p=el('dispoPop'); if(!p){ p=document.createElement('div'); p.id='dispoPop'; p.className='dispopop'; document.body.appendChild(p); }
+  p.innerHTML='<div class="dispopop-h">'+esc(cname(c))+'</div>'+
+    DISPOS.map(d=>'<button onclick="dispoPick(\''+cid+'\',\''+d.k+'\')">'+esc(d.t)+'</button>').join('')+
+    '<button class="pri" onclick="dispoPop2(\'book\',\''+cid+'\')">✅ Booked demo</button>'+
+    '<button onclick="dispoPop2(\'drop\',\''+cid+'\')">✕ Remove from queue</button>';
+  p.style.display='block'; p.style.visibility='hidden';
+  const a=ev&&ev.currentTarget?ev.currentTarget.getBoundingClientRect():{bottom:80,right:window.innerWidth-20};
+  let top=a.bottom+window.scrollY+4, left=a.right+window.scrollX-p.offsetWidth;
+  if(left<8) left=8; p.style.top=top+'px'; p.style.left=left+'px'; p.style.visibility='visible'; }
+function closeDispoPop(){ const p=el('dispoPop'); if(p) p.style.display='none'; }
+function dispoPick(cid,k){ closeDispoPop(); setDispo(cid,k); }
+function dispoPop2(act,cid){ closeDispoPop(); if(act==='book') bookDemo(cid); else dropFromQueue(cid); }
+document.addEventListener('click',function(e){ const p=el('dispoPop'); if(p&&p.style.display==='block'&&!p.contains(e.target)) closeDispoPop(); });
 function logCall(cid){ const c=contact(cid); if(!c)return;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date()); c.callCount=(+c.callCount||0)+1;
   claimLead(c);  // dialing refreshes your 30-min lock (own per-lead row)
   logAuto(c,'📞 Called '+cname(c)); save();  // no re-render: keep the queue card stable mid-call
-  toast('Call logged · set a disposition to re-queue');
-  setTimeout(function(){ const dz=el('ccDispo'); if(!dz) return;
-    dz.scrollIntoView({block:'center',behavior:'smooth'});
-    dz.classList.remove('cc-flash'); void dz.offsetWidth; dz.classList.add('cc-flash'); }, 300); }
+  toast('Call logged · set a disposition to re-queue'); }
 function renderLeads(){
   const recs=prefilter(contacts().filter(c=>PROSPECT.includes(c.status||'New')&&!isCustC(c)));
   const t=dataTable('leads',chosenCols('leads'),recs,r=>"openContact('"+r.id+"')",bookCell);
@@ -1356,6 +1371,7 @@ function retierBook(){
   toast('Re-tiered → '+hot+' Hot · '+warm+' Warm · '+cold+' Cold',()=>{ prev.forEach(p=>{const c=contact(p.id); if(c)c.warmth=p.w;}); save(); render(); toast('Re-tier undone'); });
 }
 function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY[key]; if(!d)return;
+  if(pinnedLead===cid) pinnedLead=null;  // released — let the next lead surface
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted};
   c.dispo=d.t; c.dispoTs=Date.now(); c.nextCallAt=Date.now()+d.snz;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
@@ -1365,7 +1381,7 @@ function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY
 }
 function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; stampU(c); save(); }
 function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; stampU(c); save(); renderActive(); toast('Re-queued to top'); }
-function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
+function dropFromQueue(cid){ const c=contact(cid); if(!c)return; if(pinnedLead===cid) pinnedLead=null; c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
   toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
 function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
   if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
@@ -1450,9 +1466,18 @@ function recalcQueue(){
     toast(n?('Queue re-ranked · '+n+' new open/reply'+(n>1?'s':'')):'Queue recalculated · no new signals'); })
    .catch(()=>{ renderHotList(); toast('Queue recalculated'); });
 }
+let pinnedLead=null;  // device-local: id of the Now-up lead pinned until dispositioned
 function renderHotList(){
   const {due,snoozed}=hotQueue();
-  const cur=due[0], rest=due.slice(1);
+  // PIN the Now-up lead: once a lead surfaces to the top it STAYS the top card until
+  // you disposition it (dialing lowers its heat, and any re-render — sync echo, claim
+  // heartbeat, teammate change — would otherwise swap the card out mid-call). The pin
+  // only releases on setDispo/bookDemo/dropFromQueue, or if the lead drops out of the
+  // due queue entirely (e.g. a teammate claimed/worked it).
+  let cur=null;
+  const pinC=pinnedLead?due.find(c=>c.id===pinnedLead):null;
+  if(pinC){ cur=pinC; } else { cur=due[0]||null; pinnedLead=cur?cur.id:null; }
+  const rest=due.filter(c=>cur&&c.id!==cur.id);
   const me=myRep();
   // Claim-on-surface: the lead in front of you locks to you (heartbeat re-stamps
   // while it stays your Now-up so a long call doesn't hit the 30-min TTL).
@@ -2024,6 +2049,7 @@ function addDeal(aid){ const c=contactsOf(aid)[0]; const id=uid('d');
   store.deals[id]={id,accountId:aid,contactId:c?c.id:'',name:acct(aid)?acct(aid).name:'Deal',stage:'Booked Demo',value:0,warmth:'Warm',log:[],createdAt:Date.now(),_u:Date.now()};
   save(); openDeal(id); }
 function bookDemo(cid){ const c=contact(cid); if(!c)return;
+  if(pinnedLead===cid) pinnedLead=null;
   const id=uid('d'); const prevStatus=c.status;
   store.deals[id]={id,accountId:c.accountId,contactId:cid,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now(),_u:Date.now()};
   logAuto(store.deals[id],'Demo booked from '+cname(c));
