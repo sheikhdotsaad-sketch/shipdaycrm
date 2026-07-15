@@ -431,7 +431,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·u';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·v';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -1192,6 +1192,7 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
   '<button class="btn sm gh" title="Remove from queue" onclick="event.stopPropagation();dropFromQueue(\''+r.id+'\')">✕</button></div>';
 function logCall(cid){ const c=contact(cid); if(!c)return;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date()); c.callCount=(+c.callCount||0)+1;
+  const me=myRep(); if(me){ c.claimedBy=me; c.claimedAt=Date.now(); }  // dialing refreshes your 30-min lock
   logAuto(c,'📞 Called '+cname(c)); save();  // no re-render: keep the queue card stable mid-call
   toast('Call logged · set a disposition to re-queue'); }
 function renderLeads(){
@@ -1218,11 +1219,24 @@ function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
 // Priority score — higher = call sooner. Uses the composite heat() ranking
 // (opens recency & volume, replies, intent, decision-maker, staleness).
 const HOT_CAP=150;
+/* ---- Lead claiming: stops two SDRs dialing the same person on the shared book ----
+   The rep's name lives in a DEVICE-local key (not the shared blob) so each browser
+   knows who it is. Claiming a lead stamps claimedBy/claimedAt on the contact and
+   pushes to the shared cloud row; realtime drops it off every other rep's queue.
+   A 30-min TTL auto-frees a lead if a rep closes their browser mid-call. */
+const CLAIM_TTL=30*60*1000;
+function myRep(){ try{ return (localStorage.getItem('shipday_crm_rep')||'').trim(); }catch(e){ return ''; } }
+function setMyRep(){ const v=prompt('Your name — locks the leads you call to you so teammates don\'t double-dial:',myRep()); if(v==null) return; try{ localStorage.setItem('shipday_crm_rep',v.trim()); }catch(e){} renderActive(); }
+function claimActive(c){ return !!c.claimedBy && (Date.now()-(+c.claimedAt||0)<CLAIM_TTL); }
+function claimedByOther(c){ return claimActive(c) && c.claimedBy!==myRep(); }
+function claimMine(c){ return claimActive(c) && c.claimedBy===myRep(); }
+function claimLead(c){ const me=myRep(); if(!me||!c) return; c.claimedBy=me; c.claimedAt=Date.now(); save(); }
+function releaseClaim(c){ if(c && c.claimedBy===myRep()){ c.claimedBy=''; c.claimedAt=0; save(); } }
 function callPriority(c){ return heat(c); }
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
 function hotQueue(){ const now=Date.now();
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&hasRealPhone(c);
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&hasRealPhone(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
@@ -1253,12 +1267,13 @@ function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted};
   c.dispo=d.t; c.dispoTs=Date.now(); c.nextCallAt=Date.now()+d.snz;
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
+  if(claimMine(c)){ c.claimedBy=''; c.claimedAt=0; }  // done with this lead — free it
   logAuto(c,'☎ '+d.t); save(); renderActive();
   toast(d.t+' · back '+fmtWhen(c.nextCallAt),()=>{ Object.assign(c,prev); save(); renderActive(); });
 }
 function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; save(); }
 function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; save(); renderActive(); toast('Re-queued to top'); }
-function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); save(); renderActive();
+function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); if(claimMine(c)){ c.claimedBy=''; c.claimedAt=0; } save(); renderActive();
   toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
 function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
   if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
@@ -1346,6 +1361,13 @@ function recalcQueue(){
 function renderHotList(){
   const {due,snoozed}=hotQueue();
   const cur=due[0], rest=due.slice(1);
+  const me=myRep();
+  // Claim-on-surface: the lead in front of you locks to you (heartbeat re-stamps
+  // while it stays your Now-up so a long call doesn't hit the 30-min TTL).
+  if(cur && me && (!claimMine(cur) || Date.now()-(+cur.claimedAt||0) > CLAIM_TTL/2)) claimLead(cur);
+  const idBar = me
+    ? '<div class="panel" style="border-color:var(--sig)"><div style="padding:9px 14px;font-size:12.5px">👤 Calling as <b>'+esc(me)+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> — leads you open lock to you for 30 min so teammates don\'t double-dial.</div></div>'
+    : '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">⚠️ <b>Set your name</b> to turn on lead-locking (stops you and teammates calling the same person) · <span onclick="setMyRep()" style="cursor:pointer;color:var(--hot)"><b>set name</b></span></div></div>';
   const coldN=due.filter(c=>c.warmth==='Cold').length, hotN=due.filter(c=>c.warmth==='Hot').length;
   let exhaust='';
   if(due.length<HOT_CAP){
@@ -1353,8 +1375,15 @@ function renderHotList(){
   } else if(coldN>0){
     exhaust='<div class="panel" style="border-color:var(--warm)"><div style="padding:12px 16px;font-size:13px;line-height:1.5">⚠️ <b>Book running low</b> — '+coldN+' cold contact'+(coldN>1?'s':'')+' surfaced into the queue (only '+hotN+' Hot leads have real phones). Sync fresh opens or add prospects to keep 150 warm calls stocked.</div></div>';
   }
-  let h = exhaust + (cur ? callCard(cur,due.length,snoozed.length)
+  let h = idBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
     : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
+  // Leads teammates are actively on (claimed by someone else, still within TTL) — hidden from your queue above.
+  const locked=contacts().filter(c=>claimedByOther(c)).sort((a,b)=>(+b.claimedAt||0)-(+a.claimedAt||0));
+  if(locked.length){
+    h+='<div class="panel"><div class="ph"><h3>🔒 On calls now</h3><span class="sub">'+locked.length+' lead'+(locked.length>1?'s':'')+' a teammate is working — hidden from your queue</span></div><table><thead><tr><th>Contact</th><th>Account</th><th>Rep</th><th>Locked</th></tr></thead><tbody>'+
+      locked.slice(0,50).map(c=>{const a=acct(c.accountId);return '<tr><td><span class="tname">'+esc(cname(c))+'</span></td><td>'+esc(a?a.name:'—')+'</td><td>🔒 '+esc(c.claimedBy)+'</td><td class="tsub">'+fmtAgo(+c.claimedAt)+'</td></tr>';}).join('')+
+      '</tbody></table></div>';
+  }
   const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
   const droppedN=contacts().filter(c=>c.queueOut).length;
   const restoreLink=droppedN?' · <span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span>':'';
@@ -1904,6 +1933,7 @@ function bookDemo(cid){ const c=contact(cid); if(!c)return;
   store.deals[id]={id,accountId:c.accountId,contactId:cid,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now()};
   logAuto(store.deals[id],'Demo booked from '+cname(c));
   c.status='In Pipeline';
+  if(claimMine(c)){ c.claimedBy=''; c.claimedAt=0; }  // booked — release the lock
   save(); toast('Deal created in Pipeline',()=>undoBook(id,cid,prevStatus)); switchTab('pipeline'); render(); openDeal(id);
 }
 function undoBook(dealId,cid,prevStatus){ const c=contact(cid);
