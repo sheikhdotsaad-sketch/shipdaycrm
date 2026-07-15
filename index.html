@@ -353,7 +353,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a215ce7":{"id":"a215ce7","name":"Cars
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul14·h';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul14·i';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -601,7 +601,7 @@ function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=by
 async function syncApollo(){
   const key=(store.__keys&&store.__keys.apollo)||'';
   if(!SYNC_FN){ toast(key?'Apollo key saved — live sync activates once hosted':'Add your Apollo key in Integrations first'); return; }
-  try{ setSync('busy','Syncing Apollo…'); const r=await fetch(SYNC_FN+'/apollo-tasks',{headers:{Authorization:'Bearer '+authToken(),'X-Apollo-Key':key}}); const d=await r.json();
+  try{ setSync('busy','Syncing Apollo…'); const r=await fetch(SYNC_FN+'/apollo-tasks',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     if(d.summary) store.__apollo=d.summary; else store.__apollo=d;
     const n=applyContactUpdates(d.contacts); save(); renderActive(); setSync('ok','Synced'); toast('Apollo synced'+(n?' · '+n+' contacts stamped':'')); }
   catch(e){ setSync('err','Sync failed'); toast('Apollo sync failed'); }
