@@ -431,7 +431,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·w';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·x';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -450,7 +450,7 @@ const LS='shipday_crm_v1';
 let store = load();
 let canSave = true, applyingRemote = false;
 
-function blank(){ return { accounts:{}, contacts:{}, deals:{}, __tasks:[],
+function blank(){ return { accounts:{}, contacts:{}, deals:{}, __tasks:[], __del:{},
   __quota:{monthly:1800, targets:{}, history:{}}, __keys:{apollo:'', google:false}, __probs:{},
   __rep:'Saad Sheikh', __email:'saad.sheikh@shipday.com', __team:['Saad Sheikh'],
   __updatedAt:0, __seq:1 }; }
@@ -474,9 +474,39 @@ function norm(s){
   s.accounts=s.accounts||{}; s.contacts=s.contacts||{}; s.deals=s.deals||{};
   s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__probs=s.__probs||{}; s.__cal=s.__cal||{syncedAt:0,events:[]}; s.__tasks=Array.isArray(s.__tasks)?s.__tasks:[]; s.__seq=s.__seq||1;
   s.__rep=s.__rep||b.__rep; s.__email=s.__email||b.__email; s.__team=Array.isArray(s.__team)&&s.__team.length?s.__team:b.__team.slice();
+  s.__del=s.__del||{};
   if(SEED && SEED.__seedV && !s.__seedV) s.__seedV=SEED.__seedV;
   return s;
 }
+/* ---- per-record merge sync (prevents concurrent saves from clobbering each other) ----
+   Every record carries `_u` (last-edit ms). On push/receive we UNION records by id and
+   keep the newer `_u` per record, so one rep's whole-book save can never wipe another
+   rep's just-added deal / edited field. Log arrays are merged by timestamp. */
+function stampU(r){ if(r) r._u=Date.now(); return r; }
+function mergeLogs(a,b){ a=a||[]; b=b||[]; if(!a.length) return b.slice(); if(!b.length) return a.slice();
+  const seen=new Set(), out=[]; a.concat(b).forEach(e=>{ const k=(e.ts||0)+'|'+(e.txt||''); if(seen.has(k)) return; seen.add(k); out.push(e); });
+  out.sort((x,y)=>(x.ts||0)-(y.ts||0)); return out; }
+function mergeRecs(base,over,del){ const out=Object.assign({},base);
+  for(const id in over){ const b=out[id], o=over[id];
+    if(!b){ out[id]=o; continue; }
+    const winner=((+o._u||0)>=(+b._u||0))?o:b; const merged=Object.assign({},winner);
+    if(b.log||o.log) merged.log=mergeLogs(b.log,o.log); out[id]=merged; }
+  // apply tombstones: a delete removes a record UNLESS it was re-edited after the delete
+  if(del) for(const id in del){ const r=out[id]; if(r && (+r._u||0)>(+del[id]||0)) continue; delete out[id]; }
+  return out; }
+function mergeDel(a,b){ const out=Object.assign({},a||{}); const bb=b||{};
+  for(const id in bb){ if(!out[id]||bb[id]>out[id]) out[id]=bb[id]; } return out; }
+function mergeStores(base,over){ base=base||{}; over=over||{};
+  const out=Object.assign({},base);
+  const del=mergeDel(base.__del,over.__del); out.__del=del;
+  out.accounts=mergeRecs(base.accounts||{},over.accounts||{},del);
+  out.contacts=mergeRecs(base.contacts||{},over.contacts||{},del);
+  out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
+  const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
+  ['__quota','__keys','__probs','__cal','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
+  out.__seq=Math.max(+base.__seq||1,+over.__seq||1);
+  out.__updatedAt=Math.max(+base.__updatedAt||0,+over.__updatedAt||0);
+  return out; }
 
 /* id + relationship helpers */
 function uid(p){ return p+(store.__seq++).toString(36)+Date.now().toString(36).slice(-3); }
@@ -497,7 +527,7 @@ const brandOf   =a=>a&&a.parentId?acct(a.parentId):null;
 function team(){ store.__team=Array.isArray(store.__team)&&store.__team.length?store.__team:['Saad Sheikh']; return store.__team; }
 function assignPicker(setter,cur){ return '<select onchange="'+setter+'"><option value="">Unassigned</option>'+team().map(n=>'<option'+(n===(cur||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'<option value="__add">＋ Add teammate…</option></select>'; }
 function setAssignee(ent,id,v){ if(v==='__add'){ const n=(prompt('Teammate name (SDR, AE, etc.):','')||'').trim(); if(n){ if(!team().includes(n)) team().push(n); v=n; } else v=''; }
-  const rec= ent==='c'?contact(id):ent==='a'?acct(id):ent==='t'?tasks().find(t=>t.id===id):deal(id); if(!rec) return; rec.assignee=v; save(); renderActive();
+  const rec= ent==='c'?contact(id):ent==='a'?acct(id):ent==='t'?tasks().find(t=>t.id===id):deal(id); if(!rec) return; rec.assignee=v; stampU(rec); save(); renderActive();
   if(drawerOpen()){ if(ent==='c')openContact(id); else if(ent==='a')openAccount(id); else if(ent==='d')openDeal(id); } }
 const cname=c=>c?((c.first||'')+' '+(c.last||'')).trim()||'(no name)':'—';
 const aname=a=>a?a.name:'—';
@@ -533,7 +563,7 @@ async function initSync(){
       const incStale = SEED && SEED.__seedV && (inc.__seedV||0) < SEED.__seedV;
       if(incStale){ // cloud copy predates the latest import — push the fresh seed up instead
         await pushCloudNow();
-      } else if((inc.__updatedAt||0)>(store.__updatedAt||0)){ applyingRemote=true; store=norm(inc); render(); syncRail(); applyingRemote=false; }
+      } else { applyingRemote=true; store=norm(mergeStores(store,inc)); try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false; }
     }
     subscribeRealtime(c.row);
     subscribeClaims();
@@ -548,15 +578,31 @@ function subscribeRealtime(row){
     .on('postgres_changes',{event:'*',schema:'public',table:'crm_state',filter:'id=eq.'+row},p=>{
       const inc=p.new&&p.new.data; if(!inc) return;
       if(SEED && SEED.__seedV && (inc.__seedV||0) < SEED.__seedV) return; // ignore stale-seed pushes
-      if((inc.__updatedAt||0)<=(store.__updatedAt||0)) return;
-      applyingRemote=true; store=norm(inc);
-      if(!drawerOpen()) render(); else { renderStats(); renderCounts(); }
+      // MERGE incoming into local (never wholesale-replace) so unsynced local edits/additions survive
+      const before=store; const merged=norm(mergeStores(store,inc));
+      const changed=Object.keys(merged.accounts).length!==Object.keys(before.accounts).length
+                  ||Object.keys(merged.contacts).length!==Object.keys(before.contacts).length
+                  ||Object.keys(merged.deals).length!==Object.keys(before.deals).length
+                  ||(+merged.__updatedAt> +before.__updatedAt);
+      applyingRemote=true; store=merged; try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){}
+      if(changed){ if(!drawerOpen()) render(); else { renderStats(); renderCounts(); } }
       applyingRemote=false;
     }).subscribe();
 }
 async function pushCloudNow(){
   if(!syncReady()) return; const c=syncCfg();
   try{ setSync('busy','Saving…');
+    // fetch the current cloud book and MERGE, so this push never clobbers a teammate's records
+    let adopted=false;
+    try{ const {data}=await sb.from('crm_state').select('data').eq('id',c.row).maybeSingle();
+      if(data&&data.data){ const before=store; const merged=norm(mergeStores(data.data,store));
+        const grew=Object.keys(merged.accounts).length!==Object.keys(before.accounts).length
+                 ||Object.keys(merged.contacts).length!==Object.keys(before.contacts).length
+                 ||Object.keys(merged.deals).length!==Object.keys(before.deals).length;
+        store=merged; try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){}
+        if(grew){ adopted=true; applyingRemote=true; if(!drawerOpen()) render(); else { renderStats(); renderCounts(); } applyingRemote=false; }
+      }
+    }catch(e){ console.warn('merge-before-push',e); }
     const {error}=await sb.from('crm_state').upsert({id:c.row,data:store,updated_at:new Date().toISOString()});
     if(error) throw error; setSync('ok','Synced');
   }catch(e){ console.warn(e); setSync('err','Save failed'); }
@@ -1302,9 +1348,9 @@ function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY
   logAuto(c,'☎ '+d.t); save(); renderActive();
   toast(d.t+' · back '+fmtWhen(c.nextCallAt),()=>{ Object.assign(c,prev); save(); renderActive(); });
 }
-function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; save(); }
-function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; save(); renderActive(); toast('Re-queued to top'); }
-function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); releaseClaim(c); save(); renderActive();
+function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; stampU(c); save(); }
+function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; stampU(c); save(); renderActive(); toast('Re-queued to top'); }
+function dropFromQueue(cid){ const c=contact(cid); if(!c)return; c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
   toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
 function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
   if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
@@ -1764,13 +1810,13 @@ function touch(){ clearTimeout(saveT); saveT=setTimeout(()=>{ save(); renderStat
 function saveNow(){ clearTimeout(saveT); save(); renderStats(); renderCounts(); renderActive();
   if(syncReady()){ pushCloudNow().then(()=>toast('Saved & synced — visible on every browser')).catch(()=>toast('Saved on this device — cloud sync failed, retrying')); }
   else toast('Saved on this device (cloud sync not connected)'); }
-function setC(id,k,v){ const c=contact(id); if(!c)return; c[k]=v; touch(); }
-function setA(id,k,v){ const a=acct(id); if(!a)return; a[k]=v; touch(); }
-function setD(id,k,v){ const d=deal(id); if(!d)return; d[k]=v; touch(); }
-function setDplan(id,v){ const d=deal(id); if(!d)return; d.plan=+v||0; d.mrr=+v||0; touch(); if(drawerOpen())openDeal(id); }
-function setDclosed(id,v){ const d=deal(id); if(!d)return; d.closedAt = v? new Date(v+'T12:00:00').getTime() : 0; touch(); }
-function setAplan(id,v){ const a=acct(id); if(!a)return; a.plan=+v||0; a.mrr=+v||0; touch(); if(drawerOpen())openAccount(id); }
-function setAcust(id,v){ const a=acct(id); if(!a)return; a.isCustomer=v; touch(); openAccount(id); }
+function setC(id,k,v){ const c=contact(id); if(!c)return; c[k]=v; stampU(c); touch(); }
+function setA(id,k,v){ const a=acct(id); if(!a)return; a[k]=v; stampU(a); touch(); }
+function setD(id,k,v){ const d=deal(id); if(!d)return; d[k]=v; stampU(d); touch(); }
+function setDplan(id,v){ const d=deal(id); if(!d)return; d.plan=+v||0; d.mrr=+v||0; stampU(d); touch(); if(drawerOpen())openDeal(id); }
+function setDclosed(id,v){ const d=deal(id); if(!d)return; d.closedAt = v? new Date(v+'T12:00:00').getTime() : 0; stampU(d); touch(); }
+function setAplan(id,v){ const a=acct(id); if(!a)return; a.plan=+v||0; a.mrr=+v||0; stampU(a); touch(); if(drawerOpen())openAccount(id); }
+function setAcust(id,v){ const a=acct(id); if(!a)return; a.isCustomer=v; stampU(a); touch(); openAccount(id); }
 
 /* ====================== ACTIVITY LOG ====================== */
 function objOf(t,id){ return t==='c'?contact(id):t==='a'?acct(id):deal(id); }
@@ -1786,15 +1832,15 @@ function logList(o,t,id){ const L=(o.log||[]).map((x,i)=>({x,i})).reverse();
     '</div></li>').join('')+'</ul>';
 }
 function delLog(t,id,i){ const o=objOf(t,id); if(!o||!o.log||!o.log[i])return; if(!confirm('Delete this log entry?'))return;
-  const removed=o.log.splice(i,1)[0]; save();
+  const removed=o.log.splice(i,1)[0]; stampU(o); save();
   const cont=el('log-'+t+id); if(cont)cont.innerHTML=logList(o,t,id);
   toast('Log entry deleted',()=>{ o.log.splice(i,0,removed); save(); const c2=el('log-'+t+id); if(c2)c2.innerHTML=logList(o,t,id); });
 }
 function quickLog(t,id,kind,txt){ const o=objOf(t,id); if(!o)return; o.log=o.log||[];
-  o.log.push({ts:Date.now(),txt:(kind+(txt?': '+txt:''))}); save();
+  o.log.push({ts:Date.now(),txt:(kind+(txt?': '+txt:''))}); stampU(o); save();
   const cont=el('log-'+t+id); if(cont)cont.innerHTML=logList(o,t,id); toast('Logged '+kind);
 }
-function logAuto(o,txt){ o.log=o.log||[]; o.log.push({ts:Date.now(),txt:txt,sys:true}); }
+function logAuto(o,txt){ o.log=o.log||[]; o.log.push({ts:Date.now(),txt:txt,sys:true}); stampU(o); }
 
 /* ---- custom fields (add any field to any record) ---- */
 function recOf(ent,id){ return ent==='c'?contact(id):ent==='a'?acct(id):deal(id); }
@@ -1811,7 +1857,7 @@ function customBlock(ent,id){
   return h;
 }
 function addField(ent,id){ const r=recOf(ent,id); if(!r)return; const name=(prompt('New field name:')||'').trim(); if(!name)return; r.custom=r.custom||{}; if(!(name in r.custom)) r.custom[name]=''; save(); reopenDrawer(ent,id); }
-function setCustom(ent,id,i,v){ const r=recOf(ent,id); if(!r)return; const k=keyAt(r,i); if(k==null)return; r.custom[k]=v; touch(); }
+function setCustom(ent,id,i,v){ const r=recOf(ent,id); if(!r)return; const k=keyAt(r,i); if(k==null)return; r.custom[k]=v; stampU(r); touch(); }
 function delField(ent,id,i){ const r=recOf(ent,id); if(!r)return; const k=keyAt(r,i); if(k==null)return; delete r.custom[k]; save(); reopenDrawer(ent,id); }
 
 /* ====================== CONTACT DRAWER ====================== */
@@ -1949,55 +1995,56 @@ function contactPicker(setter,aid,cur){
 function setDstage(id,v){ moveDeal(deal(id),v); if(v!==WON&&drawerOpen())openDeal(id); }
 
 /* ====================== OPERATIONS ====================== */
-function newAccount(name){ const id=uid('a'); store.accounts[id]={id,name:name||'New Account',city:'',state:'',isCustomer:false}; save(); return id; }
+function newAccount(name){ const id=uid('a'); store.accounts[id]={id,name:name||'New Account',city:'',state:'',isCustomer:false,_u:Date.now()}; save(); return id; }
 function setLocType(id,v){ const a=acct(id); if(!a)return; a.locType=v; save(); if(drawerOpen())openAccount(id); }
 function addLocation(brandId){ const b=acct(brandId); if(!b)return; b.locType='multi';
   const n=childLocs(brandId).length+1; const id=uid('a');
-  store.accounts[id]={id,parentId:brandId,name:b.name+' — Location '+n,city:b.city||'',state:b.state||'',cuisine:b.cuisine||'',pos:b.pos||'',delivery:b.delivery||'',locType:'single',isCustomer:false,source:b.source||''};
+  store.accounts[id]={id,parentId:brandId,name:b.name+' — Location '+n,city:b.city||'',state:b.state||'',cuisine:b.cuisine||'',pos:b.pos||'',delivery:b.delivery||'',locType:'single',isCustomer:false,source:b.source||'',_u:Date.now()};
   save(); toast('Location added'); openAccount(id); }
-function addContact(aid){ const id=uid('c'); store.contacts[id]={id,accountId:aid,first:'',last:'',warmth:'Warm',status:'New',log:[]}; save(); openContact(id); }
+function addContact(aid){ const id=uid('c'); store.contacts[id]={id,accountId:aid,first:'',last:'',warmth:'Warm',status:'New',log:[],_u:Date.now()}; save(); openContact(id); }
 function addInboundLead(email,name){ name=(name||'').trim(); const parts=name.split(/\s+/); const first=parts.shift()||''; const last=parts.join(' ');
   const id=uid('c'); store.contacts[id]={id,accountId:'',first,last,email:email||'',warmth:'Warm',status:'New',source:'Inbound',log:[]};
   logAuto(store.contacts[id],'🆕 Added from inbound email'); save(); toast('Lead added — set their account'); render(); openContact(id); }
 function addDeal(aid){ const c=contactsOf(aid)[0]; const id=uid('d');
-  store.deals[id]={id,accountId:aid,contactId:c?c.id:'',name:acct(aid)?acct(aid).name:'Deal',stage:'Booked Demo',value:0,warmth:'Warm',log:[],createdAt:Date.now()};
+  store.deals[id]={id,accountId:aid,contactId:c?c.id:'',name:acct(aid)?acct(aid).name:'Deal',stage:'Booked Demo',value:0,warmth:'Warm',log:[],createdAt:Date.now(),_u:Date.now()};
   save(); openDeal(id); }
 function bookDemo(cid){ const c=contact(cid); if(!c)return;
   const id=uid('d'); const prevStatus=c.status;
-  store.deals[id]={id,accountId:c.accountId,contactId:cid,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now()};
+  store.deals[id]={id,accountId:c.accountId,contactId:cid,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now(),_u:Date.now()};
   logAuto(store.deals[id],'Demo booked from '+cname(c));
-  c.status='In Pipeline';
+  c.status='In Pipeline'; stampU(c);
   releaseClaim(c);  // booked — release the lock
   save(); toast('Deal created in Pipeline',()=>undoBook(id,cid,prevStatus)); switchTab('pipeline'); render(); openDeal(id);
 }
 function undoBook(dealId,cid,prevStatus){ const c=contact(cid);
-  delete store.deals[dealId];
-  if(c) c.status=prevStatus||'New';
+  delete store.deals[dealId]; tomb(dealId);
+  if(c){ c.status=prevStatus||'New'; stampU(c); }
   save(); closeDrawer(); toast('Reverted — back in your list'); switchTab('hotlist'); render();
 }
 function winDeal(d){ if(!d)return;
   d.stage=WON; d.closedAt=Date.now(); d.dispo='Closed Won'; if(d.plan&&!d.mrr) d.mrr=d.plan; if(!d.mrr&&!d.plan){ d.mrr=0; }
   logAuto(d,'🎉 Closed Won'+(d.mrr?' · '+money(d.mrr)+'/mo':''));
   const a=acct(d.accountId);
-  if(a){ a.isCustomer=true; a.plan=a.plan||d.plan; a.mrr=a.mrr||d.mrr; a.onboard=a.onboard||'Closed Won'; a.health=a.health||'Green'; a.signed=a.signed||Date.now(); }
-  const c=contact(d.contactId); if(c) c.status='Customer';
+  if(a){ a.isCustomer=true; a.plan=a.plan||d.plan; a.mrr=a.mrr||d.mrr; a.onboard=a.onboard||'Closed Won'; a.health=a.health||'Green'; a.signed=a.signed||Date.now(); stampU(a); }
+  const c=contact(d.contactId); if(c){ c.status='Customer'; stampU(c); }
   save(); toast('🎉 Won! '+(a?a.name:'')); render(); closeDrawer();
 }
 function loseDeal(d,reason){ if(!d)return; const prev={stage:d.stage,closedAt:d.closedAt,dispo:d.dispo};
   d.stage=LOST; d.closedAt=d.closedAt||Date.now(); d.dispo='Closed Lost'; if(reason)d.lostReason=reason;
-  logAuto(d,'✗ Closed Lost'+(reason?' · '+reason:'')); const c=contact(d.contactId); if(c&&c.status==='In Pipeline')c.status='Working';
+  logAuto(d,'✗ Closed Lost'+(reason?' · '+reason:'')); const c=contact(d.contactId); if(c&&c.status==='In Pipeline'){c.status='Working'; stampU(c);}
   save(); toast('Marked Closed Lost',()=>{ Object.assign(d,prev); if(c)c.status='In Pipeline'; save(); render(); }); render(); closeDrawer(); }
 function noShowDeal(d){ if(!d)return; const prev={stage:d.stage,dispo:d.dispo};
   d.stage='No Show'; d.dispo='No Show'; d.noShowTs=Date.now();
   logAuto(d,'👻 No show'); save(); toast('Marked No Show',()=>{ Object.assign(d,prev); save(); render(); }); render(); closeDrawer(); }
-function delContact(id){ if(!confirm('Delete this contact?'))return; delete store.contacts[id]; save(); closeDrawer(); render(); }
+function tomb(id){ store.__del=store.__del||{}; store.__del[id]=Date.now(); }
+function delContact(id){ if(!confirm('Delete this contact?'))return; delete store.contacts[id]; tomb(id); save(); closeDrawer(); render(); }
 function delDeal(id){ if(!confirm('Delete this deal?'))return; const d=deal(id); const cid=d&&d.contactId;
-  delete store.deals[id];
-  if(cid){ const c=contact(cid); if(c&&['In Pipeline','Customer'].includes(c.status)&&!Object.values(store.deals).some(x=>x.contactId===cid)) c.status='Working'; }
+  delete store.deals[id]; tomb(id);
+  if(cid){ const c=contact(cid); if(c&&['In Pipeline','Customer'].includes(c.status)&&!Object.values(store.deals).some(x=>x.contactId===cid)){ c.status='Working'; stampU(c); } }
   save(); closeDrawer(); render(); }
 function delAccount(id){ if(!confirm('Delete account AND its contacts/deals?'))return;
-  contactsOf(id).forEach(c=>delete store.contacts[c.id]); dealsOf(id).forEach(d=>delete store.deals[d.id]);
-  delete store.accounts[id]; save(); closeDrawer(); render(); }
+  contactsOf(id).forEach(c=>{ delete store.contacts[c.id]; tomb(c.id); }); dealsOf(id).forEach(d=>{ delete store.deals[d.id]; tomb(d.id); });
+  delete store.accounts[id]; tomb(id); save(); closeDrawer(); render(); }
 
 /* ====================== QUICK ADD ====================== */
 let QA_MODE='account';
