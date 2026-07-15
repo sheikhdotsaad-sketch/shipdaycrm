@@ -93,10 +93,11 @@ tbody tr:hover{background:var(--panel2)}
 .cflt{padding:4px 7px;font-size:11px;background:var(--bg);border:1px solid var(--line);border-radius:5px}
 th input.cflt{width:100%}
 .colmenu{position:relative;margin-left:auto}
-.colpop{display:none;position:absolute;right:0;top:26px;z-index:40;background:var(--card,#fff);border:1px solid var(--line);border-radius:8px;padding:8px;min-width:170px;max-height:300px;overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,.15)}
+.colpop{display:none;position:absolute;right:0;top:26px;z-index:40;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:6px;min-width:190px;max-height:320px;overflow:auto;box-shadow:0 12px 34px rgba(0,0,0,.55)}
 .colpop.on{display:block}
-.colpop label{display:flex;align-items:center;gap:7px;font-size:12px;padding:4px 5px;border-radius:5px;cursor:pointer;white-space:nowrap}
-.colpop label:hover{background:var(--bg)}
+.colpop label{display:flex;align-items:center;justify-content:flex-start;text-align:left;gap:9px;font-size:12.5px;color:var(--ink);padding:6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap}
+.colpop label:hover{background:var(--panel)}
+.colpop input[type=checkbox]{flex:0 0 auto;margin:0;accent-color:var(--sig)}
 .ecell{min-width:40px;min-height:18px;padding:2px 5px;border-radius:5px;border:1px solid transparent;cursor:text;font-size:13px;color:var(--ink)}
 .ecell:hover{border-color:var(--line);background:var(--panel2)}
 .ecell:focus{outline:none;border-color:var(--sig);background:var(--panel2);color:var(--ink);box-shadow:0 0 0 2px rgba(0,193,106,.2)}
@@ -220,15 +221,15 @@ tr.tdone td{opacity:.5}
 .banner.on{display:flex}
 
 /* Floating task widget */
-#taskfab{position:fixed;bottom:20px;right:20px;z-index:58;width:54px;height:54px;border-radius:50%;
+#taskfab{position:fixed;bottom:20px;left:20px;z-index:58;width:54px;height:54px;border-radius:50%;
   background:var(--sig);color:#fff;border:none;font-size:22px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.4);
   display:flex;align-items:center;justify-content:center;transition:transform .15s ease}
 #taskfab:hover{transform:scale(1.07)}
 #taskfab.open{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
 #taskfab.due{box-shadow:0 0 0 3px rgba(255,77,77,.4),0 6px 20px rgba(0,0,0,.4)}
-#taskfab-badge{position:absolute;top:-4px;right:-4px;min-width:21px;height:21px;padding:0 5px;border-radius:20px;
+#taskfab-badge{position:absolute;top:-4px;left:-4px;min-width:21px;height:21px;padding:0 5px;border-radius:20px;
   background:var(--hot);color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg)}
-#taskwidget{position:fixed;bottom:86px;right:20px;z-index:58;width:min(420px,94vw);max-height:74vh;
+#taskwidget{position:fixed;bottom:86px;left:20px;z-index:58;width:min(420px,94vw);max-height:74vh;
   background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 46px rgba(0,0,0,.55);
   display:none;flex-direction:column;overflow:hidden}
 #taskwidget .tw-head{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
@@ -243,7 +244,7 @@ tr.tdone td{opacity:.5}
 .twchip.on{background:var(--sig);border-color:var(--sig);color:#fff}
 .twchip b{font-weight:800}
 #taskwidget .tw-ap{display:flex;align-items:center;gap:8px;padding:11px 16px;border-top:1px solid var(--line);font-size:12px}
-@media(max-width:640px){#taskwidget{right:3vw;left:3vw;width:auto;bottom:82px}}
+@media(max-width:640px){#taskwidget{left:3vw;right:3vw;width:auto;bottom:82px}}
 
 /* Login gate */
 #gate{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;align-items:center;justify-content:center}
@@ -336,6 +337,10 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="frow" id="f-stage"></div>
       <h4 style="margin-top:12px">Contact info</h4>
       <div class="frow" id="f-have"></div>
+      <h4 style="margin-top:12px">Email opens</h4>
+      <div class="frow" id="f-opens"></div>
+      <h4 style="margin-top:12px">Assigned to</h4>
+      <div class="frow" id="f-assignee"></div>
     </div>
     <div class="card cfg-toggle">
       <button class="btn sm gh" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="toggleCfg()"><span>⚙ Sync &amp; Integrations</span><span id="cfg-caret">▸</span></button>
@@ -369,6 +374,7 @@ small.hint{color:var(--dim);font-size:11px}
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="importBackupPrompt()">Import CSV / JSON</button>
       <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">Drops in call logs (OpenPhone), email opens (Mailtracker), or contact sheets — auto-detected.</div>
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="retierBook()">Re-tier book by heat</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="restoreAutoBackup()">Restore auto-backup</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="reloadSeed()">Reload imported data</button>
       <button class="btn sm gh" style="width:100%;color:var(--hot)" onclick="resetAll()">Reset all</button>
@@ -416,7 +422,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·e';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·h';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -437,7 +443,7 @@ let canSave = true, applyingRemote = false;
 
 function blank(){ return { accounts:{}, contacts:{}, deals:{}, __tasks:[],
   __quota:{monthly:1800, targets:{}, history:{}}, __keys:{apollo:'', google:false}, __probs:{},
-  __rep:'Saad Sheikh', __email:'saad.sheikh@shipday.com',
+  __rep:'Saad Sheikh', __email:'saad.sheikh@shipday.com', __team:['Saad Sheikh'],
   __updatedAt:0, __seq:1 }; }
 
 function load(){
@@ -456,7 +462,7 @@ function norm(s){
   const b=blank();
   s.accounts=s.accounts||{}; s.contacts=s.contacts||{}; s.deals=s.deals||{};
   s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__probs=s.__probs||{}; s.__cal=s.__cal||{syncedAt:0,events:[]}; s.__tasks=Array.isArray(s.__tasks)?s.__tasks:[]; s.__seq=s.__seq||1;
-  s.__rep=s.__rep||b.__rep; s.__email=s.__email||b.__email;
+  s.__rep=s.__rep||b.__rep; s.__email=s.__email||b.__email; s.__team=Array.isArray(s.__team)&&s.__team.length?s.__team:b.__team.slice();
   if(SEED && SEED.__seedV && !s.__seedV) s.__seedV=SEED.__seedV;
   return s;
 }
@@ -471,6 +477,17 @@ const contacts=()=>Object.values(store.contacts);
 const deals   =()=>Object.values(store.deals);
 const contactsOf=aid=>contacts().filter(c=>c.accountId===aid);
 const dealsOf   =aid=>deals().filter(d=>d.accountId===aid);
+/* multi-location: a "multi" account is a brand; its locations are child accounts (parentId set) */
+const isLocation=a=>!!(a&&a.parentId);
+const isBrand=a=>!!(a&&(a.locType==='multi'||childLocs(a.id).length));
+const childLocs =bid=>accounts().filter(a=>a.parentId===bid);
+const brandOf   =a=>a&&a.parentId?acct(a.parentId):null;
+/* team / assignment: records (contacts, accounts, deals, tasks) carry an .assignee name */
+function team(){ store.__team=Array.isArray(store.__team)&&store.__team.length?store.__team:['Saad Sheikh']; return store.__team; }
+function assignPicker(setter,cur){ return '<select onchange="'+setter+'"><option value="">Unassigned</option>'+team().map(n=>'<option'+(n===(cur||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'<option value="__add">＋ Add teammate…</option></select>'; }
+function setAssignee(ent,id,v){ if(v==='__add'){ const n=(prompt('Teammate name (SDR, AE, etc.):','')||'').trim(); if(n){ if(!team().includes(n)) team().push(n); v=n; } else v=''; }
+  const rec= ent==='c'?contact(id):ent==='a'?acct(id):ent==='t'?tasks().find(t=>t.id===id):deal(id); if(!rec) return; rec.assignee=v; save(); renderActive();
+  if(drawerOpen()){ if(ent==='c')openContact(id); else if(ent==='a')openAccount(id); else if(ent==='d')openDeal(id); } }
 const cname=c=>c?((c.first||'')+' '+(c.last||'')).trim()||'(no name)':'—';
 const aname=a=>a?a.name:'—';
 
@@ -584,13 +601,17 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), assignee:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
   const s=el('f-stage'); s.innerHTML=STAGES.map(x=>'<span class="fchip '+(UI.stage.has(x)?'on':'')+'" onclick="tgl(\'stage\',\''+x+'\')">'+x+'</span>').join('');
   const hv=el('f-have'); if(hv){ const HAVE=[['email','Has email'],['noemail','No email'],['phone','Has phone'],['nophone','No phone']];
     hv.innerHTML=HAVE.map(([k,lbl])=>'<span class="fchip '+(UI.have.has(k)?'on':'')+'" onclick="tgl(\'have\',\''+k+'\')">'+lbl+'</span>').join(''); }
+  const op=el('f-opens'); if(op){ const OP=[['any','Opened email'],['since','Opened since touch'],['multi','2+ opens'],['none','Never opened']];
+    op.innerHTML=OP.map(([k,lbl])=>'<span class="fchip '+(UI.opens.has(k)?'on':'')+'" onclick="tgl(\'opens\',\''+k+'\')">'+lbl+'</span>').join(''); }
+  const asg=el('f-assignee'); if(asg){ const AS=[['__none','Unassigned'],...team().map(n=>[n,n])];
+    asg.innerHTML=AS.map(([k,lbl])=>'<span class="fchip '+(UI.assignee.has(k)?'on':'')+'" onclick="tgl(\'assignee\',\''+esc(k).replace(/'/g,"\\'")+'\')">'+esc(lbl)+'</span>').join(''); }
 }
 function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFilters(); renderActive(); }
 function matchQ(str){ if(!UI.q) return true; return (str||'').toLowerCase().includes(UI.q); }
@@ -684,7 +705,8 @@ async function syncCalendar(){
   if(!SYNC_FN){ toast('Connect Google in Integrations first'); return; }
   try{ setSync('busy','Syncing Calendar…'); const r=await fetch(SYNC_FN+'/calendar-sync',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     if(d.error) throw new Error(d.error);
-    store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[]};
+    const prevRev=(store.__cal&&store.__cal.reviewed)||{};
+    store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[],reviewed:prevRev};
     save(); renderActive(); setSync('ok','Synced'); toast('Calendar synced · '+(d.events||[]).length+' events'); }
   catch(e){ setSync('err','Sync failed'); toast('Calendar sync failed'); }
 }
@@ -702,6 +724,45 @@ async function pushDemoToCalendar(id){ const d=deal(id); if(!d)return;
 }
 function authToken(){ try{ return (sb&&sb.auth&&sb.auth.session&&sb.auth.session()&&sb.auth.session().access_token)||''; }catch(e){ return ''; } }
 
+/* ===== Meeting review: classify synced calendar events (since May) into outcomes ===== */
+const CAL_RED='11';                                   // Google "Tomato" colour = your no-show marker
+const MEET_NOISE=/(no-?reply|notification|mailer|bounce|postmaster|calendar-|@shipday\.com|group\.calendar|resource\.calendar|@google\.com)/i;
+function _selfEmail(){ return (store.__email||'').toLowerCase().trim(); }
+function eventExtEmails(e){ const self=_selfEmail(); return (e.attendees||[]).map(a=>typeof a==='string'?a:(a&&a.email)).filter(x=>x&&String(x).toLowerCase()!==self&&!MEET_NOISE.test(x)); }
+function matchEventContact(e){ const cm=byEmail(); for(const em of eventExtEmails(e)){ const c=cm[String(em).toLowerCase().trim()]; if(c) return c; } return null; }
+function calReviewed(){ store.__cal=store.__cal||{}; store.__cal.reviewed=store.__cal.reviewed||{}; return store.__cal.reviewed; }
+function classifyEvent(e){
+  const st=new Date(e.start).getTime()||0, past=st<Date.now();
+  const rev=calReviewed()[e.id]; if(rev) return {state:'done',outcome:rev};
+  if(!past) return {state:'upcoming'};
+  const c=matchEventContact(e);
+  if(e.colorId===CAL_RED) return {state:'todo',suggest:'noshow',c};       // red = no-show
+  return {state:'todo',suggest:c?'held':'ignore',c};                       // held → you set won/lost
+}
+function findEventDeal(c){ if(!c)return null; const ds=deals().filter(d=>d.contactId===c.id||d.accountId===c.accountId); return ds.length?ds.sort((a,b)=>(+b.createdAt||0)-(+a.createdAt||0))[0]:null; }
+function applyMeetingOutcome(eventId,outcome){
+  const cal=store.__cal||{}; const e=(cal.events||[]).find(x=>x.id===eventId);
+  calReviewed()[eventId]=outcome;
+  if(outcome!=='ignore' && e){ const c=matchEventContact(e); let d=c?findEventDeal(c):null;
+    if(!d && c){ const id=uid('d'); d=store.deals[id]={id,accountId:c.accountId,contactId:c.id,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:new Date(e.start).getTime()||Date.now(),demoDate:e.start}; }
+    if(d){ if(outcome==='won') winDeal(d); else if(outcome==='lost') loseDeal(d,'from calendar'); else if(outcome==='noshow') noShowDeal(d); return; } }
+  save(); renderActive(); toast('Meeting marked '+outcome);
+}
+function meetingReviewPanel(){
+  const cal=store.__cal||{}, evs=cal.events||[]; if(!evs.length) return '';
+  const todo=evs.map(e=>({e,cls:classifyEvent(e)})).filter(x=>x.cls.state==='todo');
+  if(!todo.length) return '';
+  todo.sort((a,b)=>new Date(b.e.start)-new Date(a.e.start));
+  let h='<div class="panel"><div class="ph"><h3>🗓 Meeting review</h3><span class="sub">'+todo.length+' past meetings to classify · 🔴 red = no-show</span></div><table><tbody>';
+  h+=todo.slice(0,50).map(({e,cls})=>{ const c=cls.c, nm=c?cname(c):(eventExtEmails(e)[0]||''), sug=cls.suggest;
+    const btn=(o,lbl)=>'<button class="btn sm '+(sug===o?'pri':'gh')+'" onclick="event.stopPropagation();applyMeetingOutcome(\''+esc(e.id)+'\',\''+o+'\')">'+lbl+'</button>';
+    return '<tr'+(c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'')+'><td class="tname">'+(e.colorId===CAL_RED?'🔴 ':'')+esc(e.summary)+'<div class="tsub">'+esc(fmtDT(e.start))+(nm?' · '+esc(nm):'')+'</div></td>'+
+      '<td style="text-align:right;white-space:nowrap">'+btn('won','Won')+' '+btn('lost','Lost')+' '+btn('noshow','No show')+' '+btn('ignore','Ignore')+'</td></tr>';
+  }).join('');
+  h+='</tbody></table></div>';
+  return h;
+}
+
 /* ====================== TASK DASHBOARD ====================== */
 const TASK_ICON={call:'📞',email:'✉️',linkedin:'in',other:'✓'};
 function tasks(){ store.__tasks=Array.isArray(store.__tasks)?store.__tasks:[]; return store.__tasks; }
@@ -710,9 +771,9 @@ function taskLink(t){ if(t.contactId){ const c=contact(t.contactId); if(c) retur
 function parseDueInput(v){ if(!v) return today0().getTime(); const d=new Date(v+'T09:00:00'); return isNaN(d)?today0().getTime():d.getTime(); }
 function addTask(f){ const t=Object.assign({id:uid('t'),type:'call',title:'',due:today0().getTime(),done:false,createdAt:Date.now(),contactId:'',accountId:''},f);
   tasks().push(t); save(); return t; }
-function quickAddTask(){ const ti=el('tk-title'),ty=el('tk-type'),du=el('tk-due'); const title=(ti&&ti.value.trim())||'';
+function quickAddTask(){ const ti=el('tk-title'),ty=el('tk-type'),du=el('tk-due'),as=el('tk-assignee'); const title=(ti&&ti.value.trim())||'';
   if(!title){ toast('Add a task title first'); if(ti)ti.focus(); return; }
-  addTask({title,type:(ty&&ty.value)||'call',due:parseDueInput(du&&du.value)}); toast('Task added'); renderActive(); renderTaskWidget(); }
+  addTask({title,type:(ty&&ty.value)||'call',assignee:(as&&as.value)||'',due:parseDueInput(du&&du.value)}); toast('Task added'); renderActive(); renderTaskWidget(); }
 function completeTask(id){ const t=tasks().find(x=>x.id===id); if(!t)return; t.done=!t.done; t.doneTs=t.done?Date.now():0;
   if(t.done&&t.contactId){ const c=contact(t.contactId); if(c) logAuto(c,'✓ Task done: '+t.title); }
   save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
@@ -736,7 +797,8 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
   return '<tr class="'+(t.done?'tdone':'')+'">'+
     '<td style="width:26px;text-align:center"><input type="checkbox" '+(t.done?'checked':'')+' onclick="completeTask(\''+t.id+'\')"></td>'+
     '<td><span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span> '+esc(t.title)+
-      (lk?'<div class="tsub"><a onclick="'+lk.go+'">'+esc(lk.name)+'</a></div>':'')+'</td>'+
+      (lk?'<div class="tsub"><a onclick="'+lk.go+'">'+esc(lk.name)+'</a></div>':'')+
+      (t.assignee?'<div class="tsub">👤 '+esc(t.assignee)+'</div>':'')+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+badge+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+
       (tel?'<a class="btn sm gh" href="tel:'+esc(tel)+'">📞</a> ':'')+
@@ -762,6 +824,7 @@ function taskWidgetInner(){ const now=today0().getTime(); const list=tasks().sli
   h+='<div class="tkadd">'+
      '<input id="tk-title" placeholder="Add a follow-up…" onkeydown="if(event.key===\'Enter\')quickAddTask()">'+
      '<select id="tk-type"><option value="call">📞 Call</option><option value="email">✉️ Email</option><option value="linkedin">in LinkedIn</option><option value="other">✓ Other</option></select>'+
+     '<select id="tk-assignee"><option value="">Unassigned</option>'+team().map(n=>'<option>'+esc(n)+'</option>').join('')+'</select>'+
      '<input id="tk-due" type="date">'+
      '<button class="btn sm pri" onclick="quickAddTask()">＋ Add</button></div>';
   h+='<table><tbody>';
@@ -798,7 +861,7 @@ function renderToday(){
   const replies=allReplies.filter(r=>cmap[emailOf(r.from)]).slice(0,20);
   const NOISE=/(no-?reply|do-?not-?reply|notification|notifications|mailer|bounce|postmaster|@shipday\.com|google\.com|otter\.ai|calendar-|docusign|calendly|zoom\.us|linkedin\.com|slack\.com)/i;
   const newInbound=allReplies.filter(r=>{ const e=emailOf(r.from); return e&&!cmap[e]&&!NOISE.test(e)&&!NOISE.test(r.from||''); }).slice(0,10);
-  const calEvents=(cal.events||[]).slice(0,10);
+  const calEvents=(cal.events||[]).filter(e=>new Date(e.start).getTime()>=Date.now()-6*36e5).slice(0,10);
   const upcoming=deals().filter(d=>d.demoDate&&new Date(d.demoDate)>=now&&!CLOSED.includes(d.stage))
     .sort((a,b)=>new Date(a.demoDate)-new Date(b.demoDate));
   const past=deals().filter(d=>d.demoDate&&new Date(d.demoDate)<now&&d.stage==='Booked Demo');
@@ -836,6 +899,8 @@ function renderToday(){
   h+= calEvents.length? calEvents.map(e=>'<tr><td class="tname">'+(e.htmlLink?'<a href="'+esc(e.htmlLink)+'" target="_blank">'+esc(e.summary)+'</a>':esc(e.summary))+'</td><td class="tsub" style="text-align:right">'+esc(fmtDT(e.start))+'</td></tr>').join('')
       : '<tr><td class="empty" colspan="2">No events synced yet — connect Google in the backend sync.</td></tr>';
   h+='</tbody></table></div>';
+
+  h+=meetingReviewPanel();
 
   h+=panelStart('Upcoming Demos','deals on the calendar');
   h+=upcoming.length?rowsDeals(upcoming):emptyRow(6,'No demos booked.');
@@ -968,10 +1033,16 @@ const COL={
   angle:{k:'angle',t:'Why it scores',val:c=>c.angle||'',cell:c=>'<span class="tsub">'+esc(c.angle||'')+'</span>'},
   apollo:{k:'apollo',t:'Apollo',val:c=>c.apolloSeq||'',cell:c=>c.apolloSeq?'<span class="tag cust" title="'+esc(c.apolloSeq)+'">● '+esc(c.apolloSeq)+'</span>':''},
   last:{k:'last',t:'Last contacted',val:c=>lastTouchTs(c),cell:c=>'<span class="tsub">'+esc(lastTouchLabel(c))+'</span>'},
-  open:{k:'open',t:'Last email open',val:c=>+c.lastEmailOpenTs||0,cell:c=>c.lastEmailOpenTs?'<span class="tsub" style="color:var(--sig)">'+esc(fmtAgo(c.lastEmailOpenTs))+'</span>':'<span class="tsub">—</span>'},
+  lastcall:{k:'lastcall',t:'Last call',val:c=>lastCallTs(c),cell:c=>{const t=lastCallTs(c);return '<span class="tsub">'+(t?esc(fmtAgo(t)):'—')+'</span>';}},
+  sent:{k:'sent',t:'Last email sent',val:c=>lastSentTs(c),cell:c=>{const t=lastSentTs(c);return '<span class="tsub">'+(t?esc(fmtAgo(t)):'—')+'</span>';}},
+  open:{k:'open',t:'Last email open',val:c=>lastOpenTs(c),cell:c=>{const t=lastOpenTs(c);return t?'<span class="tsub" style="color:var(--sig)">'+esc(fmtAgo(t))+'</span>':'<span class="tsub">—</span>';}},
+  opens:{k:'opens',t:'# Opens',num:true,val:c=>openCount(c),cell:c=>{const n=openCount(c);return n?'<b style="color:var(--sig)">'+n+'</b>':'<span class="tsub">—</span>';}},
+  owner:{k:'owner',t:'Owner',val:c=>isOwner(c)?1:0,cell:c=>isOwner(c)?'<span class="tag cust" title="'+esc(c.title||'')+'">👑</span>':'<span class="tsub">—</span>'},
+  heat:{k:'heat',t:'Heat',num:true,val:c=>heat(c),cell:c=>{const h=heat(c);return '<b style="color:'+(h>=350?'var(--hot)':h>=180?'var(--warm)':'var(--mut)')+'">'+h+'</b>';}},
   next:{k:'next',t:'Next step',val:c=>c.nextStep||''},
   dispo:{k:'dispo',t:'Disposition',val:c=>c.dispo||'',cell:c=>c.dispo?'<span class="tag">'+esc(c.dispo)+'</span>'+((+c.nextCallAt>Date.now())?'<div class="tsub">back '+fmtWhen(+c.nextCallAt)+'</div>':''):'<span class="tsub">—</span>'},
-  callnote:{k:'callnote',t:'Notes',val:c=>c.callNote||'',cell:c=>'<span class="tsub">'+esc(c.callNote||'')+'</span>'}
+  callnote:{k:'callnote',t:'Notes',val:c=>c.callNote||'',cell:c=>'<span class="tsub">'+esc(c.callNote||'')+'</span>'},
+  assigned:{k:'assigned',t:'Assigned to',val:c=>c.assignee||'',cell:c=>c.assignee?'<span class="tag">'+esc(c.assignee)+'</span>':'<span class="tsub">—</span>'}
 };
 function lastTouchTs(c){ if(!c) return 0;
   let t=+c.lastContactedTs||0;
@@ -980,14 +1051,38 @@ function lastTouchTs(c){ if(!c) return 0;
   return t;
 }
 function lastTouchLabel(c){ const t=lastTouchTs(c); return t?fmtAgo(t):'never'; }
+/* ---- derived intent signals (drive Hot List heat + columns) ---- */
+function logTsBy(c,rx){ if(!c||!c.log||!c.log.length) return 0; let t=0; for(const l of c.log){ if(rx.test(l.txt||'')){ const ts=+l.ts||0; if(ts>t) t=ts; } } return t; }
+function lastCallTs(c){ let t=logTsBy(c,/📞|☎/); if(!t && c.callCount && c.lastContactedTs) t=+c.lastContactedTs; return t; }
+function lastSentTs(c){ return logTsBy(c,/📧/); }
+function lastOpenTs(c){ let t=+c.lastEmailOpenTs||0; const l=logTsBy(c,/👀|opened/i); if(l>t) t=l; return t; }
+function openCount(c){ if(!c||!c.log||!c.log.length) return 0; let n=0; for(const l of c.log){ const tx=l.txt||''; if(/👀|opened/i.test(tx)){ const m=tx.match(/\((\d+)x\)/); n+=m?(+m[1]):1; } } return n; }
+const OWNER_RX=/\b(owner|co-?founder|founder|ceo|president|proprietor|principal|partner|managing|gm|general manager)\b/i;
+function isOwner(c){ return !!(c && OWNER_RX.test(c.title||'')); }
+// Composite "heat" — the master Hot List ranking. Blends recency & volume of
+// email opens, replies, intent score, decision-maker status, reachability, staleness.
+function heat(c){ if(!c) return 0; const now=Date.now();
+  const open=lastOpenTs(c), touch=lastTouchTs(c), opens=openCount(c); let p=0;
+  if(open && open>touch) p+=300;                             // opened email since last outreach = hottest
+  if(open) p+=Math.max(0,220-((now-open)/_DAY)*11);          // open recency (~20d decay)
+  p+=Math.min(opens,25)*14;                                  // opens volume (repeat opens = real interest)
+  p+=(+c.score||0)*4;                                        // intent score
+  if(c.replied) p+=220;                                      // replied to an email
+  if(c.apolloSeq) p+=50;                                     // active sequence
+  if(isOwner(c)) p+=110;                                     // decision-maker
+  if(telNum(c)) p+=15;                                       // reachable by phone
+  const staleD=touch?(now-touch)/_DAY:45;
+  p+=Math.min(staleD,30)*2;                                  // staleness, capped so ancients don't hog
+  return Math.round(p);
+}
 const LEAD_COLS=[COL.warmth,COL.name,COL.acct,COL.phone,COL.status,COL.apollo,COL.next];
 const CONTACT_COLS=[COL.warmth,COL.name,COL.acct,COL.email,COL.phone,COL.status,COL.apollo];
 /* ---- customizable columns ---- */
-const CONTACT_REG=[COL.warmth,COL.name,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.score,COL.angle,COL.apollo,COL.last,COL.open,COL.dispo,COL.callnote,COL.next];
+const CONTACT_REG=[COL.warmth,COL.heat,COL.name,COL.owner,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.score,COL.angle,COL.apollo,COL.last,COL.lastcall,COL.sent,COL.open,COL.opens,COL.dispo,COL.callnote,COL.assigned,COL.next];
 const COLDEF={ leads:['warmth','name','acct','phone','status','apollo','next'],
-  hotlist:['warmth','name','acct','phone','score','last','open','dispo'],
-  hotlist2:['warmth','name','acct','phone','score','last','open','dispo'],
-  contacts:['warmth','name','acct','email','phone','status','apollo'] };
+  hotlist:['warmth','heat','name','owner','acct','phone','lastcall','open','opens','dispo'],
+  hotlist2:['warmth','heat','name','owner','acct','phone','lastcall','open','opens','dispo'],
+  contacts:['warmth','name','owner','acct','email','phone','status','opens','apollo'] };
 function colReg(v){ return (v==='accounts'||v==='closed'||v==='live')?A_COLS:CONTACT_REG; }
 function chosenCols(v){
   const reg=colReg(v); const saved=(store.__cols&&store.__cols[v])||COLDEF[v]||reg.map(c=>c.k);
@@ -1012,6 +1107,12 @@ function prefilter(list){ return list.filter(c=>{
     if(UI.have.has('noemail')&&hasE) return false;
     if(UI.have.has('phone')&&!hasP) return false;
     if(UI.have.has('nophone')&&hasP) return false; }
+  if(UI.opens.size){ const op=lastOpenTs(c), n=openCount(c);
+    if(UI.opens.has('any')&&!op) return false;
+    if(UI.opens.has('since')&&!(op&&op>lastTouchTs(c))) return false;
+    if(UI.opens.has('multi')&&n<2) return false;
+    if(UI.opens.has('none')&&op) return false; }
+  if(UI.assignee.size){ const who=c.assignee||''; const ok=(UI.assignee.has('__none')&&!who)||(who&&UI.assignee.has(who)); if(!ok) return false; }
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
@@ -1045,23 +1146,29 @@ const DISPO_BY=Object.fromEntries(DISPOS.map(d=>[d.k,d]));
 function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
   const h=d/36e5; if(h<1) return Math.max(1,Math.round(d/6e4))+'m'; if(h<24) return Math.round(h)+'h';
   const days=Math.round(h/24); if(days===1) return 'tomorrow'; if(days<30) return 'in '+days+'d'; return 'in '+Math.round(days/30)+'mo'; }
-// Priority score — higher = call sooner. Opens-since-touch dominates, then intent
-// score, active sequence, and staleness (capped so ancient leads don't monopolize).
-function callPriority(c){
-  const open=+c.lastEmailOpenTs||0, touch=lastTouchTs(c); let p=0;
-  if(open>touch) p+=1000;                                   // opened email since last touch = hottest
-  if(open) p+=Math.max(0,200-((Date.now()-open)/_DAY)*12);  // recent opener bonus (decays ~16d)
-  p+=(+c.score||0)*5;                                        // intent score
-  if(c.apolloSeq) p+=60;                                     // actively in a sequence
-  const staleD=touch?(Date.now()-touch)/_DAY:45;             // never-touched treated as fairly stale
-  p+=Math.min(staleD,30)*3;                                  // stalest first, capped at 30d
-  return p;
-}
+// Priority score — higher = call sooner. Uses the composite heat() ranking
+// (opens recency & volume, replies, intent, decision-maker, staleness).
+const HOT_CAP=150;
+function callPriority(c){ return heat(c); }
 function hotQueue(){ const now=Date.now();
   const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)));
-  const due=base.filter(c=>!(+c.nextCallAt)||+c.nextCallAt<=now).sort((a,b)=>callPriority(b)-callPriority(a));
+  let due=base.filter(c=>!(+c.nextCallAt)||+c.nextCallAt<=now).sort((a,b)=>callPriority(b)-callPriority(a));
   const snoozed=base.filter(c=>+c.nextCallAt>now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
+  if(due.length>HOT_CAP) due=due.slice(0,HOT_CAP);          // top 150 highest-heat calls
   return {due,snoozed};
+}
+// Bulk re-tier every non-customer, non-pipeline contact by heat:
+// top 150 → Hot, next 350 → Warm, rest → Cold. Confirm-gated + one-tap Undo.
+function retierBook(){
+  const pool=contacts().filter(c=>!isCustC(c)&&!['In Pipeline','Customer'].includes(c.status));
+  if(!pool.length){ toast('No contacts to re-tier'); return; }
+  if(!confirm('Re-tier '+pool.length+' contacts by heat score?\n\nTop 150 → Hot, next 350 → Warm, the rest → Cold.\nCustomers and in-pipeline contacts are left untouched.')) return;
+  const prev=pool.map(c=>({id:c.id,w:c.warmth}));
+  pool.sort((a,b)=>heat(b)-heat(a));
+  let hot=0,warm=0,cold=0;
+  pool.forEach((c,i)=>{ c.warmth=i<150?'Hot':(i<500?'Warm':'Cold'); if(i<150)hot++; else if(i<500)warm++; else cold++; });
+  save(); render();
+  toast('Re-tiered → '+hot+' Hot · '+warm+' Warm · '+cold+' Cold',()=>{ prev.forEach(p=>{const c=contact(p.id); if(c)c.warmth=p.w;}); save(); render(); toast('Re-tier undone'); });
 }
 function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY[key]; if(!d)return;
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted};
@@ -1118,7 +1225,7 @@ function renderContacts(){
 }
 /* ====================== ACCOUNTS ====================== */
 const A_COLS=[
-  {k:'name',t:'Account',val:a=>a.name,cell:a=>'<span class="tname">'+esc(a.name)+'</span>'},
+  {k:'name',t:'Account',val:a=>a.name,cell:a=>'<span class="tname">'+esc(a.name)+'</span>'+(isBrand(a)?' <span class="tsub">🏢'+childLocs(a.id).length+'</span>':isLocation(a)?' <span class="tsub">📍</span>':'')},
   {k:'cuisine',t:'Cuisine',val:a=>a.cuisine||''},
   {k:'loc',t:'Location',val:a=>[a.city,a.state].filter(Boolean).join(', ')},
   {k:'address',t:'Address',val:a=>a.address||''},
@@ -1130,7 +1237,8 @@ const A_COLS=[
   {k:'type',t:'Type',val:a=>a.isCustomer?'Customer':'Prospect',cell:a=>a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>'},
   {k:'onboard',t:'Onboarding',val:a=>a.onboard||'',cell:a=>a.onboard?'<span class="tag'+(a.onboard==='Live'?' cust':'')+'">'+esc(a.onboard)+'</span>':'—'},
   {k:'mrr',t:'MRR',num:true,val:a=>a.isCustomer&&a.mrr?a.mrr:0,cell:a=>(a.isCustomer&&a.mrr?money(a.mrr):'—')},
-  {k:'source',t:'Source',val:a=>a.source||''}
+  {k:'source',t:'Source',val:a=>a.source||''},
+  {k:'assigned',t:'Assigned to',val:a=>a.assignee||'',cell:a=>a.assignee?'<span class="tag">'+esc(a.assignee)+'</span>':'<span class="tsub">—</span>'}
 ];
 COLDEF.accounts=['name','cuisine','loc','pos','delivery','contacts','type','mrr','source'];
 COLDEF.closed=['name','onboard','pos','contacts','mrr','source'];
@@ -1427,6 +1535,7 @@ function openContact(id){
   b+='<div class="f3">'+fld('Score',inp("setC('"+id+"','score',this.value)",c.score))+
      fld('Last contacted',inp("setC('"+id+"','lastContacted',this.value)",c.lastContacted||lastLogDate(c)))+
      fld('Next step',inp("setC('"+id+"','nextStep',this.value)",c.nextStep))+'</div>';
+  b+=fld('Assigned to',assignPicker("setAssignee('c','"+id+"',this.value)",c.assignee));
   if(c.angle) b+=fld('Why it scores',ta("setC('"+id+"','angle',this.value)",c.angle));
   b+=fld('Notes',ta("setC('"+id+"','notes',this.value)",c.notes));
   b+=outreachBar(c);
@@ -1453,6 +1562,7 @@ function openAccount(id){
   const a=acct(id); if(!a)return; curDrawer={ent:'a',id:id};
   el('drawer-head').innerHTML='<div><div style="font-weight:800;font-size:16px">'+esc(a.name)+'</div>'+
     '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+'</div></div>'+
+    (isBrand(a)?'<span class="tag">🏢 '+childLocs(id).length+' loc</span>':isLocation(a)?'<span class="tag">📍 Location</span>':'')+
     (a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
     '<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
@@ -1462,7 +1572,20 @@ function openAccount(id){
   b+='<div class="f2">'+fld('City',inp("setA('"+id+"','city',this.value)",a.city))+fld('State',inp("setA('"+id+"','state',this.value)",a.state))+'</div>';
   b+=fld('Website',inp("setA('"+id+"','website',this.value)",a.website));
   b+='<div class="f2">'+fld('POS',inp("setA('"+id+"','pos',this.value)",a.pos))+fld('Delivery apps',inp("setA('"+id+"','delivery',this.value)",a.delivery))+'</div>';
-  b+=fld('Source',inp("setA('"+id+"','source',this.value)",a.source));
+  b+='<div class="f2">'+fld('Source',inp("setA('"+id+"','source',this.value)",a.source))+fld('Assigned to',assignPicker("setAssignee('a','"+id+"',this.value)",a.assignee))+'</div>';
+  // ---- location structure ----
+  const par=brandOf(a);
+  b+='<div class="sec">Location structure</div>';
+  if(par){
+    b+='<div class="mini" onclick="openAccount(\''+par.id+'\')"><div class="mn">🏢 Location of <b>'+esc(par.name)+'</b></div><div class="ms">Part of a multi-location brand — tap to open the brand.</div></div>';
+  } else {
+    b+=fld('Type',sel("setLocType('"+id+"',this.value)",['single','multi'],a.locType||'single'));
+    if(isBrand(a)){
+      const locs=childLocs(id);
+      b+='<div class="sec" style="margin-top:8px">Locations <button class="btn sm gh" style="float:right" onclick="addLocation(\''+id+'\')">+ Add location</button></div>';
+      b+= locs.length? locs.map(l=>'<div class="mini" onclick="openAccount(\''+l.id+'\')"><div class="mn">📍 '+esc(l.name)+'</div><div class="ms">'+esc([l.city,l.state].filter(Boolean).join(', ')||'no address')+' · '+contactsOf(l.id).length+' contact'+(contactsOf(l.id).length===1?'':'s')+(l.isCustomer?' · <span style="color:var(--won)">Customer</span>':'')+'</div></div>').join('') : '<div class="tsub">No locations yet — add one.</div>';
+    }
+  }
   b+='<div class="sec">Quick links</div><div class="logbar">'+
      '<a class="btn sm gh" target="_blank" href="'+gsearch(a)+'">🔎 Google</a>'+
      '<a class="btn sm gh" target="_blank" href="'+gmaps(a)+'">📍 Maps</a>'+
@@ -1504,14 +1627,17 @@ function openDeal(id){
   b+='<div class="f3">'+fld('Deal value',inp("setD('"+id+"','value',+this.value)",d.value,'number'))+fld('Plan $/mo',selN("setDplan('"+id+"',this.value)",PLANS.map(String),d.plan?String(d.plan):''))+fld('Demo date',inp("setD('"+id+"','demoDate',this.value)",d.demoDate,'datetime-local'))+'</div>';
   if(d.demoDate) b+='<div style="margin:-4px 0 10px">'+(d.calEventId?'<span class="tag cust">📅 On Google Calendar</span>'+(d.calLink?' <a href="'+esc(d.calLink)+'" target="_blank" style="font-size:11px">Open ↗</a>':''):'<button class="btn sm" onclick="pushDemoToCalendar(\''+id+'\')">📅 Add to Google Calendar</button>')+'</div>';
   if(CLOSED.includes(d.stage)) b+='<div class="f2">'+fld('Close date',inp("setDclosed('"+id+"',this.value)",dateInputVal(d.closedAt),'date'))+'</div>';
-  b+='<div class="f2">'+fld('Contact',contactPicker("setD('"+id+"','contactId',this.value)",d.accountId,d.contactId))+fld('Next step',inp("setD('"+id+"','nextStep',this.value)",d.nextStep))+'</div>';
+  b+='<div class="f2">'+fld('Contact',contactPicker("setD('"+id+"','contactId',this.value)",d.accountId,d.contactId))+fld('Assigned to',assignPicker("setAssignee('d','"+id+"',this.value)",d.assignee))+'</div>';
+  b+=fld('Next step',inp("setD('"+id+"','nextStep',this.value)",d.nextStep));
   b+=fld('Notes',ta("setD('"+id+"','notes',this.value)",d.notes));
   b+=customBlock('d',id);
   b+='<div class="sec">Activity</div>'+logBar('d',id)+'<div id="log-d'+id+'">'+logList(d)+'</div>';
   b+='<div class="sec">AI Follow-up</div><button class="btn sm" onclick="aiEmail(\'d\',\''+id+'\')">✦ Draft email</button><div id="ai-d'+id+'" style="margin-top:10px"></div>';
   el('drawer-body').innerHTML=b;
   const isWon=d.stage===WON;
-  el('drawer-foot').innerHTML=(isWon?'':'<button class="btn won" onclick="winDeal(deal(\''+id+'\'))">✓ Mark Won</button>')+
+  el('drawer-foot').innerHTML=(isWon?'':'<button class="btn won" onclick="winDeal(deal(\''+id+'\'))">✓ Won</button>'+
+      '<button class="btn gh" onclick="loseDeal(deal(\''+id+'\'))">✗ Lost</button>'+
+      '<button class="btn gh" onclick="noShowDeal(deal(\''+id+'\'))">👻 No show</button>')+
     '<button class="btn gh" onclick="closeDrawer()">Close</button>'+
     '<button class="btn gh" style="margin-left:auto;color:var(--hot)" onclick="delDeal(\''+id+'\')">Delete</button>';
   openDrawer();
@@ -1524,6 +1650,11 @@ function setDstage(id,v){ moveDeal(deal(id),v); if(v!==WON&&drawerOpen())openDea
 
 /* ====================== OPERATIONS ====================== */
 function newAccount(name){ const id=uid('a'); store.accounts[id]={id,name:name||'New Account',city:'',state:'',isCustomer:false}; save(); return id; }
+function setLocType(id,v){ const a=acct(id); if(!a)return; a.locType=v; save(); if(drawerOpen())openAccount(id); }
+function addLocation(brandId){ const b=acct(brandId); if(!b)return; b.locType='multi';
+  const n=childLocs(brandId).length+1; const id=uid('a');
+  store.accounts[id]={id,parentId:brandId,name:b.name+' — Location '+n,city:b.city||'',state:b.state||'',cuisine:b.cuisine||'',pos:b.pos||'',delivery:b.delivery||'',locType:'single',isCustomer:false,source:b.source||''};
+  save(); toast('Location added'); openAccount(id); }
 function addContact(aid){ const id=uid('c'); store.contacts[id]={id,accountId:aid,first:'',last:'',warmth:'Warm',status:'New',log:[]}; save(); openContact(id); }
 function addInboundLead(email,name){ name=(name||'').trim(); const parts=name.split(/\s+/); const first=parts.shift()||''; const last=parts.join(' ');
   const id=uid('c'); store.contacts[id]={id,accountId:'',first,last,email:email||'',warmth:'Warm',status:'New',source:'Inbound',log:[]};
@@ -1544,13 +1675,20 @@ function undoBook(dealId,cid,prevStatus){ const c=contact(cid);
   save(); closeDrawer(); toast('Reverted — back in your list'); switchTab('hotlist'); render();
 }
 function winDeal(d){ if(!d)return;
-  d.stage=WON; d.closedAt=Date.now(); if(d.plan&&!d.mrr) d.mrr=d.plan; if(!d.mrr&&!d.plan){ d.mrr=0; }
+  d.stage=WON; d.closedAt=Date.now(); d.dispo='Closed Won'; if(d.plan&&!d.mrr) d.mrr=d.plan; if(!d.mrr&&!d.plan){ d.mrr=0; }
   logAuto(d,'🎉 Closed Won'+(d.mrr?' · '+money(d.mrr)+'/mo':''));
   const a=acct(d.accountId);
   if(a){ a.isCustomer=true; a.plan=a.plan||d.plan; a.mrr=a.mrr||d.mrr; a.onboard=a.onboard||'Closed Won'; a.health=a.health||'Green'; a.signed=a.signed||Date.now(); }
   const c=contact(d.contactId); if(c) c.status='Customer';
   save(); toast('🎉 Won! '+(a?a.name:'')); render(); closeDrawer();
 }
+function loseDeal(d,reason){ if(!d)return; const prev={stage:d.stage,closedAt:d.closedAt,dispo:d.dispo};
+  d.stage=LOST; d.closedAt=d.closedAt||Date.now(); d.dispo='Closed Lost'; if(reason)d.lostReason=reason;
+  logAuto(d,'✗ Closed Lost'+(reason?' · '+reason:'')); const c=contact(d.contactId); if(c&&c.status==='In Pipeline')c.status='Working';
+  save(); toast('Marked Closed Lost',()=>{ Object.assign(d,prev); if(c)c.status='In Pipeline'; save(); render(); }); render(); closeDrawer(); }
+function noShowDeal(d){ if(!d)return; const prev={stage:d.stage,dispo:d.dispo};
+  d.stage='No Show'; d.dispo='No Show'; d.noShowTs=Date.now();
+  logAuto(d,'👻 No show'); save(); toast('Marked No Show',()=>{ Object.assign(d,prev); save(); render(); }); render(); closeDrawer(); }
 function delContact(id){ if(!confirm('Delete this contact?'))return; delete store.contacts[id]; save(); closeDrawer(); render(); }
 function delDeal(id){ if(!confirm('Delete this deal?'))return; const d=deal(id); const cid=d&&d.contactId;
   delete store.deals[id];
