@@ -350,7 +350,7 @@ small.hint{color:var(--dim);font-size:11px}
     <div class="s"><b id="hs-cust">0</b><span>Customers</span></div>
   </div>
   <div class="hspace"></div>
-  <button class="hbtn" onclick="syncAll()" title="Sync Apollo + Gmail and refresh every tab live">↻ Refresh</button>
+  <button class="hbtn" onclick="syncAll()" title="Universal sync — pulls Apollo, Gmail &amp; Google Calendar, then refreshes every tab">↻ Sync</button>
   <button class="hbtn" onclick="exportCurrentTab()">Export CSV</button>
   <button class="hbtn" onclick="importBackupPrompt()">Import CSV</button>
   <button class="hbtn pri" onclick="quickAdd()">+ New</button>
@@ -469,7 +469,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z40';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z42';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -872,8 +872,7 @@ function signalsPanel(){
       (p?'<a class="callbtn" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
       '<button class="btn sm gh" onclick="openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('');
   return '<div class="panel"><div class="ph"><h3>🔥 Recent Signals</h3><span class="sub">'+sig.length+' recent email opens/replies — likely worth a call</span>'+
-    '<button class="btn sm gh" style="margin-left:auto" onclick="syncNow()">↻ Sync now</button>'+
-    '<button class="btn sm gh" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table></div>';
+    '<button class="btn sm gh" style="margin-left:auto" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table></div>';
 }
 function setAutoSync(on){ store.__autoSync=!!on; save(); toast(on?'Auto-refresh on · every 15 min':'Auto-refresh off'); if(on)autoSyncTick(); }
 let _autoBusy=false, _lastAuto=0;
@@ -884,15 +883,15 @@ async function autoSyncTick(){
     if(n){ if(UI.tab==='today'||UI.tab==='hotlist') renderActive(); toast('Auto-refresh · '+n+' opens/updates, Hot List re-ranked'); } }
   finally{ _autoBusy=false; }
 }
-async function syncCalendar(){
-  if(!SYNC_FN){ toast('Connect Google in Integrations first'); return; }
-  try{ setSync('busy','Syncing Calendar…'); const r=await fetch(SYNC_FN+'/calendar-sync',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+async function syncCalendar(bg){
+  if(!SYNC_FN){ if(!bg) toast('Connect Google in Integrations first'); return 0; }
+  try{ if(!bg) setSync('busy','Syncing Calendar…'); const r=await fetch(SYNC_FN+'/calendar-sync',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     if(d.error) throw new Error(d.error);
     const prevRev=(store.__cal&&store.__cal.reviewed)||{};
     store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[],reviewed:prevRev};
     const nm=logPastMeetings();   // stamp every past meeting onto the matched account/contact
-    save(); renderActive(); setSync('ok','Synced'); toast('Calendar synced · '+(d.events||[]).length+' events'+(nm?' · '+nm+' meeting'+(nm>1?'s':'')+' logged':'')); }
-  catch(e){ setSync('err','Sync failed'); toast('Calendar sync failed'); }
+    save(); if(!bg){ renderActive(); setSync('ok','Synced'); toast('Calendar synced · '+(d.events||[]).length+' events'+(nm?' · '+nm+' meeting'+(nm>1?'s':'')+' logged':'')); } return (d.events||[]).length; }
+  catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Calendar sync failed'); } return 0; }
 }
 // Log EVERY past calendar meeting onto its matched contact (and thus the account) so there's a
 // permanent record a meeting happened there — even if it never became a booked demo. Deduped by
@@ -1098,13 +1097,24 @@ function leadFromEvent(eventId){
   toast('Added as lead', ()=>{ delete store.contacts[cid]; delete store.accounts[aid]; save(); renderActive(); });
   openContact(cid);
 }
+// A title-only booking (no guest email in the invite) that still clearly reads as a demo: it mentions
+// you (rep name) or Shipday AND leaves a real prospect name after stripping your name/noise. This rescues
+// Calendly/Google 1:1s like "Josh and Saad Sheikh" that carry no attendee email to link to.
+function looksLikeDemoTitle(e){
+  const t=String(e.summary||''); if(!t.trim()) return false;
+  const toks=[...repKillTokens()]; const company=(selfDomain().split('.')[0]||''); if(company&&company.length>=3) toks.push(company);
+  const mentionsSelf=toks.some(tok=>tok.length>=3 && new RegExp('\\b'+tok.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i').test(t));
+  if(!mentionsSelf) return false;                                                        // no rep/Shipday mention = personal block, skip
+  const nm=(_prospectFromEvent(e).name||'').replace(/[^a-z]/gi,'');                       // must leave a real name once your name is stripped
+  return nm.length>=2;
+}
 // ALL upcoming external-guest meetings (demos) — whether or not they're already a deal.
 // {e, c(known contact|null), d(existing deal|null)}. Internal all-staff blocks (no guest) are skipped.
 function calUpcomingDemos(){
   const cal=store.__cal||{}, evs=cal.events||[], now=Date.now(); const out=[];
   evs.forEach(e=>{ const st=new Date(e.start).getTime()||0; if(st<now-6*36e5) return;   // upcoming (incl. last 6h)
     const c=matchEventContact(e);
-    if(!c && !eventGuestEmails(e).length) return;                                        // no guest = internal block
+    if(!c && !eventGuestEmails(e).length && !looksLikeDemoTitle(e)) return;               // no guest AND not a demo-titled 1:1 = internal block
     out.push({e,c,d:c?findEventDeal(c):null}); });
   out.sort((a,b)=>new Date(a.e.start)-new Date(b.e.start));
   return out;
@@ -1216,7 +1226,7 @@ function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864
   // Apollo (synced, read-only)
   const ap=store.__apollo||{}; const apSeqs=ap.sequences||[];
   if(apSeqs.length||ap.syncedAt){
-    h+='<div class="tw-ap"><b>📋 From Apollo</b> <span class="tsub">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span><button class="btn sm gh" style="margin-left:auto" onclick="syncApollo()">↻</button></div><table><tbody>';
+    h+='<div class="tw-ap"><b>📋 From Apollo</b> <span class="tsub" style="margin-left:auto">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span></div><table><tbody>';
     if(apSeqs.length) apSeqs.forEach(sq=>{ h+='<tr><td class="tname">'+esc(sq.name)+'</td><td style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>'; });
     else h+='<tr><td class="empty" colspan="2">No Apollo tasks synced yet.</td></tr>';
     h+='</tbody></table><div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>';
@@ -1267,15 +1277,13 @@ function renderToday(){
 
   // Apollo tasks — its own panel with a ↻ Sync (mirrors Gmail/Calendar)
   const apSeqsT=ap.sequences||[];
-  h+='<div class="panel"><div class="ph"><h3>📋 Apollo Tasks</h3><span class="sub">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span>'+
-     '<button class="btn sm gh" style="margin-left:auto" onclick="syncApollo()">↻ Sync</button></div><table><tbody>';
+  h+='<div class="panel"><div class="ph"><h3>📋 Apollo Tasks</h3><span class="sub" style="margin-left:auto">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span></div><table><tbody>';
   h+= apSeqsT.length? apSeqsT.map(sq=>'<tr><td class="tname">'+esc(sq.name)+'</td><td class="tsub" style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>').join('')
-      : '<tr><td class="empty" colspan="2">No Apollo tasks synced yet — hit ↻ Sync.</td></tr>';
+      : '<tr><td class="empty" colspan="2">No Apollo tasks synced yet — hit ↻ Sync in the header.</td></tr>';
   h+='</tbody></table>'+(ap.syncedAt?'<div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>':'')+'</div>';
 
   // Gmail replies
-  h+='<div class="panel"><div class="ph"><h3>✉️ New Replies</h3><span class="sub">'+replies.length+' · synced '+fmtAgo(gm.syncedAt)+'</span>'+
-     '<button class="btn sm gh" style="margin-left:auto" onclick="syncGmail()">↻ Sync</button></div><table><tbody>';
+  h+='<div class="panel"><div class="ph"><h3>✉️ New Replies</h3><span class="sub" style="margin-left:auto">'+replies.length+' · synced '+fmtAgo(gm.syncedAt)+'</span></div><table><tbody>';
   h+= replies.length? replies.map(r=>'<tr><td class="tname">'+esc(r.from||'')+'</td><td class="tsub">'+esc(r.subject||'')+'</td><td class="tsub" style="text-align:right">'+esc(r.date||'')+'</td></tr>').join('')
       : '<tr><td class="empty" colspan="3">No replies synced yet — connect Gmail in the backend sync.</td></tr>';
   h+='</tbody></table></div>';
@@ -1289,8 +1297,7 @@ function renderToday(){
   }
 
   // Google Calendar
-  h+='<div class="panel"><div class="ph"><h3>📅 Google Calendar</h3><span class="sub">'+calEvents.length+' upcoming · synced '+fmtAgo(cal.syncedAt)+'</span>'+
-     '<button class="btn sm gh" style="margin-left:auto" onclick="syncCalendar()">↻ Sync</button></div><table><tbody>';
+  h+='<div class="panel"><div class="ph"><h3>📅 Google Calendar</h3><span class="sub" style="margin-left:auto">'+calEvents.length+' upcoming · synced '+fmtAgo(cal.syncedAt)+'</span></div><table><tbody>';
   h+= calEvents.length? calEvents.map(e=>'<tr><td class="tname">'+(e.htmlLink?'<a href="'+esc(e.htmlLink)+'" target="_blank">'+esc(e.summary)+'</a>':esc(e.summary))+'</td><td class="tsub" style="text-align:right">'+esc(fmtDT(e.start))+'</td></tr>').join('')
       : '<tr><td class="empty" colspan="2">No events synced yet — connect Google in the backend sync.</td></tr>';
   h+='</tbody></table></div>';
@@ -2518,12 +2525,15 @@ function dismissIntent(aid){ const a=acct(aid); if(!a)return; a.intentMuteAt=Dat
 function markInternal(cid){ const c=contact(cid); if(!c)return; c.internal=true; c.warmth='Cold'; save(); renderActive();
   toast('Marked internal — hidden from Intent & call queue',()=>{ c.internal=false; save(); renderActive(); }); }
 function unmarkInternal(cid){ const c=contact(cid); if(!c)return; c.internal=false; save(); renderActive(); toast('Restored as a lead'); }
-function syncAll(){ toast('Refreshing everything…'); renderCounts();
-  const jobs=[]; if(typeof syncApollo==='function') jobs.push(Promise.resolve(syncApollo(true)).catch(()=>0));
-  if(typeof syncGmail==='function') jobs.push(Promise.resolve(syncGmail(true)).catch(()=>0));
-  Promise.all(jobs).then(rs=>{ const n=rs.reduce((a,x)=>a+(+x||0),0); render();
-    toast(n?('Synced — '+n+' contact update'+(n>1?'s':'')+', everything refreshed'):'Refreshed — no new signals'); })
-   .catch(()=>{ render(); toast('Refreshed (sync unavailable)'); }); }
+// THE universal sync — pulls Apollo + Gmail + Google Calendar in parallel, then refreshes every tab.
+// This is the single "↻ Sync" button in the header; per-panel sync buttons were removed in favor of it.
+function syncAll(){ toast('Syncing everything…'); setSync('busy','Syncing…'); renderCounts();
+  const cu=[]; if(typeof syncApollo==='function') cu.push(Promise.resolve(syncApollo(true)).catch(()=>0));
+  if(typeof syncGmail==='function') cu.push(Promise.resolve(syncGmail(true)).catch(()=>0));
+  const cal=(typeof syncCalendar==='function')?Promise.resolve(syncCalendar(true)).catch(()=>0):Promise.resolve(0);
+  Promise.all([Promise.all(cu),cal]).then(([rs])=>{ const n=rs.reduce((a,x)=>a+(+x||0),0); render(); setSync('ok','Synced');
+    toast(n?('Synced — '+n+' contact update'+(n>1?'s':'')+', everything refreshed'):'Synced — Apollo, Gmail & Calendar up to date'); })
+   .catch(()=>{ render(); setSync('ok','Synced'); toast('Refreshed (sync unavailable)'); }); }
 function recalcIntent(){
   renderIntent();  // instant recompute from current data
   const jobs=[];
