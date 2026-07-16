@@ -466,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z27';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z28';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -950,6 +950,16 @@ function applyMeetingOutcome(eventId,outcome){
     if(d){ if(outcome==='won') winDeal(d); else if(outcome==='lost') loseDeal(d,'from calendar'); else if(outcome==='noshow') noShowDeal(d); return; } }
   save(); renderActive(); toast('Meeting marked '+outcome);
 }
+// Add a past meeting to Pipeline WITHOUT classifying it (no won/lost/noshow) and WITHOUT removing the review row.
+function meetingToPipeline(eventId){
+  const cal=store.__cal||{}; const e=(cal.events||[]).find(x=>x.id===eventId); if(!e){ toast('Event not found'); return; }
+  let c=matchEventContact(e), newRecs=null;
+  if(!c){ c=_newContactFromEvent(e); newRecs={cid:c.id,aid:c.accountId}; }
+  if(findEventDeal(c)){ toast('Already in pipeline'); renderActive(); return; }
+  const id=_makeDemoDeal(e,c); logAuto(c,'📅 Added to pipeline from meeting: '+(e.summary||''));
+  save(); renderActive();
+  toast('Added to pipeline — row stays for review', ()=>{ delete store.deals[id]; if(newRecs){ delete store.contacts[newRecs.cid]; delete store.accounts[newRecs.aid]; } save(); renderActive(); });
+}
 function meetingReviewPanel(){
   const cal=store.__cal||{}, evs=cal.events||[]; if(!evs.length) return '';
   const todo=evs.map(e=>({e,cls:classifyEvent(e)})).filter(x=>x.cls.state==='todo');
@@ -957,9 +967,11 @@ function meetingReviewPanel(){
   todo.sort((a,b)=>new Date(b.e.start)-new Date(a.e.start));
   let h='<div class="panel"><div class="ph"><h3>🗓 Meeting review</h3><span class="sub">'+todo.length+' past meetings to classify · 🔴 red = didn\'t close (Lost or No-show — you decide)</span></div><table><tbody>';
   h+=todo.slice(0,50).map(({e,cls})=>{ const c=cls.c, nm=c?cname(c):(eventExtEmails(e)[0]||''), sug=cls.suggest;
+    const inPipe=c&&findEventDeal(c);
     const btn=(o,lbl)=>'<button class="btn sm '+(sug===o?'pri':'gh')+'" onclick="event.stopPropagation();applyMeetingOutcome(\''+esc(e.id)+'\',\''+o+'\')">'+lbl+'</button>';
+    const pipeBtn=inPipe?'<span class="tag cust">In pipeline ✓</span> ':'<button class="btn sm gh" onclick="event.stopPropagation();meetingToPipeline(\''+esc(e.id)+'\')">＋ Pipeline</button> ';
     return '<tr'+(c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'')+'><td class="tname">'+(e.colorId===CAL_RED?'🔴 ':'')+esc(e.summary)+'<div class="tsub">'+esc(fmtDT(e.start))+(nm?' · '+esc(nm):'')+'</div></td>'+
-      '<td style="text-align:right;white-space:nowrap">'+btn('won','Won')+' '+btn('lost','Lost')+' '+btn('noshow','No show')+' '+btn('ignore','Ignore')+'</td></tr>';
+      '<td style="text-align:right;white-space:nowrap">'+pipeBtn+btn('won','Won')+' '+btn('lost','Lost')+' '+btn('noshow','No show')+' '+btn('ignore','Ignore')+'</td></tr>';
   }).join('');
   h+='</tbody></table></div>';
   return h;
@@ -1008,21 +1020,24 @@ function adoptCalendarDemo(eventId){
   save(); renderActive();
   toast('Added to pipeline — Booked Demo', ()=>{ delete store.deals[id]; if(newRecs){ delete store.contacts[newRecs.cid]; delete store.accounts[newRecs.aid]; } save(); renderActive(); });
 }
-function adoptAllCalDemos(){
-  const list=calDemosToAdopt(); if(!list.length){ toast('No new calendar demos'); return; }
-  const dealIds=[], recIds=[];
-  list.forEach(({e,c})=>{ let cc=c, nr=null; if(!cc){ cc=_newContactFromEvent(e); nr={cid:cc.id,aid:cc.accountId}; recIds.push(nr); } dealIds.push(_makeDemoDeal(e,cc)); });
+// Convert an unknown calendar guest into a Lead (account+contact only, no deal). Reversible.
+function leadFromEvent(eventId){
+  const cal=store.__cal||{}; const e=(cal.events||[]).find(x=>x.id===eventId); if(!e){ toast('Event not found'); return; }
+  const known=matchEventContact(e);
+  if(known){ toast('Already a lead'); openContact(known.id); return; }
+  const c=_newContactFromEvent(e); const cid=c.id, aid=c.accountId;
   save(); renderActive();
-  toast('Added '+dealIds.length+' demos to pipeline', ()=>{ dealIds.forEach(id=>delete store.deals[id]); recIds.forEach(nr=>{ delete store.contacts[nr.cid]; delete store.accounts[nr.aid]; }); save(); renderActive(); });
+  toast('Added as lead', ()=>{ delete store.contacts[cid]; delete store.accounts[aid]; save(); renderActive(); });
+  openContact(cid);
 }
 function calDemoPanel(){
   const list=calDemosToAdopt(); if(!list.length) return '';
-  let h='<div class="panel"><div class="ph"><h3>📅 Booked on Calendar</h3><span class="sub">'+list.length+' demo'+(list.length===1?'':'s')+' on your calendar not in the pipeline yet</span>'+
-    (list.length>1?'<button class="btn sm pri" style="margin-left:auto" onclick="adoptAllCalDemos()">＋ Add all '+list.length+'</button>':'')+'</div><table><tbody>';
+  let h='<div class="panel"><div class="ph"><h3>📅 Booked on Calendar</h3><span class="sub">'+list.length+' upcoming demo'+(list.length===1?'':'s')+' — convert to a lead or opportunity</span></div><table><tbody>';
   h+=list.slice(0,20).map(({e,c})=>{ const nm=c?cname(c):_prospectFromEvent(e).name; const acc=c&&acct(c.accountId)?acct(c.accountId).name:'';
     const tag=c?'':' <span class="tag">new</span>'; const click=c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'';
+    const leadBtn=c?'':'<button class="btn sm gh" onclick="event.stopPropagation();leadFromEvent(\''+esc(e.id)+'\')">＋ Lead</button> ';
     return '<tr'+click+'><td class="tname">'+esc(e.summary||nm)+tag+'<div class="tsub">'+esc(fmtDT(e.start))+' · '+esc(nm)+(acc?' · '+esc(acc):'')+'</div></td>'+
-    '<td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Add to pipeline</button></td></tr>'; }).join('');
+    '<td style="text-align:right;white-space:nowrap">'+leadBtn+'<button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Opportunity</button></td></tr>'; }).join('');
   h+='</tbody></table></div>';
   return h;
 }
