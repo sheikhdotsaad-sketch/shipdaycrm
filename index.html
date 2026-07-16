@@ -466,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z33';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z34';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -1251,7 +1251,7 @@ function renderToday(){
   h+=panelEnd();
   el('view-today').innerHTML=h;
 }
-function stat(n,l,accent){ return '<div class="stat'+(accent?' accent':'')+'"><div class="n">'+n+'</div><div class="l">'+esc(l)+'</div></div>'; }
+function stat(n,l,accent,onclick,active){ const clk=onclick?' onclick="'+onclick+'"':''; const st=onclick?(' style="cursor:pointer'+(active?';outline:2px solid var(--acc);outline-offset:-2px':'')+'"'):''; return '<div class="stat'+(accent?' accent':'')+(active?' sel':'')+'"'+st+clk+'><div class="n">'+n+'</div><div class="l">'+esc(l)+'</div></div>'; }
 function panelStart(title,sub){ return '<div class="panel"><div class="ph"><h3>'+esc(title)+'</h3>'+(sub?'<span class="sub">'+esc(sub)+'</span>':'')+'</div>'+
   '<table><thead><tr><th>Deal</th><th>Account</th><th>Stage</th><th>Demo</th><th>Value</th><th>Warmth</th></tr></thead><tbody>'; }
 function panelEnd(){ return '</tbody></table></div>'; }
@@ -2488,18 +2488,28 @@ function intentAction(r){
   return '<span style="white-space:nowrap" onclick="event.stopPropagation()">'+callBtn+
     ' <button class="btn sm gh" title="Dismiss — called already / not interested" onclick="dismissIntent(\''+a.id+'\')">✕</button></span>';
 }
+let intentFocus=null; /* null=all · 'trending' · 'opens' · 'replies' — click the summary cards to focus */
+function setIntentFocus(k){ intentFocus=(intentFocus===k)?null:k; TPAGE.intent=0; renderIntent(); }
 function renderIntent(){
   const rows=intentRows();
   const trending=rows.filter(r=>r.trending);
   const opens7=rows.reduce((a,r)=>a+r.opens7,0), reps=rows.reduce((a,r)=>a+r.replies,0);
-  let h='<div class="panel"><div class="ph"><h3>🎯 Intent Tracker</h3><span class="sub">accounts heating up — rolled up from every contact\'s opens, replies &amp; calls</span>'+
+  let h='<div class="panel"><div class="ph"><h3>🎯 Intent Tracker</h3><span class="sub">accounts heating up — rolled up from every contact\'s opens, replies &amp; calls · click a card to filter</span>'+
     '<button class="btn sm pri" style="margin-left:auto" onclick="recalcIntent()">↻ Resync &amp; recalc</button></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
-      stat(trending.length,'🔥 Trending (2+ engaged)',true)+stat(rows.length,'Accounts w/ signal')+
-      stat(opens7,'Opens · 7d')+stat(reps,'Replies')+'</div></div></div>';
+      stat(trending.length,'🔥 Trending (2+ engaged)',true,"setIntentFocus('trending')",intentFocus==='trending')+
+      stat(rows.length,'Accounts w/ signal',false,"setIntentFocus(null)",intentFocus===null)+
+      stat(opens7,'Opens · 7d',false,"setIntentFocus('opens')",intentFocus==='opens')+
+      stat(reps,'Replies',false,"setIntentFocus('replies')",intentFocus==='replies')+'</div></div></div>';
   if(!rows.length){ el('view-intent').innerHTML=h+'<div class="panel"><div class="qempty">No intent signals yet — run ↻ Refresh live to pull fresh opens & replies.</div></div>'; return; }
-  const t=dataTable('intent',INT_COLS,rows,r=>"openAccount('"+r.a.id+"')",intentAction);
-  h+='<div class="panel"><div class="ph"><h3>⬆ Ranked accounts</h3><span class="sub">'+t.count+' with signal · sorted by intent · 👑=owner engaged · type in any column box to filter</span></div>'+t.html+'</div>';
+  let shown=rows;
+  if(intentFocus==='trending') shown=rows.filter(r=>r.trending);
+  else if(intentFocus==='opens') shown=rows.filter(r=>r.opens7>0);
+  else if(intentFocus==='replies') shown=rows.filter(r=>r.replies>0);
+  const focusLbl={trending:'🔥 trending only',opens:'opened in last 7d',replies:'replied only'}[intentFocus];
+  const t=dataTable('intent',INT_COLS,shown,r=>"openAccount('"+r.a.id+"')",intentAction);
+  const clr=intentFocus?' · <a href="javascript:void(0)" onclick="setIntentFocus(null)" style="color:var(--acc)">clear filter ✕</a>':'';
+  h+='<div class="panel"><div class="ph"><h3>⬆ Ranked accounts</h3><span class="sub">'+t.count+(focusLbl?' · '+focusLbl:' with signal')+' · sorted by intent · 👑=owner engaged · type in any column box to filter'+clr+'</span></div>'+t.html+'</div>';
   el('view-intent').innerHTML=h; restoreFlt();
 }
 /* ====================== ACCOUNTS ====================== */
