@@ -466,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z29';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z31';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -922,6 +922,10 @@ function authToken(){ try{ return (sb&&sb.auth&&sb.auth.session&&sb.auth.session
 const CAL_RED='11';                                   // Google "Tomato" colour = your no-show marker
 const MEET_NOISE=/(no-?reply|notification|mailer|bounce|postmaster|calendar-|@shipday\.com|group\.calendar|resource\.calendar|@google\.com|@calendly\.com|invitations@|@chilipiper\.com|@hubspot\.com)/i;
 function _selfEmail(){ return (store.__email||'').toLowerCase().trim(); }
+// Your own company domain (from your rep email) — anyone on it is a colleague, not a lead.
+function selfDomain(){ const e=_selfEmail(); return (e.split('@')[1]||'').trim(); }
+function isInternalEmail(email){ email=String(email||'').toLowerCase().trim(); if(!email.includes('@')) return false;
+  const sd=selfDomain(); return !!sd && (email.split('@')[1]||'')===sd; }
 function eventExtEmails(e){ const self=_selfEmail(); return (e.attendees||[]).map(a=>typeof a==='string'?a:(a&&a.email)).filter(x=>x&&String(x).toLowerCase()!==self&&!MEET_NOISE.test(x)); }
 const _EMAIL_RX=/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi;
 // All external guest emails on an event — attendees PLUS any pulled from the description/location.
@@ -3266,6 +3270,7 @@ function importCSV(text){
       else { const cid=uid('c');
       let warm='Cold'; const wv=(iWarm>=0?r[iWarm]:'').toLowerCase(); if(wv.includes('hot')||wv.includes('a ')||wv.includes('high'))warm='Hot'; else if(wv.includes('warm')||wv.includes('b ')||wv.includes('med'))warm='Warm';
       store.contacts[cid]={id:cid,accountId:aid,first,last,title:(iTitle>=0?r[iTitle]:'').trim(),email,phone,warmth:warm,status:'New',log:[]};
+      if(isInternalEmail(email)) store.contacts[cid].internal=true;   // colleague on our own domain — keep out of queue/Intent
       stampEngage(contact(cid),r);
       if(email)byEmail[email.toLowerCase()]=cid; if(nm)byNameAcct[aid+'|'+nm]=cid; if(pk)byPhone[pk]=cid; nc++; } }
   });
@@ -3280,17 +3285,22 @@ function emailIndex(){ const m={}; contacts().forEach(c=>{ if(c.email)m[c.email.
 function ensureCallContact(n){ const aid=newAccount(fmtPhone10(n)); const cid=uid('c');
   store.contacts[cid]={id:cid,accountId:aid,first:'Main',last:'Line',title:'',email:'',phone:'+1'+n,warmth:'Warm',status:'New',source:'CSV import',log:[]}; return cid; }
 function ensureEmailContact(email){ const aid=newAccount(email.split('@')[1]||'Imported'); const cid=uid('c');
-  store.contacts[cid]={id:cid,accountId:aid,first:email.split('@')[0],last:'',title:'',email:email,warmth:'Warm',status:'New',source:'CSV import',log:[]}; return cid; }
+  store.contacts[cid]={id:cid,accountId:aid,first:email.split('@')[0],last:'',title:'',email:email,warmth:'Warm',status:'New',source:'CSV import',log:[]};
+  if(isInternalEmail(email)) store.contacts[cid].internal=true;   // colleague on our own domain
+  return cid; }
 let __applyImport=null;
 function runImport(){ const f=__applyImport; __applyImport=null; closeDrawer(); if(f)f(); }
 function openImportPreview(kind,stats,applyFn){ __applyImport=applyFn;
   const label={call:'📞 Call log',email:'✉️ Email log'}[kind]||kind;
+  const nw=stats.newEntries!=null?stats.newEntries:stats.entries; const dup=Math.max(0,stats.entries-nw);
   el('drawer-head').innerHTML='<div style="font-weight:800;font-size:16px">Import preview</div><button class="x" onclick="closeDrawer()">×</button>';
   el('drawer-body').innerHTML='<div class="sec">'+label+' detected</div>'+
-    '<p style="margin:4px 0"><b>'+stats.entries+'</b> log entries will be added.</p>'+
+    '<p style="margin:4px 0"><b>'+nw+'</b> new '+kind+' entr'+(nw===1?'y':'ies')+' will be added'+(dup>0?' <span class="tsub">('+dup+' already logged — skipped)</span>':'')+'.</p>'+
     '<p style="margin:4px 0"><b>'+stats.match+'</b> match existing contacts · <b>'+stats.create+'</b> new contact'+(stats.create===1?'':'s')+' will be created.</p>'+
-    '<p class="tsub">Matched by '+(kind==='call'?'phone number':'email address')+'. Unmatched rows create a new contact (and account). Duplicate entries are skipped.</p>';
-  el('drawer-foot').innerHTML='<button class="btn gh" onclick="closeDrawer()">Cancel</button> <button class="btn pri" onclick="runImport()">Import '+stats.entries+' entries</button>';
+    '<p class="tsub">Only new '+(kind==='call'?'calls':'opens/replies/sends')+' are added — anything already in a contact\u2019s history is skipped automatically.</p>';
+  el('drawer-foot').innerHTML='<button class="btn gh" onclick="closeDrawer()">Cancel</button> '+
+    (nw>0?'<button class="btn pri" onclick="runImport()">Import '+nw+' new entr'+(nw===1?'y':'ies')+'</button>'
+         :'<button class="btn pri" disabled style="opacity:.5">Nothing new to import</button>');
   openDrawer();
 }
 function smartImport(text){
@@ -3316,8 +3326,15 @@ function prepCallImport(rows,idx){
   });
   if(!plan.length){toast('No call rows found');return;}
   let create=0; all.forEach(n=>{ if(!p2c[n])create++; });
-  openImportPreview('call',{entries:plan.length,match:all.size-create,create}, ()=>applyLogImport(plan,'call'));
+  openImportPreview('call',{entries:plan.length,newEntries:countNewLogEntries(plan,'call'),match:all.size-create,create}, ()=>applyLogImport(plan,'call'));
 }
+// How many planned log entries are genuinely NEW (not already in the target contact's history).
+function countNewLogEntries(plan,kind){ const map=kind==='call'?phoneIndex():emailIndex(); let nw=0;
+  plan.forEach(p=>{ const key=kind==='call'?p.n:p.email; const cid=map[key]; const c=cid?contact(cid):null;
+    if(!c||!c.log){ nw++; return; }                                   // new contact → new entry
+    if(p.ts&&c.log.some(l=>l.ts===p.ts&&l.txt===p.txt)) return;       // already logged → skip
+    nw++; });
+  return nw; }
 function prepEmailImport(rows,idx){
   const iSub=idx('subject'),iTo=idx('recipient','to email','to','email'),iSent=idx('sent at','sent_at','sent','date'),
         iOpenAt=idx('last_opened','first_opened','opened at'),iOpen=idx('open'),
@@ -3344,7 +3361,7 @@ function prepEmailImport(rows,idx){
   });
   if(!plan.length){toast('No email rows found');return;}
   let create=0; all.forEach(e=>{ if(!e2c[e])create++; });
-  openImportPreview('email',{entries:plan.length,match:all.size-create,create}, ()=>applyLogImport(plan,'email'));
+  openImportPreview('email',{entries:plan.length,newEntries:countNewLogEntries(plan,'email'),match:all.size-create,create}, ()=>applyLogImport(plan,'email'));
 }
 function applyLogImport(plan,kind){
   const map=kind==='call'?phoneIndex():emailIndex(), touched={}; let added=0;
