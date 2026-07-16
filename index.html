@@ -466,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z31';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z33';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -2467,6 +2467,27 @@ function recalcIntent(){
     toast(n?('Intent re-ranked · '+n+' new open/reply'+(n>1?'s':'')):'Intent recalculated · no new signals'); })
    .catch(()=>{ renderIntent(); toast('Intent recalculated'); });
 }
+/* Intent table columns — reuse the generic dataTable() so every column gets a
+   filter box + click-to-sort header (same UX as Accounts). Keys are chosen NOT
+   to collide with editable contact fields so rows stay read-only. */
+const INT_COLS=[
+  {k:'account',t:'Account',val:r=>r.a.name,cell:r=>'<span class="tname">'+esc(r.a.name)+'</span> '+
+    (r.trending?'<span class="tag" style="background:rgba(255,90,90,.15);color:var(--hot);border-color:var(--hot)">🔥 '+r.depth+' engaged</span>':(r.depth?'<span class="tsub">'+r.depth+' engaged</span>':''))},
+  {k:'contacts',t:'Contacts',num:true,val:r=>r.cs},
+  {k:'opens',t:'Opens 7d',num:true,val:r=>r.opens7,cell:r=>(r.opens7||'')+(r.opens30>r.opens7?' <span class="tsub">/'+r.opens30+'·30d</span>':'')},
+  {k:'replies',t:'Replies',num:true,val:r=>r.replies,cell:r=>r.replies||''},
+  {k:'calls',t:'Calls',num:true,val:r=>r.calls,cell:r=>r.calls||''},
+  {k:'inseq',t:'In sequence',num:true,val:r=>r.inSeq,cell:r=>r.inSeq?'<span class="tag cust">'+r.inSeq+'</span>':''},
+  {k:'owners',t:'Owners',num:true,val:r=>r.owners,cell:r=>r.owners?'👑'+r.owners:''},
+  {k:'last',t:'Last activity',num:true,val:r=>r.lastAct,cell:r=>r.lastAct?esc(fmtAgo(r.lastAct)):'—'},
+  {k:'intent',t:'Intent',num:true,val:r=>r.score,cell:r=>'<b style="color:var(--sig2)">'+r.score+'</b>'}
+];
+function intentAction(r){
+  const a=r.a, best=hottestContact(a);
+  const callBtn=best&&telNum(best)?'<a class="callbtn" href="tel:'+esc(telNum(best))+'" onclick="event.stopPropagation();logCall(\''+best.id+'\')" title="Call '+esc(cname(best))+'"><span class="ph">📞</span>'+esc((best.first||cname(best)).split(' ')[0])+'</a>':'<span class="tsub">no #</span>';
+  return '<span style="white-space:nowrap" onclick="event.stopPropagation()">'+callBtn+
+    ' <button class="btn sm gh" title="Dismiss — called already / not interested" onclick="dismissIntent(\''+a.id+'\')">✕</button></span>';
+}
 function renderIntent(){
   const rows=intentRows();
   const trending=rows.filter(r=>r.trending);
@@ -2477,28 +2498,9 @@ function renderIntent(){
       stat(trending.length,'🔥 Trending (2+ engaged)',true)+stat(rows.length,'Accounts w/ signal')+
       stat(opens7,'Opens · 7d')+stat(reps,'Replies')+'</div></div></div>';
   if(!rows.length){ el('view-intent').innerHTML=h+'<div class="panel"><div class="qempty">No intent signals yet — run ↻ Refresh live to pull fresh opens & replies.</div></div>'; return; }
-  const cap=rows.slice(0,150);
-  const body=cap.map(r=>{
-    const a=r.a, best=hottestContact(a), when=r.lastAct?fmtAgo(r.lastAct):'—';
-    const flag=r.trending?'<span class="tag" style="background:rgba(255,90,90,.15);color:var(--hot);border-color:var(--hot)">🔥 '+r.depth+' engaged</span>':(r.depth?'<span class="tsub">'+r.depth+' engaged</span>':'');
-    const callBtn=best&&telNum(best)?'<a class="callbtn" href="tel:'+esc(telNum(best))+'" onclick="event.stopPropagation();logCall(\''+best.id+'\')" title="Call '+esc(cname(best))+'"><span class="ph">📞</span>'+esc((best.first||cname(best)).split(' ')[0])+'</a>':'<span class="tsub">no #</span>';
-    return '<tr onclick="openAccount(\''+a.id+'\')" style="cursor:pointer">'+
-      '<td><span class="tname">'+esc(a.name)+'</span> '+flag+'</td>'+
-      '<td class="num">'+r.cs+'</td>'+
-      '<td class="num">'+(r.opens7||'')+(r.opens30>r.opens7?' <span class="tsub">/'+r.opens30+'·30d</span>':'')+'</td>'+
-      '<td class="num">'+(r.replies||'')+'</td>'+
-      '<td class="num">'+(r.calls||'')+'</td>'+
-      '<td class="num">'+(r.owners?'👑'+r.owners:'')+'</td>'+
-      '<td>'+when+'</td>'+
-      '<td class="num"><b style="color:var(--sig2)">'+r.score+'</b></td>'+
-      '<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+callBtn+
-      ' <button class="btn sm gh" title="Dismiss — called already / not interested" onclick="dismissIntent(\''+a.id+'\')">✕</button></td></tr>';
-  }).join('');
-  h+='<div class="panel"><div class="ph"><h3>⬆ Ranked accounts</h3><span class="sub">'+rows.length+' with signal · showing top '+cap.length+' · 👑=owner engaged</span></div>'+
-    '<table><thead><tr>'+
-    '<th>Account</th><th class="num">Contacts</th><th class="num">Opens 7d</th><th class="num">Replies</th><th class="num">Calls</th><th class="num">Owners</th><th>Last activity</th><th class="num">Intent</th><th></th>'+
-    '</tr></thead><tbody>'+body+'</tbody></table></div>';
-  el('view-intent').innerHTML=h;
+  const t=dataTable('intent',INT_COLS,rows,r=>"openAccount('"+r.a.id+"')",intentAction);
+  h+='<div class="panel"><div class="ph"><h3>⬆ Ranked accounts</h3><span class="sub">'+t.count+' with signal · sorted by intent · 👑=owner engaged · type in any column box to filter</span></div>'+t.html+'</div>';
+  el('view-intent').innerHTML=h; restoreFlt();
 }
 /* ====================== ACCOUNTS ====================== */
 const A_COLS=[
@@ -3288,6 +3290,38 @@ function ensureEmailContact(email){ const aid=newAccount(email.split('@')[1]||'I
   store.contacts[cid]={id:cid,accountId:aid,first:email.split('@')[0],last:'',title:'',email:email,warmth:'Warm',status:'New',source:'CSV import',log:[]};
   if(isInternalEmail(email)) store.contacts[cid].internal=true;   // colleague on our own domain
   return cid; }
+function findAccountByName(name){ const key=_dnorm(name); if(!key)return null;
+  const a=Object.values(store.accounts).find(a=>_dnorm(a.name)===key); return a?a.id:null; }
+// Resolve which contact an imported email open/reply belongs to. Prefer the real account named in
+// the export's "To Company" col over the email DOMAIN, so a gmail/yahoo address doesn't spawn a junk
+// "gmail.com" account disconnected from the business (which already holds the phone/call activity).
+// A "junk" account is one auto-named after a bare email domain (gmail.com / a-restaurant.com) from a
+// past domain-fallback import — not a real business name.
+function isJunkDomainAccount(a){ const n=String(a&&a.name||'').toLowerCase().trim();
+  return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(n) && !n.includes(' '); }
+function resolveEmailContact(email,company){
+  const em=String(email||'').toLowerCase().trim();
+  const aid=company?findAccountByName(company):null;
+  const e2c=emailIndex(); const have=e2c[em];
+  if(have){                                                        // 1) existing email contact
+    const c=contact(have), cur=c&&store.accounts[c.accountId];
+    if(aid && c && c.accountId!==aid && (!cur || isJunkDomainAccount(cur))){  // self-heal a past orphan (junk-domain or dangling acct) → real account
+      const oldAid=c.accountId, kids=Object.values(store.contacts).filter(x=>x.accountId===aid);
+      const blank=kids.find(x=>!x.email && x.id!==c.id);
+      if(blank){ (blank.log=blank.log||[]).push(...(c.log||[])); blank.email=em; if(c.lastEmailOpenTs>(+blank.lastEmailOpenTs||0))blank.lastEmailOpenTs=c.lastEmailOpenTs; if(c.replied)blank.replied=true; if(c.apolloSeq)blank.apolloSeq=c.apolloSeq; delete store.contacts[c.id]; if(!Object.values(store.contacts).some(x=>x.accountId===oldAid))delete store.accounts[oldAid]; return blank.id; }
+      c.accountId=aid; if(!Object.values(store.contacts).some(x=>x.accountId===oldAid))delete store.accounts[oldAid];  // just relocate
+    }
+    return have; }
+  if(aid){
+    const kids=Object.values(store.contacts).filter(c=>c.accountId===aid);
+    const blank=kids.find(c=>!c.email);                            // 2) attach onto phone-only contact (e.g. Main Line)
+    if(blank){ blank.email=em; if(isInternalEmail(em))blank.internal=true; return blank.id; }
+    const cid=uid('c');                                            // 3) sibling email contact under the right account
+    store.contacts[cid]={id:cid,accountId:aid,first:em.split('@')[0],last:'',title:'',email:em,warmth:'Warm',status:'New',source:'CSV import',log:[]};
+    if(isInternalEmail(em)) store.contacts[cid].internal=true;
+    return cid; }
+  return ensureEmailContact(em);                                   // 4) no company match → domain fallback
+}
 let __applyImport=null;
 function runImport(){ const f=__applyImport; __applyImport=null; closeDrawer(); if(f)f(); }
 function openImportPreview(kind,stats,applyFn){ __applyImport=applyFn;
@@ -3345,12 +3379,14 @@ function prepEmailImport(rows,idx){
   const iSub=idx('subject'),iTo=idx('recipient','to email','to','email'),iSent=idx('sent at','sent_at','sent','date'),
         iOpenAt=idx('last_opened','first_opened','opened at'),iOpen=idx('open'),
         iCnt=idx('pixel_visits','opens','visits','count'),
-        iClick=idx('click'),iRep=idx('replied','reply'),iSeq=idx('sequence','campaign');
+        iClick=idx('click'),iRep=idx('replied','reply'),iSeq=idx('sequence','campaign'),
+        iCo=idx('to company','company','account','organization');
   const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='1'; };
   const plan=[], all=new Set(), e2c=emailIndex();
   rows.slice(1).forEach(r=>{
     let email=String(iTo>=0?r[iTo]:'').toLowerCase().trim(); const m=email.match(/<([^>]+)>/); if(m)email=m[1];
     email=email.split(/[;, ]/)[0].trim(); if(!email||!email.includes('@'))return;
+    const company=(iCo>=0?String(r[iCo]||'').trim():'');
     const sub=(iSub>=0?r[iSub]:'')||'(no subject)';
     const sentTs=Date.parse((iSent>=0?r[iSent]:'')||'')||0;
     let openTs=Date.parse((iOpenAt>=0?r[iOpenAt]:'')||'')||0;
@@ -3359,10 +3395,10 @@ function prepEmailImport(rows,idx){
     if(!openTs&&openedBool) openTs=sentTs||Date.now();   // Apollo gives no open time → use send date as proxy
     if(openedBool&&!cnt) cnt=1;
     const seq=iSeq>=0?String(r[iSeq]||'').trim():'';
-    if(sentTs) plan.push({email,ts:sentTs,txt:'📧 Sent: '+sub,kind:'sent',seq});
-    if(openTs&&cnt>0) plan.push({email,ts:openTs,txt:'👀 Opened: '+sub+(cnt>1?' ('+cnt+'x)':''),kind:'open',seq});
-    if(iClick>=0&&yes(r[iClick])) plan.push({email,ts:openTs||sentTs||Date.now(),txt:'🔗 Clicked link: '+sub,kind:'open',seq});
-    if(iRep>=0&&yes(r[iRep])) plan.push({email,ts:sentTs||Date.now(),txt:'↩️ Replied: '+sub,kind:'reply',seq});
+    if(sentTs) plan.push({email,company,ts:sentTs,txt:'📧 Sent: '+sub,kind:'sent',seq});
+    if(openTs&&cnt>0) plan.push({email,company,ts:openTs,txt:'👀 Opened: '+sub+(cnt>1?' ('+cnt+'x)':''),kind:'open',seq});
+    if(iClick>=0&&yes(r[iClick])) plan.push({email,company,ts:openTs||sentTs||Date.now(),txt:'🔗 Clicked link: '+sub,kind:'open',seq});
+    if(iRep>=0&&yes(r[iRep])) plan.push({email,company,ts:sentTs||Date.now(),txt:'↩️ Replied: '+sub,kind:'reply',seq});
     all.add(email);
   });
   if(!plan.length){toast('No email rows found');return;}
@@ -3371,8 +3407,10 @@ function prepEmailImport(rows,idx){
 }
 function applyLogImport(plan,kind){
   const map=kind==='call'?phoneIndex():emailIndex(), touched={}; let added=0;
-  plan.forEach(p=>{ const key=kind==='call'?p.n:p.email; let cid=map[key];
-    if(!cid){ cid=kind==='call'?ensureCallContact(p.n):ensureEmailContact(p.email); map[key]=cid; }
+  plan.forEach(p=>{ const key=kind==='call'?p.n:p.email;
+    // Calls key off phone (map). Emails ALWAYS go through resolveEmailContact so a past orphan can self-heal
+    // to the right account even though its email is already indexed.
+    let cid=kind==='call'?(map[key]||ensureCallContact(p.n)):resolveEmailContact(p.email,p.company); map[key]=cid;
     const c=contact(cid); if(!c)return; c.log=c.log||[];
     if(kind==='email'){ if(p.seq) c.apolloSeq=p.seq; if(p.kind==='reply') c.replied=true; }
     if(c.log.some(l=>l.txt===p.txt&&(!p.ts||l.ts===p.ts)))return;   // same txt (+ts if known) → skip dupe
