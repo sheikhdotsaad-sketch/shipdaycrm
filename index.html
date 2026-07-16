@@ -207,6 +207,8 @@ select.cin:hover{border-color:var(--sig)}
 .dh{display:flex;align-items:flex-start;gap:10px;padding:15px 17px;border-bottom:1px solid var(--line)}
 .dh .x{margin-left:auto;font-size:20px;color:var(--mut);line-height:1;padding:2px 6px}
 .dh .x:hover{color:var(--ink)}
+.dh .back{font-size:18px;color:var(--mut);line-height:1;padding:3px 9px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:transparent;align-self:center}
+.dh .back:hover{color:var(--ink);border-color:var(--acc)}
 .db{overflow-y:auto;padding:16px 17px;flex:1}
 .fld{margin-bottom:11px}
 .fld label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:4px}
@@ -417,6 +419,7 @@ small.hint{color:var(--dim);font-size:11px}
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="retierBook()">Re-tier book by heat</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="openDedupe()">Find duplicates</button>
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="fixCalNames()">Clean calendar names</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="restoreAutoBackup()">Restore auto-backup</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="reloadSeed()">Reload imported data</button>
       <button class="btn sm gh" style="width:100%;color:var(--hot)" onclick="resetAll()">Reset all</button>
@@ -466,7 +469,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z34';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z40';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -936,6 +939,22 @@ function eventGuestEmails(e){ const self=_selfEmail(), seen={}, out=[];
   [...fromAtt,...fromText].forEach(x=>{ if(!x)return; x=String(x).toLowerCase().trim(); if(x===self||MEET_NOISE.test(x)||seen[x])return; seen[x]=1; out.push(x); });
   return out; }
 function matchEventContact(e){ const cm=byEmail(); for(const em of eventGuestEmails(e)){ const c=cm[String(em).toLowerCase().trim()]; if(c) return c; } return null; }
+const GENERIC_DOM=new Set(['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com','aol.com','me.com','live.com','msn.com','proton.me','protonmail.com','gmx.com','ymail.com','comcast.net']);
+// When a calendar guest is NOT an exact contact, look for a record that's probably the SAME lead already
+// in the book — so you convert into it instead of creating a duplicate. Returns {rec,type,reason} or null.
+function possibleEventMatch(e){
+  if(matchEventContact(e)) return null;                        // exact email hit already handled elsewhere
+  for(const em of eventGuestEmails(e)){                        // 1) same company email domain (non-generic)
+    const dom=(String(em).split('@')[1]||'').toLowerCase();
+    if(!dom||GENERIC_DOM.has(dom)||dom===selfDomain()) continue;
+    const c=contacts().find(x=>((x.email||'').split('@')[1]||'').toLowerCase()===dom);
+    if(c) return {rec:c,type:'contact',reason:'same email domain @'+dom}; }
+  const nm=_dnorm(_prospectFromEvent(e).name||'');             // 2) fuzzy name match on account or contact
+  if(nm && nm.length>=4){
+    const a=accounts().find(x=>_dnorm(x.name)===nm); if(a) return {rec:a,type:'account',reason:'same name'};
+    const c=contacts().find(x=>_dnorm(cname(x))===nm); if(c) return {rec:c,type:'contact',reason:'same name'}; }
+  return null;
+}
 function calReviewed(){ store.__cal=store.__cal||{}; store.__cal.reviewed=store.__cal.reviewed||{}; return store.__cal.reviewed; }
 function classifyEvent(e){
   const st=new Date(e.start).getTime()||0, past=st<Date.now();
@@ -970,12 +989,21 @@ function meetingReviewPanel(){
   if(!todo.length) return '';
   todo.sort((a,b)=>new Date(b.e.start)-new Date(a.e.start));
   let h='<div class="panel"><div class="ph"><h3>🗓 Meeting review</h3><span class="sub">'+todo.length+' past meetings to classify · 🔴 red = didn\'t close (Lost or No-show — you decide)</span></div><table><tbody>';
-  h+=todo.slice(0,50).map(({e,cls})=>{ const c=cls.c, nm=c?cname(c):(eventExtEmails(e)[0]||''), sug=cls.suggest;
+  h+=todo.slice(0,50).map(({e,cls})=>{ const c=cls.c, sug=cls.suggest;
+    const hasGuest=eventGuestEmails(e).length>0, isNew=!c&&hasGuest;      // external guest with no CRM record = a lead we don't have yet
+    const nm=c?cname(c):(_prospectFromEvent(e).name||eventExtEmails(e)[0]||'');
     const inPipe=c&&findEventDeal(c);
+    const pm=isNew?possibleEventMatch(e):null;                 // likely already in the book under another record
+    const pmName=pm?(pm.type==='account'?pm.rec.name:cname(pm.rec)):'';
+    const openPm=pm?(pm.type==='account'?'openAccount(\''+pm.rec.id+'\')':'openContact(\''+pm.rec.id+'\')'):'';
+    const badge=c?'':(pm?' <span class="tag" style="background:rgba(230,160,0,.15);color:#e0a000;border-color:#e0a000" title="'+esc(pmName+' — '+pm.reason)+'">⚠ maybe in CRM</span>':(isNew?' <span class="tag" title="Not in your CRM yet">🆕 new</span>':''));
     const btn=(o,lbl)=>'<button class="btn sm '+(sug===o?'pri':'gh')+'" onclick="event.stopPropagation();applyMeetingOutcome(\''+esc(e.id)+'\',\''+o+'\')">'+lbl+'</button>';
+    const matchBtn=pm?'<button class="btn sm gh" title="Open the likely existing record: '+esc(pmName)+' ('+esc(pm.reason)+')" onclick="event.stopPropagation();'+openPm+'">Open match ▸</button> ':'';
+    const leadBtn=isNew?'<button class="btn sm gh" title="'+(pm?'Not a match — ':'')+'create the account + contact only (no deal)" onclick="event.stopPropagation();leadFromEvent(\''+esc(e.id)+'\')">＋ '+(pm?'New lead':'Lead')+'</button> ':'';
     const pipeBtn=inPipe?'<span class="tag cust">In pipeline ✓</span> ':'<button class="btn sm gh" onclick="event.stopPropagation();meetingToPipeline(\''+esc(e.id)+'\')">＋ Pipeline</button> ';
-    return '<tr'+(c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'')+'><td class="tname">'+(e.colorId===CAL_RED?'🔴 ':'')+esc(e.summary)+'<div class="tsub">'+esc(fmtDT(e.start))+(nm?' · '+esc(nm):'')+'</div></td>'+
-      '<td style="text-align:right;white-space:nowrap">'+pipeBtn+btn('won','Won')+' '+btn('lost','Lost')+' '+btn('noshow','No show')+' '+btn('ignore','Ignore')+'</td></tr>';
+    const rowClick=c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':(pm?' style="cursor:pointer" onclick="'+openPm+'" title="Likely already in CRM — click to open '+esc(pmName)+'"':(isNew?' style="cursor:pointer" onclick="leadFromEvent(\''+esc(e.id)+'\')" title="Click to add as a lead & open"':''));
+    return '<tr'+rowClick+'><td class="tname">'+(e.colorId===CAL_RED?'🔴 ':'')+esc(e.summary)+badge+'<div class="tsub">'+esc(fmtDT(e.start))+(nm?' · '+esc(nm):'')+'</div></td>'+
+      '<td style="text-align:right;white-space:nowrap">'+matchBtn+leadBtn+pipeBtn+btn('won','Won')+' '+btn('lost','Lost')+' '+btn('noshow','No show')+' '+btn('ignore','Ignore')+'</td></tr>';
   }).join('');
   h+='</tbody></table></div>';
   return h;
@@ -986,13 +1014,49 @@ function meetingReviewPanel(){
 function _prospectFromEvent(e){
   const email=(eventGuestEmails(e)[0]||'').toLowerCase();
   let nm=String(e.summary||'').replace(/[|/:–—-]+/g,' ');
-  const rep=(senderName()||'').trim();
-  [rep,'saad sheikh','saad','abba','embert','shipday','intro','introduction','introductions','demo','meeting','call'].forEach(t=>{
-    if(t) nm=nm.replace(new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','gi'),' '); });
-  nm=nm.replace(/\bwith\b|\band\b|&/gi,' ').replace(/\s+/g,' ').trim();
+  // Strip the rep's & our own name as INDIVIDUAL tokens (first, last, any order/spacing)
+  // so a title like "Andrew Fraga <> Saad Sheikh" can't leave "Sheikh" glued to the prospect.
+  const kill=new Set(['abba','embert','shipday','intro','introduction','introductions','demo','meeting','call','sync','chat','zoom','google','meet']);
+  const selfLocal=(_selfEmail().split('@')[0]||'');            // e.g. saad.sheikh
+  [...(senderName()||'').split(/\s+/), ...selfLocal.split(/[._\-]+/)].forEach(t=>{
+    t=String(t||'').toLowerCase().trim(); if(t.length>=2) kill.add(t); });   // saad, sheikh, …
+  kill.forEach(t=>{ nm=nm.replace(new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','gi'),' '); });
+  nm=nm.replace(/\bwith\b|\band\b|&/gi,' ')
+       .replace(/\([^)]*\)/g,' ')            // drop parenthetical asides e.g. (Chick and Dip)
+       .replace(/[<>|,:;/\\]+/g,' ')         // stray connector punctuation left by "A <> B"
+       .replace(/\s+/g,' ').trim();
   if(nm.length<2){ nm=(email.split('@')[0]||'lead').replace(/[._0-9]+/g,' ').trim().replace(/\b\w/g,ch=>ch.toUpperCase()); }
   return {email,name:nm};
 }
+// The rep's / our own name tokens (saad, sheikh, …) that must never end up in a prospect name.
+function repKillTokens(){ const kill=new Set(); const selfLocal=(_selfEmail().split('@')[0]||'');
+  [...(senderName()||'').split(/\s+/), ...selfLocal.split(/[._\-]+/)].forEach(t=>{ t=String(t||'').toLowerCase().trim(); if(t.length>=2) kill.add(t); });
+  return kill; }
+function stripRepFromName(s){ let nm=String(s||'');
+  repKillTokens().forEach(t=>{ nm=nm.replace(new RegExp('\\b'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','gi'),' '); });
+  return nm.replace(/\([^)]*\)/g,' ').replace(/[<>|,:;/\\]+/g,' ').replace(/\s+/g,' ').trim(); }
+// Find calendar-created contacts whose stored name still has our own name leaked into it.
+function calNameFixScan(){ const out=[];
+  Object.values(store.contacts).forEach(c=>{ if(String(c.source||'').toLowerCase()!=='calendar') return;
+    const full=[c.first,c.last].filter(Boolean).join(' ').trim(); if(!full) return;
+    const clean=stripRepFromName(full);
+    if(clean && clean!==full && clean.length>=2){ const parts=clean.split(/\s+/); out.push({id:c.id,from:full,to:clean,first:parts.shift()||'',last:parts.join(' ')}); } });
+  return out; }
+// One-click reversible cleanup: strip the leaked rep name from calendar contacts (and rename the
+// person-named account it spawned). Snapshot → Undo toast.
+function fixCalNames(){ const hits=calNameFixScan();
+  if(!hits.length){ toast('No calendar name leaks found — all clean'); return; }
+  const preview=hits.slice(0,6).map(h=>'• '+h.from+'  →  '+h.to).join('\n');
+  if(!confirm('Clean '+hits.length+' calendar-created name'+(hits.length>1?'s':'')+' where your own name leaked in?\n\n'+preview+(hits.length>6?'\n…and '+(hits.length-6)+' more':'')+'\n\nReversible — Undo appears after.')) return;
+  const snap=hits.map(h=>{ const c=store.contacts[h.id], a=c&&store.accounts[c.accountId]; return {cid:h.id,first:c.first,last:c.last,aid:a?a.id:null,aname:a?a.name:null}; });
+  hits.forEach(h=>{ const c=store.contacts[h.id]; if(!c)return; const oldFull=[c.first,c.last].filter(Boolean).join(' ').trim();
+    c.first=h.first; c.last=h.last; stampU(c);
+    const a=store.accounts[c.accountId]; if(a && _dnorm(a.name)===_dnorm(oldFull)){ a.name=h.to; stampU(a); } });
+  save(); renderActive();
+  toast('Cleaned '+hits.length+' name'+(hits.length>1?'s':''), ()=>{
+    snap.forEach(s=>{ const c=store.contacts[s.cid]; if(c){ c.first=s.first; c.last=s.last; stampU(c); }
+      if(s.aid&&store.accounts[s.aid]){ store.accounts[s.aid].name=s.aname; stampU(store.accounts[s.aid]); } });
+    save(); renderActive(); toast('Reverted'); }); }
 // Upcoming events → {e, c?}  (c set = known contact; else it's a new prospect with an external guest).
 function calDemosToAdopt(){
   const cal=store.__cal||{}, evs=cal.events||[], now=Date.now(); const out=[];
@@ -1050,12 +1114,16 @@ function calDemoPanel(){
   const pending=list.filter(x=>!x.d).length;
   let h='<div class="panel"><div class="ph"><h3>📅 Upcoming demos</h3><span class="sub">'+list.length+' on your calendar'+(pending?' · '+pending+' not in pipeline yet':' · all tracked')+'</span></div><table><tbody>';
   h+=list.slice(0,30).map(({e,c,d})=>{ const nm=c?cname(c):_prospectFromEvent(e).name; const acc=c&&acct(c.accountId)?acct(c.accountId).name:'';
-    const tag=c?'':' <span class="tag">new</span>';
-    const click=d?' style="cursor:pointer" onclick="openDeal(\''+d.id+'\')"':(c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'');
+    const pm=(!c&&!d)?possibleEventMatch(e):null;
+    const pmName=pm?(pm.type==='account'?pm.rec.name:cname(pm.rec)):'';
+    const openPm=pm?(pm.type==='account'?'openAccount(\''+pm.rec.id+'\')':'openContact(\''+pm.rec.id+'\')'):'';
+    const tag=c?'':(pm?' <span class="tag" style="background:rgba(230,160,0,.15);color:#e0a000;border-color:#e0a000" title="'+esc(pmName+' — '+pm.reason)+'">⚠ maybe in CRM</span>':' <span class="tag">new</span>');
+    const click=d?' style="cursor:pointer" onclick="openDeal(\''+d.id+'\')"':(c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':(pm?' style="cursor:pointer" onclick="'+openPm+'" title="Likely already in CRM — open '+esc(pmName)+'"':''));
     let actions;
     if(d){ actions='<span class="tag cust">In pipeline · '+esc(d.stage)+'</span>'; }
-    else { const leadBtn=c?'':'<button class="btn sm gh" onclick="event.stopPropagation();leadFromEvent(\''+esc(e.id)+'\')">＋ Lead</button> ';
-      actions=leadBtn+'<button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Opportunity</button>'; }
+    else { const matchBtn=pm?'<button class="btn sm gh" title="Open likely existing record: '+esc(pmName)+' ('+esc(pm.reason)+')" onclick="event.stopPropagation();'+openPm+'">Open match ▸</button> ':'';
+      const leadBtn=c?'':'<button class="btn sm gh" onclick="event.stopPropagation();leadFromEvent(\''+esc(e.id)+'\')">＋ '+(pm?'New lead':'Lead')+'</button> ';
+      actions=matchBtn+leadBtn+'<button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Opportunity</button>'; }
     return '<tr'+click+'><td class="tname">'+esc(e.summary||nm)+tag+'<div class="tsub">'+esc(fmtDT(e.start))+' · '+esc(nm)+(acc?' · '+esc(acc):'')+'</div></td>'+
     '<td style="text-align:right;white-space:nowrap">'+actions+'</td></tr>'; }).join('');
   h+='</tbody></table></div>';
@@ -2831,7 +2899,8 @@ function delField(ent,id,i){ const r=recOf(ent,id); if(!r)return; const k=keyAt(
 /* ====================== CONTACT DRAWER ====================== */
 function openContact(id){
   const c=contact(id); if(!c)return; const a=acct(c.accountId); curDrawer={ent:'c',id:id};
-  el('drawer-head').innerHTML='<div><div style="font-weight:800;font-size:16px">'+esc(cname(c))+'</div>'+
+  el('drawer-head').innerHTML=(a?'<button class="back" title="Back to account: '+esc(a.name)+'" onclick="openAccount(\''+a.id+'\')">‹</button>':'')+
+    '<div><div style="font-weight:800;font-size:16px">'+esc(cname(c))+'</div>'+
     '<div class="tsub">'+esc(c.title||'')+(a?' · <a onclick="event.stopPropagation();openAccount(\''+a.id+'\')">'+esc(a.name)+'</a>':'')+'</div></div>'+
     warmBadge(c.warmth)+'<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
@@ -3069,6 +3138,20 @@ function dedupeScan(){
   Object.keys(ph).forEach(k=>{ const recs=ph[k]; if(recs.length<2) return;
     const ids=recs.map(r=>r.id).slice().sort();
     if(ids.some((id,i)=>i>0&&alreadyEmailed.has([ids[i-1],id].join(',')))) return; add('contact','phone',recs); });
+  // accounts linked by a SHARED contact phone or email = the SAME business under two names — e.g. a
+  // calendar-created person-named account ("Andrew Fraga") + the real business, or an import dupe.
+  // Only fires when 2+ DISTINCT accounts share the identifier; skips sets already caught by name.
+  const seenAcct=new Set();
+  groups.filter(g=>g.type==='account').forEach(g=>seenAcct.add(g.recs.map(r=>r.id).slice().sort().join(',')));
+  const byPhone={}, byMail={};
+  contacts().forEach(c=>{ if(!c.accountId||!store.accounts[c.accountId]) return;
+    [c.phone,c.mobile].forEach(pp=>{ const p=_dphone(pp||''); if(p.length>=10){ (byPhone[p]=byPhone[p]||new Set()).add(c.accountId); } });
+    const e=(c.email||'').trim().toLowerCase(); if(e.includes('@')&&!isInternalEmail(e)) (byMail[e]=byMail[e]||new Set()).add(c.accountId); });
+  const addAcctLink=(reason,map)=>Object.values(map).forEach(set=>{ if(set.size<2) return;
+    const recs=[...set].map(id=>store.accounts[id]).filter(Boolean); if(recs.length<2) return;
+    const key=recs.map(r=>r.id).slice().sort().join(','); if(seenAcct.has(key)) return; seenAcct.add(key); add('account',reason,recs); });
+  addAcctLink('shared phone',byPhone);
+  addAcctLink('shared email',byMail);
   return groups;
 }
 // Merge `drop` into `keep`: keep wins on every filled field, drop only fills blanks.
@@ -3125,8 +3208,8 @@ function dedupeRow(g,gi,r){
     '<button class="btn sm pri" onclick="dedupeMergeIdx('+gi+',\''+r.id+'\')" title="Keep this record; merge the other'+(g.recs.length>2?'s':'')+' into it">Keep this ▸ merge</button></div>';
 }
 function dedupeCard(g,gi){
-  const rlabel={name:'Same name',email:'Same email',phone:'Same phone'}[g.reason]||'Possible match';
-  const caveat=g.reason==='phone'?' <span class="tsub" style="font-size:10px;font-weight:400">— could be a shared location line, check first</span>':'';
+  const rlabel={name:'Same name',email:'Same email',phone:'Same phone','shared phone':'Shared phone — same business?','shared email':'Shared email — same business?'}[g.reason]||'Possible match';
+  const caveat=(g.reason==='phone'||g.reason==='shared phone'||g.reason==='shared email')?' <span class="tsub" style="font-size:10px;font-weight:400">— could be a shared location line, check first</span>':'';
   let h='<div class="panel" style="margin:0"><div class="ph" style="padding:9px 12px"><h3 style="font-size:13px">'+rlabel+caveat+'</h3>'+
     '<span class="sub">'+g.recs.length+' records</span></div><div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">';
   g.recs.forEach(r=>{ h+=dedupeRow(g,gi,r); });
