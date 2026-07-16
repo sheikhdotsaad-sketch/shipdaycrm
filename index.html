@@ -466,7 +466,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z28';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul15·z29';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -1030,14 +1030,30 @@ function leadFromEvent(eventId){
   toast('Added as lead', ()=>{ delete store.contacts[cid]; delete store.accounts[aid]; save(); renderActive(); });
   openContact(cid);
 }
+// ALL upcoming external-guest meetings (demos) — whether or not they're already a deal.
+// {e, c(known contact|null), d(existing deal|null)}. Internal all-staff blocks (no guest) are skipped.
+function calUpcomingDemos(){
+  const cal=store.__cal||{}, evs=cal.events||[], now=Date.now(); const out=[];
+  evs.forEach(e=>{ const st=new Date(e.start).getTime()||0; if(st<now-6*36e5) return;   // upcoming (incl. last 6h)
+    const c=matchEventContact(e);
+    if(!c && !eventGuestEmails(e).length) return;                                        // no guest = internal block
+    out.push({e,c,d:c?findEventDeal(c):null}); });
+  out.sort((a,b)=>new Date(a.e.start)-new Date(b.e.start));
+  return out;
+}
 function calDemoPanel(){
-  const list=calDemosToAdopt(); if(!list.length) return '';
-  let h='<div class="panel"><div class="ph"><h3>📅 Booked on Calendar</h3><span class="sub">'+list.length+' upcoming demo'+(list.length===1?'':'s')+' — convert to a lead or opportunity</span></div><table><tbody>';
-  h+=list.slice(0,20).map(({e,c})=>{ const nm=c?cname(c):_prospectFromEvent(e).name; const acc=c&&acct(c.accountId)?acct(c.accountId).name:'';
-    const tag=c?'':' <span class="tag">new</span>'; const click=c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'';
-    const leadBtn=c?'':'<button class="btn sm gh" onclick="event.stopPropagation();leadFromEvent(\''+esc(e.id)+'\')">＋ Lead</button> ';
+  const list=calUpcomingDemos(); if(!list.length) return '';
+  const pending=list.filter(x=>!x.d).length;
+  let h='<div class="panel"><div class="ph"><h3>📅 Upcoming demos</h3><span class="sub">'+list.length+' on your calendar'+(pending?' · '+pending+' not in pipeline yet':' · all tracked')+'</span></div><table><tbody>';
+  h+=list.slice(0,30).map(({e,c,d})=>{ const nm=c?cname(c):_prospectFromEvent(e).name; const acc=c&&acct(c.accountId)?acct(c.accountId).name:'';
+    const tag=c?'':' <span class="tag">new</span>';
+    const click=d?' style="cursor:pointer" onclick="openDeal(\''+d.id+'\')"':(c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':'');
+    let actions;
+    if(d){ actions='<span class="tag cust">In pipeline · '+esc(d.stage)+'</span>'; }
+    else { const leadBtn=c?'':'<button class="btn sm gh" onclick="event.stopPropagation();leadFromEvent(\''+esc(e.id)+'\')">＋ Lead</button> ';
+      actions=leadBtn+'<button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Opportunity</button>'; }
     return '<tr'+click+'><td class="tname">'+esc(e.summary||nm)+tag+'<div class="tsub">'+esc(fmtDT(e.start))+' · '+esc(nm)+(acc?' · '+esc(acc):'')+'</div></td>'+
-    '<td style="text-align:right;white-space:nowrap">'+leadBtn+'<button class="btn sm pri" onclick="event.stopPropagation();adoptCalendarDemo(\''+esc(e.id)+'\')">＋ Opportunity</button></td></tr>'; }).join('');
+    '<td style="text-align:right;white-space:nowrap">'+actions+'</td></tr>'; }).join('');
   h+='</tbody></table></div>';
   return h;
 }
