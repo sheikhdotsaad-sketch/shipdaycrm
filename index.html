@@ -3314,13 +3314,19 @@ function smartImport(text){
 }
 function prepCallImport(rows,idx){
   const iDir=idx('direction'),iFrom=idx('from'),iTo=idx('to'),iDur=idx('duration'),
-        iWhen=idx('answeredat','completedat','createdat','date','time'),iType=idx('type');
+        iType=idx('type');
+  // Every time-ish column, in preference order. Missed calls leave answeredAt blank,
+  // so we fall back through the list to the first cell that actually parses.
+  const H=rows[0].map(h=>h.toLowerCase().trim());
+  const whenCols=[]; ['answeredat','completedat','createdat','date','time'].forEach(x=>{
+    H.forEach((h,i)=>{ if((h===x||h.includes(x))&&!whenCols.includes(i)) whenCols.push(i); }); });
+  const rowTs=r=>{ for(const i of whenCols){ const t=Date.parse(String(r[i]||'').trim()); if(t) return t; } return 0; };
   const plan=[], all=new Set(), p2c=phoneIndex();
   rows.slice(1).forEach(r=>{
     if(iType>=0 && String(r[iType]||'').toLowerCase()!=='call') return;
     const dir=String(iDir>=0?r[iDir]:'').toLowerCase(), out=dir.includes('out');
     const n=norm10(out?(iTo>=0?r[iTo]:''):(iFrom>=0?r[iFrom]:'')); if(!n) return;
-    const dur=parseInt(iDur>=0?r[iDur]:0)||0, ts=Date.parse((iWhen>=0?r[iWhen]:'')||'')||0;
+    const dur=parseInt(iDur>=0?r[iDur]:0)||0, ts=rowTs(r);
     const txt=dur>0?((out?'📞 Called → ':'📞 Inbound call ← ')+fmtDur(dur)):(out?'📞 Called → no answer':'📞 Missed call ←');
     plan.push({n,ts,txt}); all.add(n);
   });
@@ -3332,7 +3338,7 @@ function prepCallImport(rows,idx){
 function countNewLogEntries(plan,kind){ const map=kind==='call'?phoneIndex():emailIndex(); let nw=0;
   plan.forEach(p=>{ const key=kind==='call'?p.n:p.email; const cid=map[key]; const c=cid?contact(cid):null;
     if(!c||!c.log){ nw++; return; }                                   // new contact → new entry
-    if(p.ts&&c.log.some(l=>l.ts===p.ts&&l.txt===p.txt)) return;       // already logged → skip
+    if(c.log.some(l=>l.txt===p.txt&&(!p.ts||l.ts===p.ts))) return;    // same txt (+ts if known) → skip
     nw++; });
   return nw; }
 function prepEmailImport(rows,idx){
@@ -3369,7 +3375,7 @@ function applyLogImport(plan,kind){
     if(!cid){ cid=kind==='call'?ensureCallContact(p.n):ensureEmailContact(p.email); map[key]=cid; }
     const c=contact(cid); if(!c)return; c.log=c.log||[];
     if(kind==='email'){ if(p.seq) c.apolloSeq=p.seq; if(p.kind==='reply') c.replied=true; }
-    if(p.ts&&c.log.some(l=>l.ts===p.ts&&l.txt===p.txt))return;
+    if(c.log.some(l=>l.txt===p.txt&&(!p.ts||l.ts===p.ts)))return;   // same txt (+ts if known) → skip dupe
     c.log.push({ts:p.ts||Date.now(),txt:p.txt,sys:true}); added++;
     if(kind==='call'){ c.callCount=(+c.callCount||0)+1; if(p.ts>(+c.lastContactedTs||0)){ c.lastContactedTs=p.ts; c.lastContacted=fmtD(new Date(p.ts)); } }
     else { if(p.kind==='open'&&p.ts>(+c.lastEmailOpenTs||0)) c.lastEmailOpenTs=p.ts;
