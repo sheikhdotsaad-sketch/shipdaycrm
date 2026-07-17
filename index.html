@@ -387,6 +387,7 @@ small.hint{color:var(--dim);font-size:11px}
     </div>
     <div class="card" id="filter-card">
       <div class="fsec" data-tabs="hotlist pipeline contacts accounts closed live"><h4 style="margin:0 0 6px">Warmth</h4><div class="frow" id="f-warmth"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">Open right now</h4><div class="frow" id="f-hours"></div></div>
       <div class="fsec" data-tabs="pipeline"><h4 style="margin:12px 0 6px">Stage</h4><div class="frow" id="f-stage"></div></div>
       <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Decision-makers 👑</h4><div class="frow" id="f-owner"></div></div>
       <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Contact info</h4><div class="frow" id="f-have"></div></div>
@@ -481,7 +482,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z56';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z57';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -749,7 +750,7 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), hours:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
@@ -773,12 +774,17 @@ function buildFilters(){
   { const pc={},cc={};
     accounts().forEach(a=>{ const p=posOf(a); if(p)pc[p]=(pc[p]||0)+1; const c=cuiOf(a); if(c)cc[c]=(cc[c]||0)+1; });
     chipSet('f-pos','pos',pc,10); chipSet('f-cuisine','cuisine',cc,14); }
+  // Open-right-now chips — computed live from each account's hours
+  { const hb=el('f-hours'); if(hb){ let o=0,c=0;
+    accounts().forEach(a=>{ const v=hoursOpenNow(a); if(v===true)o++; else if(v===false)c++; });
+    const HB=[['open','🟢 Open now ('+o+')'],['closed','🔴 Closed now ('+c+')'],['nohours','❓ No hours']];
+    hb.innerHTML=HB.map(([k,lbl])=>'<span class="fchip '+(UI.hours.has(k)?'on':'')+'" onclick="tgl(\'hours\',\''+k+'\')">'+lbl+'</span>').join(''); } }
 }
 function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFilters();
   // location bubbles filter accounts; the rest filter people — jump to the right tab so the filter takes effect
   const acctTabs=['accounts','closed','live'], peopleTabs=['contacts','leads','hotlist'];
   if(k==='loc'){ if(!acctTabs.includes(UI.tab)){ switchTab('accounts'); return; } }
-  else if(k==='pos'||k==='cuisine'){ if(!acctTabs.includes(UI.tab)&&!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; } }
+  else if(k==='pos'||k==='cuisine'||k==='hours'){ if(!acctTabs.includes(UI.tab)&&!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; } }
   else if(!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; }
   renderActive(); }
 // multi = brand parent or one of its locations; single = standalone account
@@ -793,6 +799,9 @@ function cuiOf(a){ return (a&&a.cuisine||'').trim(); }
 function matchPosCui(a){
   if(UI.pos.size && !UI.pos.has(posOf(a))) return false;
   if(UI.cuisine.size && !UI.cuisine.has(cuiOf(a))) return false;
+  if(UI.hours.size){ const v=hoursOpenNow(a);
+    const k=v===true?'open':v===false?'closed':'nohours';
+    if(!UI.hours.has(k)) return false; }
   return true; }
 function matchQ(str){ if(!UI.q) return true; return (str||'').toLowerCase().includes(UI.q); }
 
@@ -1717,7 +1726,7 @@ function prefilter(list){ return list.filter(c=>{
     if(UI.opens.has('none')&&op) return false; }
   if(UI.owner.size){ const own=isOwner(c); if(UI.owner.has('own')&&!own) return false; if(UI.owner.has('non')&&own) return false; }
   if(UI.assignee.size){ const who=c.assignee||''; const ok=(UI.assignee.has('__none')&&!who)||(who&&UI.assignee.has(who)); if(!ok) return false; }
-  if((UI.pos.size||UI.cuisine.size)&&!matchPosCui(acct(c.accountId))) return false;
+  if((UI.pos.size||UI.cuisine.size||UI.hours.size)&&!matchPosCui(acct(c.accountId))) return false;
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.email2||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
