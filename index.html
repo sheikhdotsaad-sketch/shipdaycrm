@@ -392,6 +392,8 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Contact info</h4><div class="frow" id="f-have"></div></div>
       <div class="fsec" data-tabs="hotlist contacts"><h4 style="margin:12px 0 6px">Email opens</h4><div class="frow" id="f-opens"></div></div>
       <div class="fsec" data-tabs="accounts closed live"><h4 style="margin:12px 0 6px">Locations</h4><div class="frow" id="f-loc"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">POS</h4><div class="frow" id="f-pos"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">Cuisine</h4><div class="frow" id="f-cuisine"></div></div>
       <div class="fsec" data-tabs="hotlist pipeline contacts accounts closed live"><h4 style="margin:12px 0 6px">Assigned to</h4><div class="frow" id="f-assignee"></div></div>
     </div>
     <div class="card cfg-toggle">
@@ -479,7 +481,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul16·z48';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z50';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -703,6 +705,7 @@ function money(n){ n=+n||0; return '$'+n.toLocaleString('en-US',{maximumFraction
 function fmtD(d){ if(!d) return ''; const x=new Date(d); if(isNaN(x)) return ''; return x.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
 function fmtDT(d){ if(!d) return ''; const x=new Date(d); if(isNaN(x)) return ''; return x.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+x.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}); }
 function dateInputVal(ts){ if(!ts) return ''; const x=new Date(ts); if(isNaN(x)) return ''; return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); }
+const _extUrl=u=>/^https?:/i.test(u||'')?u:'https://'+String(u||'').replace(/^\/+/,'');
 function gsearch(a){ return 'https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||'')+' '+(a.state||'')+' restaurant'); }
 function gmaps(a){ return 'https://www.google.com/maps/search/'+encodeURIComponent((a.name||'')+' '+(a.address||a.city||'')+' '+(a.state||'')); }
 /* outreach links: Gmail compose, Apollo people search, dialer */
@@ -732,7 +735,7 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
@@ -747,16 +750,35 @@ function buildFilters(){
     lc.innerHTML=LC.map(([k,lbl])=>'<span class="fchip '+(UI.loc.has(k)?'on':'')+'" onclick="tgl(\'loc\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const asg=el('f-assignee'); if(asg){ const AS=[['__none','Unassigned'],...team().map(n=>[n,n])];
     asg.innerHTML=AS.map(([k,lbl])=>'<span class="fchip '+(UI.assignee.has(k)?'on':'')+'" onclick="tgl(\'assignee\',\''+esc(k).replace(/'/g,"\\'")+'\')">'+esc(lbl)+'</span>').join(''); }
+  // POS + Cuisine chips — built from the book itself (top values by account count)
+  const chipSet=(elId,key,counts,cap)=>{ const box=el(elId); if(!box) return;
+    const keys=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]).slice(0,cap);
+    // keep any active-but-rare selection visible so it can be un-toggled
+    UI[key].forEach(k=>{ if(!keys.includes(k)) keys.push(k); });
+    box.innerHTML=keys.length?keys.map(k=>'<span class="fchip '+(UI[key].has(k)?'on':'')+'" onclick="tgl(\''+key+'\',\''+esc(k).replace(/'/g,"\\'")+'\')">'+esc(k)+' <span style="opacity:.55">'+(counts[k]||0)+'</span></span>').join(''):'<span class="tsub">no data yet</span>'; };
+  { const pc={},cc={};
+    accounts().forEach(a=>{ const p=posOf(a); if(p)pc[p]=(pc[p]||0)+1; const c=cuiOf(a); if(c)cc[c]=(cc[c]||0)+1; });
+    chipSet('f-pos','pos',pc,10); chipSet('f-cuisine','cuisine',cc,14); }
 }
 function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFilters();
   // location bubbles filter accounts; the rest filter people — jump to the right tab so the filter takes effect
   const acctTabs=['accounts','closed','live'], peopleTabs=['contacts','leads','hotlist'];
   if(k==='loc'){ if(!acctTabs.includes(UI.tab)){ switchTab('accounts'); return; } }
+  else if(k==='pos'||k==='cuisine'){ if(!acctTabs.includes(UI.tab)&&!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; } }
   else if(!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; }
   renderActive(); }
 // multi = brand parent or one of its locations; single = standalone account
 function matchLoc(a){ if(!UI.loc||!UI.loc.size) return true; const multi=isBrand(a)||isLocation(a);
   return (UI.loc.has('multi')&&multi)||(UI.loc.has('single')&&!multi); }
+// POS free text ("Toast + UberEats", "toast pos") buckets to a known brand so the chips don't fragment
+const POS_BRANDS=['Toast','Square','Clover','Olo','ChowNow','Deliverect','Lunchbox','Slice','Menufy','Popmenu','BentoBox','Grubhub','DoorDash','UberEats'];
+function posOf(a){ const p=(a&&a.pos||'').trim(); if(!p) return ''; const low=p.toLowerCase();
+  const b=POS_BRANDS.find(x=>low.includes(x.toLowerCase())); return b||'Other'; }
+function cuiOf(a){ return (a&&a.cuisine||'').trim(); }
+function matchPosCui(a){
+  if(UI.pos.size && !UI.pos.has(posOf(a))) return false;
+  if(UI.cuisine.size && !UI.cuisine.has(cuiOf(a))) return false;
+  return true; }
 function matchQ(str){ if(!UI.q) return true; return (str||'').toLowerCase().includes(UI.q); }
 
 /* ====================== NAV ====================== */
@@ -1496,6 +1518,8 @@ const COL={
   opens:{k:'opens',t:'# Opens',num:true,val:c=>openCount(c),cell:c=>{const n=openCount(c);return n?'<b style="color:var(--sig)">'+n+'</b>':'<span class="tsub">—</span>';}},
   owner:{k:'owner',t:'Owner',val:c=>isOwner(c)?1:0,cell:c=>isOwner(c)?'<span class="tag cust" title="'+esc(c.title||'')+'">👑</span>':'<span class="tsub">—</span>'},
   heat:{k:'heat',t:'Heat',num:true,val:c=>heat(c),cell:c=>{const h=heat(c);return '<b style="color:'+(h>=350?'var(--hot)':h>=180?'var(--warm)':'var(--mut)')+'">'+h+'</b>';}},
+  intent:{k:'intent',t:'Intent',num:true,val:c=>intentC(c),cell:c=>{const i=intentC(c);return i?'<b style="color:'+(i>=180?'var(--sig)':'var(--warm)')+'">'+i+'</b>':'<span class="tsub">—</span>';}},
+  tier:{k:'tier',t:'Tier',val:c=>{const o={now:5,warming:4,cold:3,email:2,dorm:1};return o[tierC(c).k]||0;},num:true,cell:c=>'<span class="tag'+(tierC(c).k==='now'?' cust':'')+'">'+tierC(c).t+'</span>'},
   next:{k:'next',t:'Next step',val:c=>c.nextStep||''},
   dispo:{k:'dispo',t:'Disposition',val:c=>c.dispo||'',cell:c=>c.dispo?'<span class="tag">'+esc(c.dispo)+'</span>'+((+c.nextCallAt>Date.now())?'<div class="tsub">back '+fmtWhen(+c.nextCallAt)+'</div>':''):'<span class="tsub">—</span>'},
   callnote:{k:'callnote',t:'Notes',val:c=>c.callNote||'',cell:c=>'<span class="tsub">'+esc(c.callNote||'')+'</span>'},
@@ -1544,14 +1568,41 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   p-=Math.min(+c.callCount||0,6)*12;                         // repeated no-connect calls cool it off
   return Math.round(p);
 }
+// Contact-level INTENT — engagement only: are THEY heating up (reading emails, replying,
+// clicking)? Heat = intent + callability (phone, decision-maker, staleness, call dampeners).
+// Intent answers "do they care?", heat answers "who do I dial next?".
+function intentC(c){ if(!c) return 0; const now=Date.now();
+  const open=lastOpenTs(c), touch=lastTouchTs(c), opens=openCount(c); let p=0;
+  if(open && open>touch) p+=300;                             // opened since my last touch
+  if(open) p+=Math.max(0,220-((now-open)/_DAY)*11);          // open recency (~20d decay)
+  p+=Math.min(opens,25)*14;                                  // open volume
+  if(c.replied) p+=220;                                      // replied
+  if(logTsBy(c,/🔗|clicked/i)) p+=80;                        // clicked a link
+  if(c.apolloSeq) p+=50; else if(c.emailSeq&&!c.emailSeq.done) p+=45;  // in an active sequence
+  return Math.round(p);
+}
+// Tier = the two scores as one word. 🔥 engaged + reachable → call FIRST; ☎️ reachable but
+// silent → normal cold-call rotation; 📧 engaged but no number → email play, NOT the dialer.
+function tierC(c){ const i=intentC(c), ph=!!telNum(c);
+  if(ph&&i>=180) return {k:'now',t:'🔥 Call now'};
+  if(ph&&i>0)    return {k:'warming',t:'📈 Warming'};
+  if(ph)         return {k:'cold',t:'☎️ Cold call'};
+  if(i>0)        return {k:'email',t:'📧 Email-only'};
+  return {k:'dorm',t:'💤 Dormant'};
+}
+// A contact already in the pipe (open deal on them or their account — Booked Demo / No Show /
+// Follow Up) belongs to the Pipeline tab, NOT the cold-call playlist.
+function hasOpenDeal(c){ if(!c) return false;
+  return deals().some(d=>d.stage!=='Closed Lost'&&d.stage!=='Closed Deal'&&
+    (d.contactId===c.id||(c.accountId&&d.accountId===c.accountId))); }
 const LEAD_COLS=[COL.warmth,COL.name,COL.acct,COL.phone,COL.status,COL.apollo,COL.next];
 const CONTACT_COLS=[COL.warmth,COL.name,COL.acct,COL.email,COL.phone,COL.status,COL.apollo];
 /* ---- customizable columns ---- */
-const CONTACT_REG=[COL.warmth,COL.heat,COL.name,COL.owner,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.score,COL.angle,COL.apollo,COL.last,COL.lastcall,COL.sent,COL.open,COL.opens,COL.dispo,COL.callnote,COL.assigned,COL.next];
+const CONTACT_REG=[COL.warmth,COL.heat,COL.intent,COL.tier,COL.name,COL.owner,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.score,COL.angle,COL.apollo,COL.last,COL.lastcall,COL.sent,COL.open,COL.opens,COL.dispo,COL.callnote,COL.assigned,COL.next];
 const COLDEF={ leads:['warmth','name','acct','phone','status','apollo','next'],
-  hotlist:['warmth','heat','name','owner','acct','phone','lastcall','open','opens','dispo'],
-  hotlist2:['warmth','heat','name','owner','acct','phone','lastcall','open','opens','dispo'],
-  contacts:['warmth','name','owner','acct','email','phone','status','opens','apollo'] };
+  hotlist:['tier','heat','intent','name','owner','acct','phone','lastcall','open','opens','dispo'],
+  hotlist2:['tier','heat','intent','name','owner','acct','phone','lastcall','open','opens','dispo'],
+  contacts:['warmth','tier','intent','name','owner','acct','email','phone','status','opens','apollo'] };
 function colReg(v){ return (v==='accounts'||v==='closed'||v==='live')?A_COLS:CONTACT_REG; }
 function chosenCols(v){
   const reg=colReg(v); const saved=(store.__cols&&store.__cols[v])||COLDEF[v]||reg.map(c=>c.k);
@@ -1583,6 +1634,7 @@ function prefilter(list){ return list.filter(c=>{
     if(UI.opens.has('none')&&op) return false; }
   if(UI.owner.size){ const own=isOwner(c); if(UI.owner.has('own')&&!own) return false; if(UI.owner.has('non')&&own) return false; }
   if(UI.assignee.size){ const who=c.assignee||''; const ok=(UI.assignee.has('__none')&&!who)||(who&&UI.assignee.has(who)); if(!ok) return false; }
+  if((UI.pos.size||UI.cuisine.size)&&!matchPosCui(acct(c.accountId))) return false;
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.email2||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
@@ -1612,6 +1664,13 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
     '<div class="cm-head"><div><div class="cm-name">'+esc(cname(c))+'</div><div class="cm-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>'+prior+'</div>'+
       '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+clWarn+
     (p?'<a class="cm-dial" href="tel:'+esc(p)+'">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')+
+    // quick research right where the dial button is — Google the business while it rings
+    (function(){ const g=a||{name:cname(c)}; return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 2px">'+
+      '<a class="btn sm gh" href="'+esc(gsearch(g))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔎 Google</a>'+
+      '<a class="btn sm gh" href="'+esc(gmaps(g))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">📍 Maps</a>'+
+      (a&&a.website?'<a class="btn sm gh" href="'+esc(_extUrl(a.website))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🌐 Site</a>':'')+
+      (a&&a.ordering?'<a class="btn sm gh" href="'+esc(_extUrl(a.ordering))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🛒 Ordering</a>':'')+
+      '</div>'; })()+
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
     '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…" oninput="cmSel.note=this.value">'+esc(cmSel.note)+'</textarea>'+
     '<div class="cm-lbl">Call back</div><div class="cm-reqs">'+reqBtns+'</div>'+
@@ -1783,7 +1842,9 @@ function callPriority(c){ return heat(c); }
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
 function hotQueue(){ const now=Date.now();
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&hasRealPhone(c);
+  // In-pipe contacts (booked demo / follow-up / no-show deals on them or their account) live in
+  // the Pipeline tab — the Hot List is strictly the cold/warm-call playlist.
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&hasRealPhone(c)&&!hasOpenDeal(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
@@ -1797,18 +1858,27 @@ function hotQueue(){ const now=Date.now();
   if(due.length>HOT_CAP) due=due.slice(0,HOT_CAP);          // top 150 highest-heat calls
   return {due,snoozed};
 }
-// Bulk re-tier every non-customer, non-pipeline contact by heat:
-// top 150 → Hot, next 350 → Warm, rest → Cold. Confirm-gated + one-tap Undo.
+// Bulk re-tier every non-customer, non-pipeline contact — INTENT-AWARE:
+// anyone actively engaging (🔥 Call now tier: intent ≥180 + phone) is Hot regardless of rank,
+// then the remaining Hot slots (to 150) fill by heat; next 350 → Warm, rest → Cold.
+// Contacts with an open deal are skipped (they live in Pipeline, not the tiers).
 function retierBook(){
-  const pool=contacts().filter(c=>!isCustC(c)&&!['In Pipeline','Customer'].includes(c.status));
+  const pool=contacts().filter(c=>!isCustC(c)&&!['In Pipeline','Customer'].includes(c.status)&&!c.internal&&!hasOpenDeal(c));
   if(!pool.length){ toast('No contacts to re-tier'); return; }
-  if(!confirm('Re-tier '+pool.length+' contacts by heat score?\n\nTop 150 → Hot, next 350 → Warm, the rest → Cold.\nCustomers and in-pipeline contacts are left untouched.')) return;
+  const autoHot=pool.filter(c=>tierC(c).k==='now');
+  if(!confirm('Re-tier '+pool.length+' contacts?\n\n'+autoHot.length+' actively-engaging contacts (opens/replies + phone) → Hot automatically.\nRemaining Hot slots fill by heat to 150, next 350 → Warm, the rest → Cold.\nCustomers, in-pipeline and open-deal contacts are left untouched.')) return;
   const prev=pool.map(c=>({id:c.id,w:c.warmth}));
-  pool.sort((a,b)=>heat(b)-heat(a));
+  const hotIds=new Set(autoHot.map(c=>c.id));
+  const rest=pool.filter(c=>!hotIds.has(c.id)).sort((a,b)=>heat(b)-heat(a));
+  let slots=Math.max(0,150-hotIds.size);
+  rest.forEach(c=>{ if(slots>0){ hotIds.add(c.id); slots--; } });
+  const nonHot=rest.filter(c=>!hotIds.has(c.id));
   let hot=0,warm=0,cold=0;
-  pool.forEach((c,i)=>{ c.warmth=i<150?'Hot':(i<500?'Warm':'Cold'); if(i<150)hot++; else if(i<500)warm++; else cold++; });
+  pool.forEach(c=>{ if(hotIds.has(c.id)){ c.warmth='Hot'; hot++; } });
+  nonHot.forEach((c,i)=>{ c.warmth=i<350?'Warm':'Cold'; if(i<350)warm++; else cold++; });
+  pool.forEach(c=>stampU(c));
   save(); render();
-  toast('Re-tiered → '+hot+' Hot · '+warm+' Warm · '+cold+' Cold',()=>{ prev.forEach(p=>{const c=contact(p.id); if(c)c.warmth=p.w;}); save(); render(); toast('Re-tier undone'); });
+  toast('Re-tiered → '+hot+' Hot ('+autoHot.length+' by intent) · '+warm+' Warm · '+cold+' Cold',()=>{ prev.forEach(p=>{const c=contact(p.id); if(c)c.warmth=p.w;}); save(); render(); toast('Re-tier undone'); });
 }
 function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY[key]; if(!d)return;
   applyDispo(c,key,'',(d.gone?'none':(d.req||'none'))); }
@@ -2690,13 +2760,13 @@ COLDEF.accounts=['name','cuisine','loc','pos','delivery','contacts','type','mrr'
 COLDEF.closed=['name','onboard','pos','contacts','mrr','source'];
 COLDEF.live=['name','onboard','mrr','pos','contacts','source'];
 function renderAccounts(){
-  let recs=activeAccts().filter(a=>matchLoc(a)&&matchQ(a.name+' '+(a.city||'')+' '+(a.state||'')));
+  let recs=activeAccts().filter(a=>matchLoc(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')+' '+(a.state||'')));
   if(!(TSORT.accounts&&TSORT.accounts.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('accounts',chosenCols('accounts'),recs,r=>"openAccount('"+r.id+"')");
   el('view-accounts').innerHTML='<div class="panel"><div class="ph"><h3>Accounts</h3><span class="sub">'+t.count+' active prospects — customers live on the Closed / Live tabs</span>'+colMenu('accounts')+'</div>'+t.html+'</div>'; restoreFlt();
 }
 function renderClosed(){
-  let recs=closedAccts().filter(a=>matchLoc(a)&&matchQ(a.name+' '+(a.city||'')));
+  let recs=closedAccts().filter(a=>matchLoc(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')));
   if(!(TSORT.closed&&TSORT.closed.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('closed',chosenCols('closed'),recs,r=>"openAccount('"+r.id+"')");
   el('view-closed').innerHTML='<div class="panel"><div class="ph"><h3>Closed Won</h3><span class="sub">'+t.count+' closed — set Onboarding to “Live” once onboarded</span>'+colMenu('closed')+'</div>'+t.html+'</div>'; restoreFlt();
@@ -2728,7 +2798,7 @@ function liveDash(){
     '</div></div></div>';
 }
 function renderLive(){
-  let recs=liveAccts().filter(a=>matchLoc(a)&&matchQ(a.name+' '+(a.city||'')));
+  let recs=liveAccts().filter(a=>matchLoc(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')));
   if(!(TSORT.live&&TSORT.live.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('live',chosenCols('live'),recs,r=>"openAccount('"+r.id+"')");
   el('view-live').innerHTML=liveDash()+'<div class="panel"><div class="ph"><h3>Live Accounts</h3><span class="sub">'+t.count+' onboarded & running</span>'+colMenu('live')+'</div>'+t.html+'</div>'; restoreFlt();
@@ -2950,12 +3020,46 @@ function logBar(t,id){
     ['Call','Email','LinkedIn','Text','Note'].map(k=>'<button class="btn sm gh" onclick="quickLog(\''+t+'\',\''+id+'\',\''+k+'\')">'+k+'</button>').join('')+
     '</div><div class="fld"><input id="logtxt-'+t+id+'" placeholder="Log a note + Enter…" onkeydown="if(event.key===\'Enter\'){quickLog(\''+t+'\',\''+id+'\',\'Note\',this.value);this.value=\'\';}"></div>';
 }
-function logList(o,t,id){ const L=(o.log||[]).map((x,i)=>({x,i})).reverse();
+/* Log view state (per drawer entity): sort dir, type filter, expanded-opens flag.
+   Display-only — the underlying log data is never touched. */
+const LOGV={};
+function logV(t,id){ const k=t+id; return LOGV[k]||(LOGV[k]={sort:'new',f:'all',exp:false}); }
+function logSet(t,id,k,v){ const s=logV(t,id); s[k]=(k==='exp')?!s.exp:v; const o=objOf(t,id); const cont=el('log-'+t+id); if(o&&cont)cont.innerHTML=logList(o,t,id); }
+const _isOpenLog=tx=>/👀|opened/i.test(tx||'');
+function _logKind(tx){ tx=tx||'';
+  if(/^(📞|☎)|^Call\b/.test(tx)) return 'call';
+  if(/^(📧|✉|👀|🔗|↩)|^Email\b|^LinkedIn\b|^Text\b/.test(tx)) return 'mail';
+  return 'note'; }
+function logList(o,t,id){ const v=t?logV(t,id):{sort:'new',f:'all',exp:true};
+  let L=(o.log||[]).map((x,i)=>({x,i}));
   if(!L.length) return '<div class="tsub" style="padding:4px 0">No activity yet.</div>';
-  return '<ul class="log">'+L.map(({x,i})=>'<li>'+esc(x.txt)+'<div class="t">'+new Date(x.ts).toLocaleString()+
-    (x.by?' · <b style="color:var(--mut)">'+esc(x.by)+'</b>':'')+
-    (t?' · <span onclick="event.stopPropagation();delLog(\''+t+'\',\''+id+'\','+i+')" style="cursor:pointer;color:var(--mut)" title="Delete this log entry">✕</span>':'')+
-    '</div></li>').join('')+'</ul>';
+  L.sort((a,b)=>(v.sort==='old'?1:-1)*(((+a.x.ts||0)-(+b.x.ts||0))||(a.i-b.i)));
+  const total=L.length;
+  if(v.f!=='all') L=L.filter(({x})=>_logKind(x.txt)===v.f);
+  // collapse repeat email opens: keep the 2 most recent 👀 rows, fold the rest into one toggle row
+  const opens=L.filter(({x})=>_isOpenLog(x.txt)).sort((a,b)=>(+b.x.ts||0)-(+a.x.ts||0));
+  const hideSet=new Set(); let folded=0;
+  if(!v.exp&&opens.length>2){ opens.slice(2).forEach(({i})=>hideSet.add(i)); folded=opens.length-2; }
+  const chip=(k,l)=>'<button class="btn sm '+(v.f===k?'pri':'gh')+'" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'f\',\''+k+'\')">'+l+'</button>';
+  const bar=t?'<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin:2px 0 6px">'+
+    chip('all','All')+chip('call','📞 Calls')+chip('mail','📧 Emails')+chip('note','📝 Notes')+
+    '<button class="btn sm gh" style="margin-left:auto" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'sort\',\''+(v.sort==='new'?'old':'new')+'\')" title="Flip sort order">'+(v.sort==='new'?'↓ Newest first':'↑ Oldest first')+'</button>'+
+    '</div>':'';
+  let foldShown=false;
+  const rows=L.map(({x,i})=>{
+    if(hideSet.has(i)){
+      if(foldShown) return '';
+      foldShown=true;
+      return '<li style="cursor:pointer" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'exp\')"><span class="tsub">👀 +'+folded+' earlier opens — tap to show</span></li>';
+    }
+    return '<li>'+esc(x.txt)+'<div class="t">'+new Date(x.ts).toLocaleString()+
+      (x.by?' · <b style="color:var(--mut)">'+esc(x.by)+'</b>':'')+
+      (t?' · <span onclick="event.stopPropagation();delLog(\''+t+'\',\''+id+'\','+i+')" style="cursor:pointer;color:var(--mut)" title="Delete this log entry">✕</span>':'')+
+      '</div></li>';
+  }).join('');
+  const foldNote=(v.exp&&opens.length>2&&t)?'<li style="cursor:pointer" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'exp\')"><span class="tsub">Collapse repeat opens ▴</span></li>':'';
+  return bar+'<ul class="log">'+rows+foldNote+'</ul>'+
+    (v.f!=='all'?'<div class="tsub" style="padding:2px 0">'+L.length+' of '+total+' entries · <span style="cursor:pointer;text-decoration:underline" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'f\',\'all\')">show all</span></div>':'');
 }
 function delLog(t,id,i){ const o=objOf(t,id); if(!o||!o.log||!o.log[i])return; if(!confirm('Delete this log entry?'))return;
   const removed=o.log.splice(i,1)[0]; stampU(o); save();
@@ -3061,7 +3165,7 @@ function openAccount(id){
   b+='<div class="f2">'+fld('Cuisine',inp("setA('"+id+"','cuisine',this.value)",a.cuisine))+fld('# Locations',inp("setA('"+id+"','employees',this.value)",a.employees))+'</div>';
   b+=fld('Address',inp("setA('"+id+"','address',this.value)",a.address));
   b+='<div class="f2">'+fld('City',inp("setA('"+id+"','city',this.value)",a.city))+fld('State',inp("setA('"+id+"','state',this.value)",a.state))+'</div>';
-  b+=fld('Website',inp("setA('"+id+"','website',this.value)",a.website));
+  b+='<div class="f2">'+fld('Website',inp("setA('"+id+"','website',this.value)",a.website))+fld('Online ordering link',inp("setA('"+id+"','ordering',this.value)",a.ordering))+'</div>';
   b+='<div class="f2">'+fld('POS',inp("setA('"+id+"','pos',this.value)",a.pos))+fld('Delivery apps',inp("setA('"+id+"','delivery',this.value)",a.delivery))+'</div>';
   b+='<div class="f2">'+fld('Source',inp("setA('"+id+"','source',this.value)",a.source))+fld('Assigned to',assignPicker("setAssignee('a','"+id+"',this.value)",a.assignee))+'</div>';
   // ---- location structure ----
@@ -3080,7 +3184,8 @@ function openAccount(id){
   b+='<div class="sec">Quick links</div><div class="logbar">'+
      '<a class="btn sm gh" target="_blank" href="'+gsearch(a)+'">🔎 Google</a>'+
      '<a class="btn sm gh" target="_blank" href="'+gmaps(a)+'">📍 Maps</a>'+
-     (a.website?'<a class="btn sm gh" target="_blank" href="'+esc(a.website)+'">🌐 Website</a>':'')+
+     (a.website?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.website))+'">🌐 Website</a>':'')+
+     (a.ordering?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.ordering))+'">🛒 Ordering</a>':'')+
      '<a class="btn sm gh" target="_blank" href="https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||a.state||'')+' facebook')+'">f Facebook</a>'+
      '</div>';
   b+='<div class="sec">Customer</div>';
@@ -3529,7 +3634,8 @@ function importCSV(text){
   const col=(...names)=>{ for(const n of names){ const i=H.findIndex(h=>h===n||h.includes(n)); if(i>=0)return i; } return -1; };
   const iAcc=col('account','restaurant','company'),iFirst=col('first'),iLast=col('last'),iName=col('contact name','owner','name'),
     iTitle=col('title'),iEmail=col('email'),iPhone=col('phone'),iCity=col('city','area'),iState=col('state'),
-    iWeb=col('website'),iPos=col('pos','platform'),iWarm=col('warmth','tier','health','priority'),iStage=col('stage'),iVal=col('value');
+    iWeb=col('website'),iPos=col('pos','platform'),iWarm=col('warmth','tier','health','priority'),iStage=col('stage'),iVal=col('value'),
+    iCui=col('cuisine','food type','category'),iOrd=col('online ordering','ordering link','order link','ordering url','order url','ordering');
   // ---- Engagement columns → intent signals (so an imported list shows up in Intent) ----
   const iOpens=col('opens','opened','pixel_visits','pixel visits','email opens'),
     iOpenAt=col('last opened','opened at','last_open','last open'),
@@ -3571,7 +3677,11 @@ function importCSV(text){
     }
     if(!an)return;
     let aid=byName[an.toLowerCase()];
-    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),isCustomer:false}; byName[an.toLowerCase()]=aid; na++; }
+    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),isCustomer:false}; byName[an.toLowerCase()]=aid; na++; }
+    else { // account already in book — fill in blanks only (re-importing an enriched sheet enriches, never clobbers)
+      const a0=acct(aid); if(a0){ let f=false; const fill=(k,i)=>{ const v=(i>=0?String(r[i]||''):'').trim(); if(v&&!a0[k]){ a0[k]=v; f=true; } };
+        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState);
+        if(f) stampU(a0); } }
     const email=(iEmail>=0?r[iEmail]:'').trim();
     let first='',last='';
     if(iFirst>=0){first=(r[iFirst]||'').trim();last=(iLast>=0?r[iLast]:'').trim();}
@@ -3635,14 +3745,19 @@ function resolveEmailContact(email,company){
   return ensureEmailContact(em);                                   // 4) no company match → domain fallback
 }
 let __applyImport=null;
-function runImport(){ const f=__applyImport; __applyImport=null; closeDrawer(); if(f)f(); }
+function runImport(){ const f=__applyImport; __applyImport=null;
+  window.__impMkUnknown=!!(el('impMkUnknown')&&el('impMkUnknown').checked);  // read before drawer closes
+  closeDrawer(); if(f)f(); }
 function openImportPreview(kind,stats,applyFn){ __applyImport=applyFn;
   const label={call:'📞 Call log',email:'✉️ Email log'}[kind]||kind;
   const nw=stats.newEntries!=null?stats.newEntries:stats.entries; const dup=Math.max(0,stats.entries-nw);
   el('drawer-head').innerHTML='<div style="font-weight:800;font-size:16px">Import preview</div><button class="x" onclick="closeDrawer()">×</button>';
   el('drawer-body').innerHTML='<div class="sec">'+label+' detected</div>'+
     '<p style="margin:4px 0"><b>'+nw+'</b> new '+kind+' entr'+(nw===1?'y':'ies')+' will be added'+(dup>0?' <span class="tsub">('+dup+' already logged — skipped)</span>':'')+'.</p>'+
-    '<p style="margin:4px 0"><b>'+stats.match+'</b> match existing contacts · <b>'+stats.create+'</b> new contact'+(stats.create===1?'':'s')+' will be created.</p>'+
+    '<p style="margin:4px 0"><b>'+stats.match+'</b> match existing contacts · <b>'+stats.create+'</b> unknown number'+(stats.create===1?'':'s')+'.</p>'+
+    // Calls to numbers nobody in the book owns would each spawn a bare-number account —
+    // a 3-month dialer dump = thousands of junk records. Default: log matches only.
+    (kind==='call'&&stats.create>0?'<label style="display:flex;gap:7px;align-items:center;margin:8px 0;font-size:13px"><input type="checkbox" id="impMkUnknown"> Also create '+stats.create+' contact'+(stats.create===1?'':'s')+' for unknown numbers <span class="tsub">(off = log only calls to people already in the book)</span></label>':'')+
     '<p class="tsub">Only new '+(kind==='call'?'calls':'opens/replies/sends')+' are added — anything already in a contact\u2019s history is skipped automatically.</p>';
   el('drawer-foot').innerHTML='<button class="btn gh" onclick="closeDrawer()">Cancel</button> '+
     (nw>0?'<button class="btn pri" onclick="runImport()">Import '+nw+' new entr'+(nw===1?'y':'ies')+'</button>'
@@ -3653,7 +3768,9 @@ function smartImport(text){
   const rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
   const H=rows[0].map(h=>h.toLowerCase().trim());
   const has=(...n)=>n.some(x=>H.some(h=>h===x||h.includes(x)));
-  const idx=(...n)=>{for(const x of n){const i=H.findIndex(h=>h===x||h.includes(x));if(i>=0)return i;}return -1;};
+  // exact header match wins over substring — otherwise OpenPhone's "belongsTo" col
+  // hijacks idx('to') and every outgoing call loses its number
+  const idx=(...n)=>{for(const x of n){let i=H.findIndex(h=>h===x); if(i<0)i=H.findIndex(h=>h.includes(x)); if(i>=0)return i;}return -1;};
   if(has('direction') && (has('duration')||has('answered'))) return prepCallImport(rows,idx);
   if(has('subject') && (has('recipient')||has('sent')||has('pixel')||has('opened'))) return prepEmailImport(rows,idx);
   importCSV(text); // fall back to accounts/contacts sheet
@@ -3677,7 +3794,9 @@ function prepCallImport(rows,idx){
     const n=norm10(out?(iTo>=0?r[iTo]:''):(iFrom>=0?r[iFrom]:'')); if(!n) return;
     const dur=parseInt(iDur>=0?r[iDur]:0)||0, ts=rowTs(r);
     const txt=dur>0?((out?'📞 Called → ':'📞 Inbound call ← ')+fmtDur(dur)):(out?'📞 Called → no answer':'📞 Missed call ←');
-    const by=iUser>=0?String(r[iUser]||'').trim():'';
+    let by=iUser>=0?String(r[iUser]||'').trim():'';
+    // OpenPhone's userId col holds an email — prettify to "Embert Sy" so Team Activity groups right
+    if(by.includes('@')) by=by.split('@')[0].split(/[._-]+/).map(w=>w?w[0].toUpperCase()+w.slice(1):'').join(' ').trim();
     plan.push(by?{n,ts,txt,by}:{n,ts,txt}); all.add(n);
   });
   if(!plan.length){toast('No call rows found');return;}
@@ -3722,10 +3841,11 @@ function prepEmailImport(rows,idx){
   openImportPreview('email',{entries:plan.length,newEntries:countNewLogEntries(plan,'email'),match:all.size-create,create}, ()=>applyLogImport(plan,'email'));
 }
 function applyLogImport(plan,kind){
-  const map=kind==='call'?phoneIndex():emailIndex(), touched={}; let added=0;
+  const map=kind==='call'?phoneIndex():emailIndex(), touched={}; let added=0, skippedUnknown=0;
   plan.forEach(p=>{ const key=kind==='call'?p.n:p.email;
     // Calls key off phone (map). Emails ALWAYS go through resolveEmailContact so a past orphan can self-heal
     // to the right account even though its email is already indexed.
+    if(kind==='call'&&!map[key]&&!window.__impMkUnknown){ skippedUnknown++; return; }  // unknown number, checkbox off
     let cid=kind==='call'?(map[key]||ensureCallContact(p.n)):resolveEmailContact(p.email,p.company); map[key]=cid;
     const c=contact(cid); if(!c)return; c.log=c.log||[];
     if(kind==='email'){ if(p.seq) c.apolloSeq=p.seq; if(p.kind==='reply') c.replied=true; }
@@ -3739,7 +3859,7 @@ function applyLogImport(plan,kind){
     touched[cid]=1;
   });
   Object.keys(touched).forEach(cid=>{ const c=contact(cid); if(c&&c.log){ c.log.sort((a,b)=>(+a.ts||0)-(+b.ts||0)); if(c.log.length>50)c.log=c.log.slice(-50); } });
-  save(); render(); toast('Imported '+added+' '+kind+' log entries');
+  save(); render(); toast('Imported '+added+' '+kind+' log entries'+(skippedUnknown?' · '+skippedUnknown+' unknown-number calls skipped':''));
 }
 function restoreAutoBackup(){
   const baks=Object.keys(localStorage).filter(k=>k.startsWith('shipday_crm_bak_')).sort().reverse();
