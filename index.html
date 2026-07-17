@@ -483,7 +483,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z58';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z59';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -538,6 +538,11 @@ function norm(s){
     const have=String(a.delivery||'').toLowerCase();
     const add=hits.filter(hx=>!have.includes(hx.toLowerCase()));
     if(add.length) a.delivery=(a.delivery?a.delivery+', ':'')+add.join(', ');
+  });
+  // …and the mirror rule: Toast is a POS, never a 3rd-party delivery app — move it across.
+  Object.values(s.accounts).forEach(a=>{ const d=String(a.delivery||''); if(!/toast/i.test(d)) return;
+    a.delivery=d.replace(/toast(\s*delivery(\s*services)?)?/ig,'').replace(/\s*[\/,&+]\s*[\/,&+]\s*/g,', ').replace(/^[\s\/,&+-]+|[\s\/,&+-]+$/g,'').replace(/\s{2,}/g,' ').trim();
+    if(!a.pos) a.pos='Toast';
   });
   if(SEED && SEED.__seedV && !s.__seedV) s.__seedV=SEED.__seedV;
   return s;
@@ -3278,7 +3283,9 @@ function openAccount(id){
   b+='<div class="f2">'+fld('Cuisine',inp("setA('"+id+"','cuisine',this.value)",a.cuisine))+fld('# Locations',inp("setA('"+id+"','employees',this.value)",a.employees))+'</div>';
   b+=fld('Street address',inp("setA('"+id+"','address',this.value)",a.address));
   b+='<div class="f2">'+fld('City',inp("setA('"+id+"','city',this.value)",a.city))+fld('State',inp("setA('"+id+"','state',this.value)",a.state))+'</div>';
-  b+='<div class="f2">'+fld('Website',inp("setA('"+id+"','website',this.value)",a.website))+fld('Online ordering link',inp("setA('"+id+"','ordering',this.value)",a.ordering))+'</div>';
+  // URL fields render with an ↗ open button beside them (input stays editable)
+  const linkFld=(lab,setter,val)=>fld(lab,'<div style="display:flex;gap:6px;align-items:center"><div style="flex:1">'+inp(setter,val)+'</div>'+(val?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(val))+'" title="Open in new tab">↗</a>':'')+'</div>');
+  b+='<div class="f2">'+linkFld('Website',"setA('"+id+"','website',this.value)",a.website)+linkFld('Online ordering link',"setA('"+id+"','ordering',this.value)",a.ordering)+'</div>';
   b+='<div class="f2">'+fld('POS',inp("setA('"+id+"','pos',this.value)",a.pos))+fld('3rd-party delivery (DoorDash / UberEats…)',inp("setA('"+id+"','delivery',this.value)",a.delivery))+'</div>';
   b+=fld('Hours (e.g. Mon-Fri 11am-9pm; Sat 12pm-8pm)',inp("setA('"+id+"','hours',this.value)",a.hours));
   b+=fld('Assigned to',assignPicker("setAssignee('a','"+id+"',this.value)",a.assignee));  // source kept in data, not shown (Saad's ask)
