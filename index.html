@@ -432,6 +432,7 @@ small.hint{color:var(--dim);font-size:11px}
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="retierBook()">Re-tier book by heat</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="openDedupe()">Find duplicates</button>
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="bulkSplitContacts()">✂️ Split multi-person contacts</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="fixCalNames()">Clean calendar names</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="restoreAutoBackup()">Restore auto-backup</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="reloadSeed()">Reload imported data</button>
@@ -482,7 +483,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z57';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z58';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3488,6 +3489,74 @@ function splitContact(cid){ const c=contact(cid); if(!c) return; const p=splitPa
     delete store.contacts[id2]; tomb(id2); stampU(c); save(); renderActive();
     if(UI.tab==='dedupe') renderDedupe();
     if(curDrawer&&curDrawer.ent==='c'&&curDrawer.id===cid) openContact(cid); });
+}
+/* ---- BULK multi-person splitter (z58): "Steve Elshoff & Katie Bolon", "A, B, C; D",
+   "Rob // Tiffany", "Joey Maier // Loren Stone (GM)" → one contact per person.
+   Person 1 keeps the record (email, phone, history); the rest become siblings sharing
+   the business line. Guarded hard against business names ("Bar and Grill", "Ben & Jerry's"). ---- */
+const _BIZ_RX=/\b(pizza|pizzeria|grill|grille|cafe|café|kitchen|bbq|barbecue|bar|restaurant|deli|tavern|brew|brewing|brewery|coffee|catering|bakery|market|shop|foods?|wings?|burger|taco|sushi|donuts?|llc|inc|co|company|group|team|main|line|unknown|info|office|street|ave|road|blvd)\b/i;
+function _personParse(s){ s=String(s||'').trim();
+  const tm=s.match(/\(([^)]{1,24})\)\s*$/); let title='';
+  if(tm){ title=tm[1].trim(); s=s.slice(0,tm.index).trim(); }
+  if(!/^[A-Za-z][A-Za-z'’.\-]*(\s+[A-Za-z'’.\-][A-Za-z'’.\-]*){0,3}$/.test(s)) return null;
+  return {name:s,title};
+}
+function splitPartsMulti(c){
+  const n=String(cname(c)||'').trim();
+  if(!n||n==='(no name)') return null;
+  const a=acct(c.accountId); if(a&&_dnorm(a.name)===_dnorm(n)) return null;   // it's the business, not people
+  if(/['’]s\b/i.test(n)) return null;                                    // "Ben & Jerry's" = brand
+  if((c.log||[]).some(l=>/✂️ Split/.test(l.txt||''))) return null;  // already split
+  const parts=n.split(/\s*(?:;|,|\/\/|\/|&|\+|\band\b)\s*/i).map(x=>x.trim()).filter(Boolean);
+  if(parts.length<2||parts.length>6) return null;
+  // generic tails ("+ partners") and company names ("Wheelhouse Investments") get DROPPED, not personified
+  const GEN_PART=/^(partners?|others?|team|staff|owners?|managers?|family|crew|more|misc|et al|etc\.?)$/i;
+  const CO_RX=/\b(investments?|holdings?|ventures?|capital|enterprises?|properties|hospitality|management|partners)\b/i;
+  const people=[]; let dropped=0;
+  for(const p of parts){
+    if(GEN_PART.test(p)||CO_RX.test(p)||_BIZ_RX.test(p)){ dropped++; continue; }
+    const pp=_personParse(p); if(!pp) return null;
+    people.push(pp);
+  }
+  if(!people.length) return null;
+  if(people.length===1&&!dropped) return null;    // one clean person, nothing to strip = leave alone
+  // Bare first names inherit the surname of the NEXT full name: "Nathan and Anissa Musil" → Nathan Musil;
+  // "Nick, Tommy & Larry Gallo" → all three Gallo.
+  for(let i=people.length-2;i>=0;i--){
+    if(people[i].name.split(/\s+/).length===1){
+      const nx=people[i+1].name.split(/\s+/);
+      if(nx.length>=2) people[i].name+=' '+nx.slice(1).join(' ');
+    }
+  }
+  return {orig:n,people,dropped};
+}
+function bulkSplitContacts(){
+  const cands=contacts().filter(c=>!c.internal&&splitPartsMulti(c));
+  if(!cands.length){ toast('No multi-person contacts found'); return; }
+  const extra=cands.reduce((s,c)=>s+splitPartsMulti(c).people.length-1,0);
+  if(!confirm('Split '+cands.length+' multi-person contacts into individual people?\n\n+'+extra+' new contacts. Email & call history stay with the first person; everyone shares the business line.')) return;
+  const snap=_dclone(store.contacts);
+  let made=0;
+  cands.forEach(c=>{
+    const sp=splitPartsMulti(c); if(!sp) return;
+    const mk=nm=>{ const w=nm.split(/\s+/); return {first:w[0],last:w.slice(1).join(' ')}; };
+    sp.people.slice(1).forEach(pp=>{
+      const id2=uid('c'), nm=mk(pp.name);
+      store.contacts[id2]={id:id2,accountId:c.accountId||'',first:nm.first,last:nm.last,
+        title:pp.title||c.title||'',phone:c.phone||'',mobile:c.mobile||'',email:'',
+        status:c.status||'New',warmth:c.warmth||'Cold',
+        source:[c.source,'Split'].filter(Boolean).join(' · '),assignee:c.assignee||'',log:[],_u:Date.now()};
+      logAuto(store.contacts[id2],'✂️ Split from "'+sp.orig+'" — email & history stayed on '+sp.people[0].name);
+      made++;
+    });
+    const p0=mk(sp.people[0].name);
+    c.first=p0.first; c.last=p0.last; if(sp.people[0].title&&!c.title) c.title=sp.people[0].title;
+    logAuto(c, sp.people.length>1 ? '✂️ Split "'+sp.orig+'" into '+sp.people.length+' people'
+                                  : '✂️ Cleaned name — was "'+sp.orig+'"');
+    stampU(c);
+  });
+  save(); render();
+  toast('Split '+cands.length+' contacts → +'+made+' people',()=>{ store.contacts=snap; save(); render(); toast('Split undone'); });
 }
 let _dedupeGroups=[];
 function dedupeScan(){
