@@ -483,7 +483,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z60';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z61';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1769,6 +1769,13 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
       (a&&a.website?'<a class="btn sm gh" href="'+esc(_extUrl(a.website))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🌐 Site</a>':'')+
       (a&&a.ordering?'<a class="btn sm gh" href="'+esc(_extUrl(a.ordering))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🛒 Ordering</a>':'')+
       '</div>'; })()+
+    // Someone else picked up? Add them on the spot — the outcome you save logs to THEM.
+    '<div class="cm-lbl">Someone else answered?</div>'+
+    '<div style="display:flex;gap:6px;align-items:center;margin:2px 0 2px">'+
+      '<input id="cmNewName" placeholder="Their name" style="flex:2;min-width:0">'+
+      '<input id="cmNewRole" placeholder="Role (optional)" style="flex:1.2;min-width:0">'+
+      '<button type="button" class="btn sm" onclick="cmAddPerson()">＋ Add &amp; switch</button></div>'+
+    '<div class="cm-sub" style="margin:0 0 6px">Creates them under '+esc(a?a.name:'this account')+' — your outcome &amp; notes save to them.</div>'+
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
     '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…" oninput="cmSel.note=this.value">'+esc(cmSel.note)+'</textarea>'+
     '<div class="cm-lbl">Call back</div><div class="cm-reqs">'+reqBtns+'</div>'+
@@ -1777,6 +1784,25 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
       '<button class="btn pri" onclick="saveCallModal()">Save outcome</button></div>'+
     '</div>'; }
 function cmSyncNote(){ const t=el('cmNote'); if(t) cmSel.note=t.value; }
+// Mid-call handoff: whoever actually answered gets their own contact under the same account,
+// shares the business line, and the modal switches to them so the saved outcome lands right.
+function cmAddPerson(){ const c=contact(callModalId); if(!c) return;
+  cmSyncNote();
+  const nmEl=el('cmNewName'), nm=(nmEl?nmEl.value:'').trim();
+  if(!nm){ toast('Type their name first'); if(nmEl)nmEl.focus(); return; }
+  const role=(el('cmNewRole')?el('cmNewRole').value:'').trim();
+  const w=nm.split(/\s+/), id2=uid('c');
+  store.contacts[id2]={id:id2,accountId:c.accountId||'',first:w[0],last:w.slice(1).join(' '),
+    title:role,phone:c.phone||'',mobile:c.mobile||'',email:'',status:'New',
+    warmth:'Warm',assignee:c.assignee||'',log:[],_u:Date.now()};
+  const a=acct(c.accountId);
+  logAuto(store.contacts[id2],'👋 Answered the phone'+(a?' at '+aname(a):'')+' — added mid-call (was dialing '+cname(c)+')');
+  stampU(store.contacts[id2]); save();
+  claimLead(store.contacts[id2]);
+  callModalId=id2;                       // keep whatever dispo/note the rep already picked
+  renderCallModal(); renderCounts();
+  toast('Added '+nm+' — this call now logs to them');
+}
 function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;   // disposition = warmth signal only; it never sets the call-back window
   renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
 function cmPickReq(k){ cmSyncNote(); cmSel.req=k; renderCallModal(); }
