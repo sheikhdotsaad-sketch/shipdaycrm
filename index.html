@@ -2992,6 +2992,9 @@ function setProb(stage,v){ store.__probs=store.__probs||{}; let n=Math.max(0,Mat
 /* per-DEAL chance to close: deal's own % if set, else its stage default. Stages are just
    kanban tracking — the forecast is driven purely by (deal MRR × its chance to close). */
 function dealProb(d){ if(!d) return 0; if(d.closePct!=null&&d.closePct!=='') return Math.max(0,Math.min(100,+d.closePct||0)); return prob(d.stage); }
+/* Forecast MRR is the per-location rate multiplied by the deal's locations. */
+function dealLocations(d){ if(!d)return 1; const a=acct(d.accountId); const n=+(d.locations||d.locationCount||0); if(n>0)return n; if(a){ const child=isBrand(a)?childLocs(a.id).length:0; if(child>0)return child; const e=+(a.employees||0); if(e>0)return e; } return 1; }
+function dealMRR(d){ if(!d)return 0; const base=+(d.plan||d.mrr||0); return base*Math.max(1,dealLocations(d)); }
 function setDealProb(id,v){ const d=deal(id); if(!d)return; d.closePct=Math.max(0,Math.min(100,+v||0)); stampU(d); save(); renderPipeline(); }
 function renderPipeline(){
   let list=deals().filter(d=>{
@@ -3010,12 +3013,12 @@ function renderPipeline(){
        '<button class="btn sm" onclick="pipeShift(1)">Next ›</button>'+
      '</div></div>';
   // ---- projection calculator: deal amount × that deal's chance to close ----
-  const wonMRR=list.filter(d=>d.stage===WON).reduce((a,d)=>a+(+d.mrr||0),0);
+  const wonMRR=list.filter(d=>d.stage===WON).reduce((a,d)=>a+dealMRR(d),0);
   const openDeals=list.filter(d=>!CLOSED.includes(d.stage))
-    .sort((a,b)=>(+b.mrr||0)*dealProb(b)-(+a.mrr||0)*dealProb(a));
+    .sort((a,b)=>dealMRR(b)*dealProb(b)-dealMRR(a)*dealProb(a));
   let weighted=0;
   const rows=openDeals.map(d=>{
-    const a=acct(d.accountId), mrr=+d.mrr||0, pc=dealProb(d);
+    const a=acct(d.accountId), mrr=dealMRR(d), pc=dealProb(d);
     const contrib=Math.round(mrr*pc/100); weighted+=contrib;
     return '<tr><td class="tname" onclick="openDeal(\''+d.id+'\')" style="cursor:pointer">'+esc(d.name||aname(a))+
         '<div class="tsub">'+esc(d.stage)+(d.demoDate?' · '+esc(fmtD(d.demoDate)):'')+'</div></td>'+
@@ -3038,7 +3041,7 @@ function renderPipeline(){
     const col=list.filter(d=>d.stage===stage);
     const isWon=stage===WON, isLost=stage===LOST;
     const sum=col.reduce((a,d)=>a+(+d.value||0),0);
-    const mrrSum=col.reduce((a,d)=>a+(+d.mrr||0),0);
+    const mrrSum=col.reduce((a,d)=>a+dealMRR(d),0);
     const cc=isWon?' won':isLost?' lost':'';
     h+='<div class="col'+cc+'" data-stage="'+esc(stage)+'" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropCard(event)">';
     h+='<div class="ch"><span>'+esc(stage)+'</span><span class="cnt">'+col.length+' · '+((isWon||isLost)&&mrrSum?money(mrrSum)+'/mo':money(sum))+'</span>'+
@@ -3050,7 +3053,7 @@ function renderPipeline(){
         '<div class="dn">'+(d.stage===WON?'<span class="wbadge">WON</span>':'')+esc(d.name||aname(a))+'</div>'+
         '<div class="dm">'+esc(cname(c))+'</div>'+
         '<div class="drow">'+(CLOSED.includes(d.stage)?(d.mrr?'<span class="mrrtag">'+money(d.mrr)+'/mo</span>':'<span class="tsub">no plan set</span>'):warmBadge(d.warmth))+(d.demoDate?'<span class="tsub">'+esc(fmtD(d.demoDate))+'</span>':'')+'</div>'+
-        (d.value?'<div class="dv">'+money(d.value)+(d.mrr&&!CLOSED.includes(d.stage)?' · '+money(d.mrr)+'/mo':'')+'</div>':'')+
+        (d.value?'<div class="dv">'+money(d.value)+(d.mrr&&!CLOSED.includes(d.stage)?' · '+money(dealMRR(d))+'/mo':'')+'</div>':'')+
       '</div>';
     }).join('');
     h+='</div></div>';
