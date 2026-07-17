@@ -315,6 +315,7 @@ tr.tdone td{opacity:.5}
 .selly-msg.bot{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
 .selly-msg.user{align-self:flex-end;background:rgba(0,193,106,.15);border:1px solid rgba(0,193,106,.35)}
 .selly-meta{display:block;color:var(--dim);font-size:9.5px;margin-top:5px}
+.selly-sources{display:grid;gap:6px;margin-top:9px}.selly-source{display:block;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);text-decoration:none}.selly-source:hover{border-color:var(--sig)}.selly-source b{display:block;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.selly-source span{display:block;color:var(--mut);font-size:9px;margin-top:2px}
 .selly-thinking{color:var(--mut);font-style:italic}.selly-thinking:after{content:'…';animation:sellyDots 1.2s infinite}
 @keyframes sellyDots{0%,25%{opacity:.35}50%{opacity:.7}75%,100%{opacity:1}}
 .selly-suggest{display:flex;gap:6px;overflow-x:auto;padding:0 12px 10px;scrollbar-width:none}
@@ -530,7 +531,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z63';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z64';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4221,7 +4222,8 @@ function toggleSelly(force){ const p=el('sellypanel'); if(!p)return;
     setTimeout(()=>{ const q=el('sellyq'); if(q)q.focus(); },80); }
 }
 function sellyKey(e){ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sellyAsk(); } }
-function sellyFmt(t){ return esc(t).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\n/g,'<br>'); }
+function sellyFmt(t){ return esc(t).replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1 ↗</a>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\n/g,'<br>'); }
+function sellySourceCards(sources){ if(!Array.isArray(sources)||!sources.length)return ''; return '<div class="selly-sources">'+sources.slice(0,4).map(s=>{ try{const u=new URL(s.url),title=s.title||u.hostname;return '<a class="selly-source" href="'+esc(u.href)+'" target="_blank" rel="noopener"><b>'+esc(title)+'</b><span>'+esc(u.hostname.replace(/^www\./,''))+' ↗</span></a>';}catch(e){return '';}}).join('')+'</div>'; }
 function sellyAdd(role,text,meta){ const box=el('sellymsgs'); if(!box)return null; const d=document.createElement('div');
   d.className='selly-msg '+(role==='user'?'user':'bot'); d.innerHTML=sellyFmt(text)+(meta?'<span class="selly-meta">'+esc(meta)+'</span>':''); box.appendChild(d); box.scrollTop=box.scrollHeight; return d; }
 function sellyLog(r,n){ return (r&&Array.isArray(r.log)?r.log:[]).slice().sort((a,b)=>(+b.ts||0)-(+a.ts||0)).slice(0,n||8).map(x=>({date:fmtDT(x.ts),activity:String(x.txt||'').slice(0,260),by:x.by||''})); }
@@ -4257,7 +4259,7 @@ async function sellyAsk(prefill){ if(SELLY_BUSY)return; const qel=el('sellyq'); 
   try{ const tok=await sellyToken(); if(!tok)throw new Error('Please sign in again to use Selly.');
     const r=await fetch(SYNC_FN+'/selly',{method:'POST',headers:{Authorization:'Bearer '+tok,'Content-Type':'application/json'},body:JSON.stringify({question:q,context:sellyContext(q),history:prior,page:UI.tab,rep:myRep()||store.__rep||'Saad Sheikh'})});
     const d=await r.json().catch(()=>({})); if(!r.ok)throw new Error(d.error||('Selly request failed ('+r.status+')'));
-    if(wait)wait.remove(); sellyAdd('bot',d.answer); SELLY_H.push({role:'assistant',content:d.answer});
+    if(wait)wait.remove(); const msg=sellyAdd('bot',d.answer); if(msg&&d.sources&&d.sources.length)msg.insertAdjacentHTML('beforeend',sellySourceCards(d.sources)); SELLY_H.push({role:'assistant',content:d.answer});
   }catch(e){ if(wait)wait.remove(); sellyAdd('bot','I couldn’t answer that yet: '+(e.message||String(e)),'No CRM data was changed'); }
   finally{ SELLY_BUSY=false; if(send)send.disabled=false; if(qel)qel.focus(); }
 }
