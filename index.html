@@ -479,7 +479,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul16·z47';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul16·z48';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -829,7 +829,8 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
 /* ====================== TODAY (live dashboard) ====================== */
 function fmtAgo(ts){ if(!ts) return 'never'; const m=Math.round((Date.now()-ts)/60000); if(m<1)return'just now'; if(m<60)return m+'m ago'; const hr=Math.round(m/60); if(hr<24)return hr+'h ago'; return Math.round(hr/24)+'d ago'; }
 const SYNC_FN='https://muidkwqinwcfnfvnducj.functions.supabase.co'; /* Supabase Edge Function base URL — apollo-tasks deployed */
-function byEmail(){ const m={}; contacts().forEach(c=>{ if(c.email) m[c.email.trim().toLowerCase()]=c; }); return m; }
+function byEmail(){ const m={}; contacts().forEach(c=>{ if(c.email2) m[c.email2.trim().toLowerCase()]=c; });
+  contacts().forEach(c=>{ if(c.email) m[c.email.trim().toLowerCase()]=c; }); return m; }
 function pushSignal(c,kind,ts,src){ store.__signals=Array.isArray(store.__signals)?store.__signals:[];
   // dedupe: drop any prior signal for same contact+kind, keep newest on top
   store.__signals=store.__signals.filter(s=>!(s.cid===c.id&&s.kind===kind));
@@ -1480,7 +1481,7 @@ const COL={
   title:{k:'title',t:'Title',val:c=>c.title||''},
   acct:{k:'acct',t:'Account',val:_acctName,cell:c=>'<span class="tsub">'+esc(_acctName(c))+'</span>'},
   cuisine:{k:'cuisine',t:'Cuisine',val:_acctCuisine},
-  email:{k:'email',t:'Email',val:c=>c.email||'',cell:c=>'<span class="tsub">'+esc(c.email||'')+'</span>'},
+  email:{k:'email',t:'Email',val:c=>((c.email||'')+' '+(c.email2||'')).trim(),cell:c=>'<span class="tsub">'+esc(c.email||'')+(c.email2?'<br><span style="opacity:.65">'+esc(c.email2)+'</span>':'')+'</span>'},
   phone:{k:'phone',t:'Phone',val:c=>c.phone||c.mobile||'',cell:c=>{ const pd=(c.phone||c.mobile||''), p=telNum(c);
     return pd?'<a class="callbtn sm" href="tel:'+esc(p)+'" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')" title="Call &amp; log outcome"><span class="ph">📞</span>'+esc(pd)+'</a>':'<span class="tsub">—</span>'; }},
   mobile:{k:'mobile',t:'Mobile',val:c=>c.mobile||'',cell:c=>'<span class="tsub">'+esc(c.mobile||'')+'</span>'},
@@ -1582,7 +1583,7 @@ function prefilter(list){ return list.filter(c=>{
     if(UI.opens.has('none')&&op) return false; }
   if(UI.owner.size){ const own=isOwner(c); if(UI.owner.has('own')&&!own) return false; if(UI.owner.has('non')&&own) return false; }
   if(UI.assignee.size){ const who=c.assignee||''; const ok=(UI.assignee.has('__none')&&!who)||(who&&UI.assignee.has(who)); if(!ok) return false; }
-  if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
+  if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.email2||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
@@ -3005,8 +3006,9 @@ function openContact(id){
   b+='<div class="f2">'+fld('First',inp("setC('"+id+"','first',this.value)",c.first))+fld('Last',inp("setC('"+id+"','last',this.value)",c.last))+'</div>';
   const sp=splitParts(c); if(sp) b+='<div class="tsub" style="margin:-4px 0 10px">Looks like two people — <a style="cursor:pointer;color:var(--sig)" onclick="splitContact(\''+id+'\')">✂️ split into '+esc(sp.a.first)+' + '+esc(sp.b.first)+'</a></div>';
   b+=fld('Title',inp("setC('"+id+"','title',this.value)",c.title));
-  b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+phoneFld('Phone','phone',c.phone)+'</div>';
-  b+='<div class="f2">'+phoneFld('Mobile','mobile',c.mobile)+fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin))+'</div>';
+  b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+fld('Alt email',inp("setC('"+id+"','email2',this.value)",c.email2))+'</div>';
+  b+='<div class="f2">'+phoneFld('Phone','phone',c.phone)+phoneFld('Mobile','mobile',c.mobile)+'</div>';
+  b+=fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin));
   b+='<div class="f3">'+fld('Warmth',sel("setC('"+id+"','warmth',this.value)",WARMTHS,c.warmth||'Cold'))+
      fld('Status',sel("setC('"+id+"','status',this.value)",C_STATUS,c.status||'New'))+
      fld('Account',accountPicker("setC('"+id+"','accountId',this.value)",c.accountId))+'</div>';
@@ -3269,8 +3271,8 @@ function dedupeScan(){
   Object.keys(an2).forEach(k=>{ const recs=an2[k]; if(recs.length<2) return;
     if(exactA.has(recs.map(r=>r.id).slice().sort().join(','))) return; add('account','similar name',recs); });
   // contacts by email
-  const em={}; contacts().forEach(c=>{ const k=(c.email||'').trim().toLowerCase(); if(k) (em[k]=em[k]||[]).push(c); });
-  Object.keys(em).forEach(k=>add('contact','email',em[k]));
+  const em={}; contacts().forEach(c=>{ [c.email,c.email2].forEach(e=>{ const k=(e||'').trim().toLowerCase(); if(k) (em[k]=em[k]||[]).push(c); }); });
+  Object.keys(em).forEach(k=>{ const u=[...new Map(em[k].map(r=>[r.id,r])).values()]; add('contact','email',u); });
   // contacts by phone — ONLY when the name also matches, so we catch the same person entered
   // twice, not colleagues sharing one restaurant line. Skip pairs already caught by email.
   const alreadyEmailed=new Set();
@@ -3353,6 +3355,13 @@ function _dmerge(type,keep,drop){
     ['lastContactedTs','lastEmailOpenTs','lastReplyTs','dispoTs'].forEach(k=>{ const m=Math.max(+keep[k]||0,+drop[k]||0); if(m) keep[k]=m; });
     if(drop.callNote&&drop.callNote!==keep.callNote) keep.callNote=[keep.callNote,drop.callNote].filter(Boolean).join(' · ');
     if(Array.isArray(drop.log)&&drop.log.length) keep.log=(Array.isArray(keep.log)?keep.log:[]).concat(drop.log);
+    // never lose an identifier: a different email → Alt email; a different number → Mobile
+    const _lc=s=>String(s||'').trim().toLowerCase();
+    if(drop.email&&keep.email&&_lc(drop.email)!==_lc(keep.email)&&!keep.email2) keep.email2=drop.email;
+    if(drop.email2&&!keep.email2&&_lc(drop.email2)!==_lc(keep.email)) keep.email2=drop.email2;
+    const kNums=[keep.phone,keep.mobile].map(x=>_dphone(x||'')).filter(Boolean);
+    [drop.phone,drop.mobile].forEach(p=>{ const d=_dphone(p||'');
+      if(d&&!kNums.includes(d)&&!keep.mobile){ keep.mobile=p; kNums.push(d); } });
   }
   const skip={id:1,_u:1,callCount:1,log:1,lastContactedTs:1,lastEmailOpenTs:1,lastReplyTs:1,dispoTs:1};
   Object.keys(drop).forEach(k=>{ if(skip[k]) return; const kv=keep[k];
@@ -3530,7 +3539,8 @@ function importCSV(text){
   const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='y'||v==='1'; };
   let na=0,nc=0,nsig=0;
   const byName={}; accounts().forEach(a=>byName[a.name.toLowerCase()]=a.id);
-  const byEmail={}; contacts().forEach(c=>{if(c.email)byEmail[c.email.toLowerCase()]=c.id;});
+  const byEmail={}; contacts().forEach(c=>{if(c.email2)byEmail[c.email2.toLowerCase()]=c.id;});
+  contacts().forEach(c=>{if(c.email)byEmail[c.email.toLowerCase()]=c.id;});
   // Second dedup key: same person name under the same account (for rows with no email).
   const byNameAcct={}; contacts().forEach(c=>{ const nm=((c.first||'')+' '+(c.last||'')).toLowerCase().trim(); if(nm) byNameAcct[c.accountId+'|'+nm]=c.id; });
   const byPhone={}; contacts().forEach(c=>{ const p=norm10(c.phone||c.mobile); if(p) byPhone[p]=c.id; });
@@ -3584,7 +3594,8 @@ function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10
 function fmtDur(s){ s=+s||0; const m=Math.floor(s/60),ss=s%60; return m?(m+'m '+ss+'s'):(ss+'s'); }
 function fmtPhone10(n){ return '('+n.slice(0,3)+') '+n.slice(3,6)+'-'+n.slice(6); }
 function phoneIndex(){ const m={}; contacts().forEach(c=>{ [c.phone,c.mobile].forEach(p=>{const n=norm10(p); if(n&&!m[n])m[n]=c.id;}); }); return m; }
-function emailIndex(){ const m={}; contacts().forEach(c=>{ if(c.email)m[c.email.toLowerCase().trim()]=c.id; }); return m; }
+function emailIndex(){ const m={}; contacts().forEach(c=>{ if(c.email2)m[c.email2.toLowerCase().trim()]=c.id; });
+  contacts().forEach(c=>{ if(c.email)m[c.email.toLowerCase().trim()]=c.id; }); return m; }   // primary email wins over someone's alt
 function ensureCallContact(n){ const aid=newAccount(fmtPhone10(n)); const cid=uid('c');
   store.contacts[cid]={id:cid,accountId:aid,first:'Main',last:'Line',title:'',email:'',phone:'+1'+n,warmth:'Warm',status:'New',source:'CSV import',log:[]}; return cid; }
 function ensureEmailContact(email){ const aid=newAccount(email.split('@')[1]||'Imported'); const cid=uid('c');
