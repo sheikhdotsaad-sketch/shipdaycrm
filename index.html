@@ -479,7 +479,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul16·z46';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul16·z47';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -3217,6 +3217,12 @@ function _dnormA(s){ return _dnorm(String(s||'').toLowerCase()
   .replace(/^\s*the\s+/,'')
   .replace(/\b(llc|inc|incorporated|corp|corporation|company|co|ltd|limited|holdings?|group)\b\.?/g,' ')); }
 function _dphone(s){ return String(s||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); }
+// Every run of ≥2 consecutive name tokens, concatenated — "Stephen Trent Iacono" →
+// {stephentrent, trentiacono, stephentrentiacono} — so a mashed import name like
+// "Trentiacono" can be matched back to the real person.
+function _nameRuns(s){ const t=String(s||'').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean), out=new Set();
+  for(let i=0;i<t.length;i++){ let acc=t[i]; for(let j=i+1;j<t.length;j++){ acc+=t[j]; out.add(acc); } }
+  return out; }
 /* ---- Combined contacts: "Mary and Joe" / "Mary & Joe Smith" = TWO people entered as one.
    splitParts → {a,b} or null; splitContact keeps person A on the existing record (email +
    full history stay put) and moves person B to a fresh sibling contact on the same account. ---- */
@@ -3285,6 +3291,45 @@ function dedupeScan(){
     const dupPhone=ps.some((p,i)=>p&&ps.indexOf(p)<i), hasBlank=ps.some(p=>!p);
     if(!dupPhone&&!hasBlank) return;
     if(seenCt.has(recs.map(r=>r.id).slice().sort().join(','))) return; add('contact','same name & account',recs); });
+  // pairwise ids of every contact group so far, so the passes below don't re-flag a caught pair
+  const pairCt=new Set();
+  groups.filter(g=>g.type==='contact').forEach(g=>g.recs.forEach(r=>g.recs.forEach(r2=>{ if(r!==r2) pairCt.add([r.id,r2.id].sort().join(',')); })));
+  // SAME PERSON under two SIMILAR accounts — "Trent Fannin" at "Ostrander Rost" AND at
+  // "Ostrander Rost Coffee Shop": one business entered twice with different emails AND phones,
+  // so nothing above catches it. Fires only when one account name CONTAINS the other after
+  // fuzzy-normalizing (≥6 chars) and the contact name is a real person (not "Main Line").
+  // Surfaces BOTH the contact pair and the two accounts themselves.
+  const GEN_CN=new Set(['mainline','frontdesk','owner','manager','office','info','reception','noname']);
+  const cnAll={}; contacts().forEach(c=>{ const k=_dnorm(cname(c));
+    if(!k||GEN_CN.has(k)||!c.accountId||!store.accounts[c.accountId]) return; (cnAll[k]=cnAll[k]||[]).push(c); });
+  const _acontain=(a1,a2)=>{ const x=_dnormA(a1&&a1.name),y=_dnormA(a2&&a2.name);
+    return x&&y&&x!==y&&Math.min(x.length,y.length)>=6&&(x.startsWith(y)||y.startsWith(x)); };
+  const pairA=new Set();
+  Object.keys(cnAll).forEach(k=>{ const recs=cnAll[k]; if(recs.length<2) return;
+    for(let i=0;i<recs.length;i++) for(let j=i+1;j<recs.length;j++){
+      const c1=recs[i],c2=recs[j]; if(c1.accountId===c2.accountId) continue;
+      const a1=store.accounts[c1.accountId],a2=store.accounts[c2.accountId];
+      if(!_acontain(a1,a2)) continue;
+      const pk=[c1.id,c2.id].sort().join(',');
+      if(!pairCt.has(pk)){ pairCt.add(pk); add('contact','same name, similar account',[c1,c2]); }
+      const ak=[a1.id,a2.id].sort().join(',');
+      if(!pairA.has(ak)){ pairA.add(ak); add('account','contains name',[a1,a2]); }
+    } });
+  // EMAIL-IMPORT ORPHANS — a contact with no real account whose name got mashed from the email
+  // local-part ("Trentiacono") but who is really an existing person ("Stephen Trent Iacono").
+  // Flag when the orphan's normalized name equals a run of ≥2 consecutive name tokens of a
+  // contact that lives on a real account.
+  const orph=contacts().filter(c=>{ const a=c.accountId&&store.accounts[c.accountId], k=_dnorm(cname(c));
+    return (!a||isJunkDomainAccount(a))&&k.length>=6&&!GEN_CN.has(k); });
+  if(orph.length){
+    const runIdx={};                                        // "trentiacono" -> [contacts named ...Trent Iacono...]
+    contacts().forEach(t=>{ const a=t.accountId&&store.accounts[t.accountId]; if(!a||isJunkDomainAccount(a)) return;
+      _nameRuns(cname(t)).forEach(r=>{ if(!GEN_CN.has(r)) (runIdx[r]=runIdx[r]||[]).push(t); }); });
+    orph.forEach(o=>{ const hits=(runIdx[_dnorm(cname(o))]||[]).filter(t=>t.id!==o.id&&!pairCt.has([o.id,t.id].sort().join(',')));
+      if(!hits.length) return;
+      hits.forEach(t=>pairCt.add([o.id,t.id].sort().join(',')));
+      add('contact','mashed name',[o].concat(hits)); });
+  }
   // accounts linked by a SHARED contact phone or email = the SAME business under two names — e.g. a
   // calendar-created person-named account ("Andrew Fraga") + the real business, or an import dupe.
   // Only fires when 2+ DISTINCT accounts share the identifier; skips sets already caught by name.
@@ -3355,9 +3400,9 @@ function dedupeRow(g,gi,r){
     '<button class="btn sm pri" onclick="dedupeMergeIdx('+gi+',\''+r.id+'\')" title="Keep this record; merge the other'+(g.recs.length>2?'s':'')+' into it">Keep this ▸ merge</button></div>';
 }
 function dedupeCard(g,gi){
-  const rlabel={name:'Same name',email:'Same email',phone:'Same phone','shared phone':'Shared phone — same business?','shared email':'Shared email — same business?','similar name':'Similar name — LLC/Inc/The stripped','same name & account':'Same name, same account'}[g.reason]||'Possible match';
+  const rlabel={name:'Same name',email:'Same email',phone:'Same phone','shared phone':'Shared phone — same business?','shared email':'Shared email — same business?','similar name':'Similar name — LLC/Inc/The stripped','same name & account':'Same name, same account','same name, similar account':'Same person — two similar accounts','contains name':'One account name contains the other','mashed name':'Import mashed the name — same person?'}[g.reason]||'Possible match';
   const caveat=(g.reason==='phone'||g.reason==='shared phone'||g.reason==='shared email')?' <span class="tsub" style="font-size:10px;font-weight:400">— could be a shared location line, check first</span>':
-    (g.reason==='similar name'||g.reason==='same name & account'?' <span class="tsub" style="font-size:10px;font-weight:400">— could be two locations of a chain, check first</span>':'');
+    (g.reason==='similar name'||g.reason==='same name & account'||g.reason==='same name, similar account'||g.reason==='contains name'?' <span class="tsub" style="font-size:10px;font-weight:400">— could be two locations of a chain, check first</span>':'');
   let h='<div class="panel" style="margin:0"><div class="ph" style="padding:9px 12px"><h3 style="font-size:13px">'+rlabel+caveat+'</h3>'+
     '<span class="sub">'+g.recs.length+' records</span></div><div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">';
   g.recs.forEach(r=>{ h+=dedupeRow(g,gi,r); });
