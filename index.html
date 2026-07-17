@@ -483,7 +483,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z59';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z60';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1789,7 +1789,7 @@ function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSe
 // applyDispo = the SINGLE place a call is recorded: bumps call count, stamps last-contacted,
 // saves the note, and requeues ONLY if the rep chose a call-back window. Fully reversible.
 function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return;
-  if(pinnedLead===c.id) pinnedLead=null;
+  if(pinnedLead===c.id) setPin(null);
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,queueOut:c.queueOut,queueOutTs:c.queueOutTs,
     callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted,warmth:c.warmth};
   c.callCount=(+c.callCount||0)+1;
@@ -1985,7 +1985,7 @@ function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c
 // Reschedule a snoozed lead's call-back forward (from now) without dialing — keeps the Scheduled
 // list under the rep's control so anything already in the re-queue can be pulled up or pushed out.
 function reschedule(cid,days){ const c=contact(cid); if(!c)return; c.queueOut=false; c.nextCallAt=Date.now()+days*_DAY; stampU(c); save(); renderActive(); toast('Rescheduled — call back '+fmtWhen(c.nextCallAt)); }
-function dropFromQueue(cid){ const c=contact(cid); if(!c)return; if(pinnedLead===cid) pinnedLead=null; c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
+function dropFromQueue(cid){ const c=contact(cid); if(!c)return; if(pinnedLead===cid) setPin(null); c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
   toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
 function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
   if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
@@ -2680,7 +2680,10 @@ function recalcQueue(){
     toast(n?('Queue re-ranked · '+n+' new open/reply'+(n>1?'s':'')):'Queue recalculated · no new signals'); })
    .catch(()=>{ renderHotList(); toast('Queue recalculated'); });
 }
-let pinnedLead=null;  // device-local: id of the Now-up lead pinned until dispositioned
+let pinnedLead=null;  // the Now-up lead, pinned until dispositioned — PERSISTED so following a
+// link (ordering page, Google) that reloads the tab never swaps the call out from under the rep
+try{ pinnedLead=localStorage.getItem('shipday_crm_pin')||null; }catch(e){}
+function setPin(id){ pinnedLead=id||null; try{ if(id)localStorage.setItem('shipday_crm_pin',id); else localStorage.removeItem('shipday_crm_pin'); }catch(e){} }
 function elapsedMMSS(ts){ let s=Math.max(0,Math.floor((Date.now()-(+ts||0))/1000)); const m=Math.floor(s/60); s=s%60; return m+':'+(s<10?'0':'')+s; }
 // "On calls now" — leads a teammate is actively working (claimed, within TTL), hidden from
 // your queue. Rendered into #onCallsBox and re-painted every second so the timers tick live.
@@ -2707,7 +2710,7 @@ function renderHotList(){
   // due queue entirely (e.g. a teammate claimed/worked it).
   let cur=null;
   const pinC=pinnedLead?due.find(c=>c.id===pinnedLead):null;
-  if(pinC){ cur=pinC; } else { cur=due[0]||null; pinnedLead=cur?cur.id:null; }
+  if(pinC){ cur=pinC; } else { cur=due[0]||null; setPin(cur?cur.id:null); }
   const rest=due.filter(c=>cur&&c.id!==cur.id);
   const me=myRep();
   // Claim-on-surface: the lead in front of you locks to you (heartbeat re-stamps
@@ -3410,7 +3413,7 @@ function quickAddDeal(stage){ const id=uid('d'); const closed=CLOSED.includes(st
   if(closed) store.deals[id].closedAt=Date.now();
   logAuto(store.deals[id],'Logged in '+stage); save(); openDeal(id); }
 function bookDemo(cid){ const c=contact(cid); if(!c)return;
-  if(pinnedLead===cid) pinnedLead=null;
+  if(pinnedLead===cid) setPin(null);
   const id=uid('d'); const prevStatus=c.status;
   store.deals[id]={id,accountId:c.accountId,contactId:cid,name:(acct(c.accountId)?acct(c.accountId).name:cname(c)),stage:'Booked Demo',value:0,warmth:c.warmth||'Warm',log:[],createdAt:Date.now(),_u:Date.now()};
   logAuto(store.deals[id],'Demo booked from '+cname(c));
