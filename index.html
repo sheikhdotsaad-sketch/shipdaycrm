@@ -11,6 +11,7 @@
   --mut:#8b949e; --dim:#6e7681; --sig:#00c16a; --sig2:#3ddc84;
   --hot:#ff4d4d; --warm:#ffb020; --cold:#58a6ff; --won:#2ea043; --lost:#6e7681;
   --chip:#21262d;
+  --acc:#3ddc84; /* accent for active chips/dial CTAs — was referenced everywhere but never defined (invisible buttons) */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -87,14 +88,15 @@ header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var
 .hstat .s b{font-size:15px}
 .hstat .s span{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
 .hspace{flex:1}
-.hbtn{background:var(--chip);border:1px solid var(--line);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:600}
+.hbtn{background:var(--chip);border:1px solid var(--line);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:600;transition:border-color .15s,background .15s,color .15s}
 .hbtn:hover{border-color:var(--sig)}
 .hbtn.pri{background:var(--sig);color:#fff;border-color:var(--sig)}
+.hbtn.pri:hover{background:var(--sig2);border-color:var(--sig2)}
 
 nav{display:flex;gap:4px;padding:8px 18px;background:var(--panel);border-bottom:1px solid var(--line);
   position:sticky;top:53px;z-index:39;overflow-x:auto}
 nav button{padding:7px 13px;border-radius:8px;font-size:13px;font-weight:600;color:var(--mut);white-space:nowrap;
-  display:flex;align-items:center;gap:6px}
+  display:flex;align-items:center;gap:6px;transition:background .15s,color .15s}
 nav button:hover{color:var(--ink);background:var(--panel2)}
 nav button.on{color:#fff;background:var(--sig)}
 nav button.on .pill{background:rgba(255,255,255,.25);color:#fff}
@@ -116,7 +118,8 @@ main{flex:1;min-width:0}
 .view.on{display:block}
 
 /* Cards / tables */
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:16px;
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 6px 18px rgba(0,0,0,.22)}
 .panel .ph{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}
 .panel .ph h3{font-size:14px;font-weight:700}
 .panel .ph .sub{font-size:11px;color:var(--mut)}
@@ -162,10 +165,12 @@ select.cin:hover{border-color:var(--sig)}
 
 /* Stat cards grid (Today/Quota) */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px}
-.stat .n{font-size:24px;font-weight:800}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 4px 12px rgba(0,0,0,.18);transition:border-color .15s,transform .15s}
+.stat[style*="cursor:pointer"]:hover{border-color:var(--sig);transform:translateY(-1px)}
+.stat .n{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
 .stat .l{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
-.stat.accent{border-color:var(--sig)}
+.stat.accent{border-color:var(--sig);background:linear-gradient(180deg,rgba(0,193,106,.07),var(--panel))}
 .stat.accent .n{color:var(--sig)}
 
 /* Kanban */
@@ -216,7 +221,7 @@ select.cin:hover{border-color:var(--sig)}
 .f3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
 .sec{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--sig);font-weight:800;margin:18px 0 9px;padding-bottom:5px;border-bottom:1px solid var(--line)}
 .df{display:flex;gap:8px;padding:12px 17px;border-top:1px solid var(--line);background:var(--panel)}
-.btn{background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:9px 14px;font-size:12px;font-weight:700}
+.btn{background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:9px 14px;font-size:12px;font-weight:700;transition:border-color .15s,background .15s,color .15s}
 .btn:hover{border-color:var(--sig)}
 a.btn{display:inline-block;text-decoration:none;line-height:1;cursor:pointer}
 a.btn:hover{text-decoration:none}
@@ -288,6 +293,10 @@ tr.tdone td{opacity:.5}
 #taskwidget .tw-ap{display:flex;align-items:center;gap:8px;padding:11px 16px;border-top:1px solid var(--line);font-size:12px}
 @media(max-width:640px){#taskwidget{left:3vw;right:3vw;width:auto;bottom:82px}}
 
+/* Rep sign-in gate (identity picker — real password auth stays Phase C) */
+#repgate{position:fixed;inset:0;background:rgba(4,7,12,.78);backdrop-filter:blur(5px);z-index:120;display:none;align-items:center;justify-content:center;padding:16px}
+#repgate .rbtn{display:block;width:100%;text-align:left;font-size:14px;padding:12px 14px;margin-bottom:8px}
+
 /* Login gate */
 #gate{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;align-items:center;justify-content:center}
 #gate.hidden{display:none}
@@ -350,6 +359,7 @@ small.hint{color:var(--dim);font-size:11px}
     <div class="s"><b id="hs-cust">0</b><span>Customers</span></div>
   </div>
   <div class="hspace"></div>
+  <button class="hbtn" id="rep-chip" onclick="setMyRep()" title="Who's working in this browser — every call, email &amp; note you log is stamped with this name so Team Activity can tell reps apart">👤 …</button>
   <button class="hbtn" onclick="syncAll()" title="Universal sync — pulls Apollo, Gmail &amp; Google Calendar, then refreshes every tab">↻ Sync</button>
   <button class="hbtn" onclick="exportCurrentTab()">Export CSV</button>
   <button class="hbtn" onclick="importBackupPrompt()">Import CSV</button>
@@ -469,7 +479,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul15·z42';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul16·z46';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -541,7 +551,7 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   out.contacts=mergeRecs(base.contacts||{},over.contacts||{},del);
   out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
   const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
-  ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV','__dedupeKeep'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
+  ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV','__dedupeKeep','__splitKeep'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
   // __apollo/__gmail are live-fetched counts — keep whichever pull is NEWER (by syncedAt) regardless of which
   // store is base/over, so a stale cloud copy never reverts a fresh sync (was the 269-vs-241 flap on load/push).
   ['__apollo','__gmail'].forEach(k=>{ const a=base[k], b=over[k];
@@ -862,17 +872,56 @@ function callSignal(cid){ const c=contact(cid); if(!c)return; markSignalsSeen();
 function markSignalsSeen(){ (store.__signals||[]).forEach(s=>s.seen=true); save(); }
 function clearSignals(){ store.__signals=[]; save(); renderActive(); toast('Signals cleared'); }
 function signalsPanel(){
-  const sig=(store.__signals||[]).filter(s=>Date.now()-(+s.ts||0)<7*864e5).slice(0,15);
+  const sig=(store.__signals||[]).filter(s=>Date.now()-(+s.ts||0)<7*864e5);
   if(!sig.length) return '';
-  const rows=sig.map(s=>{ const c=contact(s.cid); if(!c) return '';
-    const p=telNum(c), icon=s.kind==='reply'?'↩️':'🔥', verb=s.kind==='reply'?'replied to your email':'opened your email'+(s.src?' ('+esc(s.src)+')':'');
-    return '<tr'+(s.seen?' style="opacity:.55"':'')+'><td class="tname">'+icon+' '+esc(s.name)+(s.acct?' <span class="tsub">· '+esc(s.acct)+'</span>':'')+
-      '<div class="tsub">'+verb+' · '+fmtAgo(s.ts)+'</div></td>'+
+  // ONE row per contact, not per raw event — 6 opens by the same person read as one hot row
+  // with a ×6 count, replies float to the top, and the row is click-to-open.
+  const by={}; sig.forEach(s=>{ const k=s.cid||s.name||'?';
+    const g=by[k]=by[k]||{cid:s.cid,name:s.name,acct:s.acct,opens:0,replies:0,last:0,seen:true};
+    if(s.kind==='reply') g.replies++; else g.opens++;
+    if(+s.ts>g.last) g.last=+s.ts; if(!s.seen) g.seen=false; });
+  const groups=Object.values(by).filter(g=>contact(g.cid))
+    .sort((a,b)=>(b.replies-a.replies)||(b.last-a.last)).slice(0,12);
+  if(!groups.length) return '';
+  const nOpen=sig.filter(s=>s.kind!=='reply').length, nRep=sig.length-nOpen;
+  const rows=groups.map(g=>{ const c=contact(g.cid), p=telNum(c);
+    const what=[g.replies?('↩️ replied'+(g.replies>1?' ×'+g.replies:'')):'',
+                g.opens?('👀 opened'+(g.opens>1?' ×'+g.opens:'')):''].filter(Boolean).join(' · ');
+    return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer'+(g.seen?';opacity:.6':'')+'">'+
+      '<td class="tname">'+(g.replies?'↩️':'🔥')+' '+esc(g.name||cname(c))+(g.acct&&_dnorm(g.acct)!==_dnorm(g.name||'')?' <span class="tsub">· '+esc(g.acct)+'</span>':'')+
+      '<div class="tsub">'+what+' · '+fmtAgo(g.last)+'</div></td>'+
       '<td style="text-align:right;white-space:nowrap">'+
       (p?'<a class="callbtn" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
-      '<button class="btn sm gh" onclick="openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('');
-  return '<div class="panel"><div class="ph"><h3>🔥 Recent Signals</h3><span class="sub">'+sig.length+' recent email opens/replies — likely worth a call</span>'+
+      '<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('');
+  return '<div class="panel"><div class="ph"><h3>🔥 Recent Signals</h3><span class="sub">'+groups.length+' contact'+(groups.length!==1?'s':'')+' engaging this week · '+nOpen+' opens · '+nRep+' repl'+(nRep===1?'y':'ies')+'</span>'+
     '<button class="btn sm gh" style="margin-left:auto" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table></div>';
+}
+/* ---- Team Activity: who actually did the work, from log-entry `by` stamps (dispo calls,
+   quick-logs, OpenPhone imports with a User column). Entries logged before names were set
+   have no stamp and roll up as "Unattributed" — they age out of the 7-day window. ---- */
+function teamActivityPanel(){
+  const d0=today0().getTime(), wk=Date.now()-7*864e5, rows={};
+  const bump=(who,k,ts)=>{ const r=rows[who]=rows[who]||{dialsT:0,dials7:0,emails7:0,notes7:0,demos7:0,last:0};
+    if(k==='dial'){ if(ts>=d0)r.dialsT++; r.dials7++; } else if(k==='email')r.emails7++;
+    else if(k==='demo')r.demos7++; else r.notes7++;
+    if(ts>r.last)r.last=ts; };
+  contacts().forEach(c=>(c.log||[]).forEach(l=>{ const ts=+l.ts||0, tx=String(l.txt||''); if(ts<wk||ts>Date.now()+864e5) return;
+    if(/^(☎|📞|Call\b)/.test(tx)) bump(l.by||'Unattributed','dial',ts);
+    else if(/^(📧 Sent|✉|Email\b)/.test(tx)) bump(l.by||'Unattributed','email',ts);
+    else if(!l.sys||/^(LinkedIn|Text|Note)\b/.test(tx)) bump(l.by||'Unattributed','note',ts); }));
+  deals().forEach(d=>(d.log||[]).forEach(l=>{ const ts=+l.ts||0; if(ts<wk) return;
+    if(/^Demo booked/.test(String(l.txt||''))) bump(l.by||'Unattributed','demo',ts); }));
+  const names=Object.keys(rows); if(!names.length) return '';
+  names.sort((a,b)=>{ if(a==='Unattributed')return 1; if(b==='Unattributed')return -1; return rows[b].dials7-rows[a].dials7; });
+  const tr=names.map(n=>{ const r=rows[n]; const un=n==='Unattributed';
+    return '<tr'+(un?' style="opacity:.55"':'')+'><td class="tname">'+(un?'<span class="tsub">Unattributed <span title="Logged before a name was set in that browser — hit the 👤 button in the header">ⓘ</span></span>':'👤 '+esc(n))+'</td>'+
+      '<td style="text-align:right"><b>'+r.dialsT+'</b></td><td style="text-align:right">'+r.dials7+'</td>'+
+      '<td style="text-align:right">'+r.emails7+'</td><td style="text-align:right">'+r.notes7+'</td>'+
+      '<td style="text-align:right">'+(r.demos7?'<b style="color:var(--acc)">'+r.demos7+'</b>':'0')+'</td>'+
+      '<td class="tsub" style="text-align:right">'+fmtAgo(r.last)+'</td></tr>'; }).join('');
+  return '<div class="panel"><div class="ph"><h3>👥 Team Activity</h3><span class="sub">last 7 days · stamped by the 👤 name set in each browser</span></div>'+
+    '<table><thead><tr><th>Rep</th><th style="text-align:right">Dials today</th><th style="text-align:right">Dials 7d</th>'+
+    '<th style="text-align:right">Emails 7d</th><th style="text-align:right">Notes 7d</th><th style="text-align:right">Demos 7d</th><th style="text-align:right">Last active</th></tr></thead><tbody>'+tr+'</tbody></table></div>';
 }
 function setAutoSync(on){ store.__autoSync=!!on; save(); toast(on?'Auto-refresh on · every 15 min':'Auto-refresh off'); if(on)autoSyncTick(); }
 let _autoBusy=false, _lastAuto=0;
@@ -1272,6 +1321,9 @@ function renderToday(){
   h+=stat(money(mrr)+' / '+money(q),'MRR vs quota',true);
   h+='</div>';
 
+  // 👥 Who did what this week — AE + SDR side by side
+  h+=teamActivityPanel();
+
   // 🔥 Recent signals — new opens/replies worth a call (why the Hot List re-ranked)
   h+=signalsPanel();
 
@@ -1553,9 +1605,11 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
   const dispoBtns=DISPOS.map(d=>'<button type="button" class="cm-dispo'+(cmSel.dispo===d.k?' on':'')+'" onclick="cmPickDispo(\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
   const reqBtns=REQUEUE.map(r=>'<button type="button" class="cm-req'+(cmSel.req===r.k?' on':'')+'" onclick="cmPickReq(\''+r.k+'\')">'+esc(r.t)+'</button>').join('');
   const prior=+c.callCount?('<span class="cm-sub">'+c.callCount+' prior call'+(c.callCount>1?'s':'')+(c.dispo?' · last: '+esc(c.dispo):'')+'</span>'):'';
+  const cl=claimOf(c), other=(cl&&cl.rep!==myRep())?cl:null;
+  const clWarn=other?'<div style="margin:10px 0 2px;padding:8px 11px;border:1px solid var(--warm);border-radius:8px;font-size:12.5px;color:var(--warm)">⚠️ <b>'+esc(other.rep)+'</b> is working this lead right now (locked '+fmtAgo(other.at)+') — check with them before dialing.</div>':'';
   m.innerHTML='<div class="cmodal">'+
     '<div class="cm-head"><div><div class="cm-name">'+esc(cname(c))+'</div><div class="cm-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>'+prior+'</div>'+
-      '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+
+      '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+clWarn+
     (p?'<a class="cm-dial" href="tel:'+esc(p)+'">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')+
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
     '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…" oninput="cmSel.note=this.value">'+esc(cmSel.note)+'</textarea>'+
@@ -1665,7 +1719,30 @@ const HOT_CAP=150;
 const CLAIM_TTL=30*60*1000;
 let claimsMap={}, claimSub=null;
 function myRep(){ try{ return (localStorage.getItem('shipday_crm_rep')||'').trim(); }catch(e){ return ''; } }
-function setMyRep(){ const v=prompt('Your name — locks the leads you call to you so teammates don\'t double-dial:',myRep()); if(v==null) return; try{ localStorage.setItem('shipday_crm_rep',v.trim()); }catch(e){} renderActive(); }
+function setMyRep(){ repGate(false); }
+/* Rep sign-in gate — IDENTITY, not security (password auth stays Phase C). Picking who you
+   are is what makes lead-locking + activity attribution work, so boot() forces it once per
+   browser. Team names come from store.__team (grows as each rep signs in once). */
+function repGate(force){
+  let g=el('repgate'); if(!g){ g=document.createElement('div'); g.id='repgate'; document.body.appendChild(g); }
+  const me=myRep(), names=team().filter(Boolean);
+  g.innerHTML='<div class="gatebox">'+
+    '<h1>Shipday <b>CRM</b></h1>'+
+    '<p>Who\'s working in this browser? Calls, emails &amp; notes you log are recorded under this name, and leads you open lock to you so teammates never dial the same person.</p>'+
+    names.map(n=>'<button class="btn rbtn'+(me===n?' pri':'')+'" onclick="repPick('+JSON.stringify(n).replace(/"/g,'&quot;')+')">👤 '+esc(n)+(me===n?' <span style="float:right;font-size:11px;opacity:.8">you</span>':'')+'</button>').join('')+
+    '<div class="fld" style="margin-top:10px"><label>Someone else</label><input id="rep-new" placeholder="Type your name…" onkeydown="if(event.key===\'Enter\')repPick(this.value)"></div>'+
+    '<button class="btn pri" style="width:100%" onclick="repPick(document.getElementById(\'rep-new\').value)">Sign in</button>'+
+    (force?'':'<button class="btn gh" style="width:100%;margin-top:8px" onclick="el(\'repgate\').style.display=\'none\'">Cancel</button>');
+  g.style.display='flex';
+}
+function repPick(n){ n=String(n||'').trim(); if(!n){ toast('Type a name first'); return; }
+  try{ localStorage.setItem('shipday_crm_rep',n); }catch(e){}
+  if(!team().includes(n)){ team().push(n); save(); }
+  const g=el('repgate'); if(g) g.style.display='none';
+  renderRepChip(); renderActive(); toast('Signed in as '+n);
+}
+function renderRepChip(){ const b=el('rep-chip'); if(!b) return; const me=myRep();
+  b.innerHTML=me?('👤 '+esc(me)):'👤 <b style="color:var(--hot)">Sign in</b>'; }
 function claimsReady(){ return !!sb && syncReady(); }
 function claimRecActive(r){ return !!r && (Date.now()-(+r.at||0)<CLAIM_TTL); }
 function claimOf(c){ const r=c&&claimsMap[c.id]; return claimRecActive(r)?r:null; }
@@ -1692,6 +1769,7 @@ function subscribeClaims(){
     }).subscribe();
 }
 async function claimLead(c){ const me=myRep(); if(!me||!c||!claimsReady()) return;
+  if(claimedByOther(c)) return;   // never steal a teammate's active lead — they saw it first
   const now=Date.now(); claimsMap[c.id]={rep:me,at:now};  // optimistic
   try{ await sb.from('crm_state').upsert({id:'claim:'+c.id,data:{rep:me,at:now,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('claimLead',e); }
 }
@@ -2874,6 +2952,7 @@ function logBar(t,id){
 function logList(o,t,id){ const L=(o.log||[]).map((x,i)=>({x,i})).reverse();
   if(!L.length) return '<div class="tsub" style="padding:4px 0">No activity yet.</div>';
   return '<ul class="log">'+L.map(({x,i})=>'<li>'+esc(x.txt)+'<div class="t">'+new Date(x.ts).toLocaleString()+
+    (x.by?' · <b style="color:var(--mut)">'+esc(x.by)+'</b>':'')+
     (t?' · <span onclick="event.stopPropagation();delLog(\''+t+'\',\''+id+'\','+i+')" style="cursor:pointer;color:var(--mut)" title="Delete this log entry">✕</span>':'')+
     '</div></li>').join('')+'</ul>';
 }
@@ -2883,10 +2962,13 @@ function delLog(t,id,i){ const o=objOf(t,id); if(!o||!o.log||!o.log[i])return; i
   toast('Log entry deleted',()=>{ o.log.splice(i,0,removed); save(); const c2=el('log-'+t+id); if(c2)c2.innerHTML=logList(o,t,id); });
 }
 function quickLog(t,id,kind,txt){ const o=objOf(t,id); if(!o)return; o.log=o.log||[];
-  o.log.push({ts:Date.now(),txt:(kind+(txt?': '+txt:''))}); stampU(o); save();
+  const e={ts:Date.now(),txt:(kind+(txt?': '+txt:''))}; const me=myRep(); if(me)e.by=me;
+  o.log.push(e); stampU(o); save();
   const cont=el('log-'+t+id); if(cont)cont.innerHTML=logList(o,t,id); toast('Logged '+kind);
 }
-function logAuto(o,txt){ o.log=o.log||[]; o.log.push({ts:Date.now(),txt:txt,sys:true}); stampU(o); }
+// `by` = whoever's browser did it (myRep). Unset name → entry stays unattributed rather than
+// silently crediting the default rep, so the Team Activity numbers are never fabricated.
+function logAuto(o,txt){ o.log=o.log||[]; const e={ts:Date.now(),txt:txt,sys:true}; const me=myRep(); if(me)e.by=me; o.log.push(e); stampU(o); }
 
 /* ---- custom fields (add any field to any record) ---- */
 function recOf(ent,id){ return ent==='c'?contact(id):ent==='a'?acct(id):deal(id); }
@@ -2921,6 +3003,7 @@ function openContact(id){
   const callBtn=(num)=> num? '<a class="callbtn sm" href="tel:'+esc(num)+'" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Call &amp; log outcome">📞</a>' : '';
   const phoneFld=(lab,field,val)=> fld(lab,'<div style="display:flex;gap:6px;align-items:center"><div style="flex:1">'+inp("setC('"+id+"','"+field+"',this.value)",val)+'</div>'+callBtn(val)+'</div>');
   b+='<div class="f2">'+fld('First',inp("setC('"+id+"','first',this.value)",c.first))+fld('Last',inp("setC('"+id+"','last',this.value)",c.last))+'</div>';
+  const sp=splitParts(c); if(sp) b+='<div class="tsub" style="margin:-4px 0 10px">Looks like two people — <a style="cursor:pointer;color:var(--sig)" onclick="splitContact(\''+id+'\')">✂️ split into '+esc(sp.a.first)+' + '+esc(sp.b.first)+'</a></div>';
   b+=fld('Title',inp("setC('"+id+"','title',this.value)",c.title));
   b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+phoneFld('Phone','phone',c.phone)+'</div>';
   b+='<div class="f2">'+phoneFld('Mobile','mobile',c.mobile)+fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin))+'</div>';
@@ -3128,7 +3211,43 @@ function delAccount(id){ if(!confirm('Delete account AND its contacts/deals?'))r
    picks a winner (merge the rest into it) or "Keep separate". Every merge is one
    Undo away (full snapshot). */
 function _dnorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+// Fuzzy account normal: drop leading "The" + trailing corporate boilerplate so
+// "The Pizza Co LLC" and "Pizza Co" collide in the dedupe scan.
+function _dnormA(s){ return _dnorm(String(s||'').toLowerCase()
+  .replace(/^\s*the\s+/,'')
+  .replace(/\b(llc|inc|incorporated|corp|corporation|company|co|ltd|limited|holdings?|group)\b\.?/g,' ')); }
 function _dphone(s){ return String(s||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); }
+/* ---- Combined contacts: "Mary and Joe" / "Mary & Joe Smith" = TWO people entered as one.
+   splitParts → {a,b} or null; splitContact keeps person A on the existing record (email +
+   full history stay put) and moves person B to a fresh sibling contact on the same account. ---- */
+function splitParts(c){ const n=String(cname(c)||'').trim(); if(!n||n==='(no name)') return null;
+  const a=acct(c&&c.accountId); if(a&&_dnorm(a.name)===_dnorm(n)) return null;            // it's the business name, not people
+  const m=n.match(/^([A-Za-z][A-Za-z'’.\-]*)\s*(?:&|\+|\/|\band\b)\s*([A-Za-z][A-Za-z'’.\-]*)(?:\s+([A-Za-z][A-Za-z'’.\-]*(?:\s+[A-Za-z'’.\- ]+)?))?$/i);
+  if(!m) return null;
+  if(/['’]s$/i.test(m[1])||/['’]s$/i.test(m[2])) return null;                              // "Ben & Jerry's" = a brand
+  const shared=(m[3]||'').trim();
+  return {orig:n, a:{first:m[1],last:shared}, b:{first:m[2],last:shared}};
+}
+function splitCandidates(){ const keep=store.__splitKeep||{}; return contacts().filter(c=>!keep[c.id]&&splitParts(c)); }
+function splitKeep(cid){ store.__splitKeep=store.__splitKeep||{}; store.__splitKeep[cid]=Date.now(); save(); renderDedupe(); toast('Kept as one contact'); }
+function splitContact(cid){ const c=contact(cid); if(!c) return; const p=splitParts(c); if(!p){ toast('Doesn’t look like two names'); return; }
+  const prev={first:c.first,last:c.last,logLen:(c.log||[]).length};
+  const id2=uid('c');
+  store.contacts[id2]={id:id2,accountId:c.accountId||'',first:p.b.first,last:p.b.last,title:c.title||'',
+    phone:c.phone||'',mobile:c.mobile||'',email:'',status:c.status||'New',warmth:c.warmth||'',
+    source:[c.source,'Split'].filter(Boolean).join(' · '),assignee:c.assignee||'',log:[],_u:Date.now()};
+  c.first=p.a.first; c.last=p.a.last;
+  const nameA=(p.a.first+' '+(p.a.last||'')).trim(), nameB=(p.b.first+' '+(p.b.last||'')).trim();
+  logAuto(c,'✂️ Split "'+p.orig+'" — '+nameB+' moved to their own contact');
+  logAuto(store.contacts[id2],'✂️ Split from "'+p.orig+'" — email & history stayed on '+nameA);
+  stampU(c); save(); renderActive(); if(UI.tab==='dedupe') renderDedupe();
+  if(curDrawer&&curDrawer.ent==='c'&&curDrawer.id===cid) openContact(cid);
+  toast('Split into '+nameA+' + '+nameB,()=>{ c.first=prev.first; c.last=prev.last;
+    if(c.log&&c.log.length>prev.logLen) c.log=c.log.slice(0,prev.logLen);
+    delete store.contacts[id2]; tomb(id2); stampU(c); save(); renderActive();
+    if(UI.tab==='dedupe') renderDedupe();
+    if(curDrawer&&curDrawer.ent==='c'&&curDrawer.id===cid) openContact(cid); });
+}
 let _dedupeGroups=[];
 function dedupeScan(){
   const keep=store.__dedupeKeep||{}; const groups=[];
@@ -3137,6 +3256,12 @@ function dedupeScan(){
   // accounts by normalized name
   const an={}; accounts().forEach(a=>{ const k=_dnorm(a.name); if(k) (an[k]=an[k]||[]).push(a); });
   Object.keys(an).forEach(k=>add('account','name',an[k]));
+  // accounts by FUZZY name — "The Pizza Co LLC" vs "Pizza Co": leading "The" + corporate suffixes
+  // stripped before comparing. Skips sets the exact-name pass already caught.
+  const exactA=new Set(); Object.keys(an).forEach(k=>{ if(an[k].length>1) exactA.add(an[k].map(r=>r.id).slice().sort().join(',')); });
+  const an2={}; accounts().forEach(a=>{ const k=_dnormA(a.name); if(k) (an2[k]=an2[k]||[]).push(a); });
+  Object.keys(an2).forEach(k=>{ const recs=an2[k]; if(recs.length<2) return;
+    if(exactA.has(recs.map(r=>r.id).slice().sort().join(','))) return; add('account','similar name',recs); });
   // contacts by email
   const em={}; contacts().forEach(c=>{ const k=(c.email||'').trim().toLowerCase(); if(k) (em[k]=em[k]||[]).push(c); });
   Object.keys(em).forEach(k=>add('contact','email',em[k]));
@@ -3148,6 +3273,18 @@ function dedupeScan(){
   Object.keys(ph).forEach(k=>{ const recs=ph[k]; if(recs.length<2) return;
     const ids=recs.map(r=>r.id).slice().sort();
     if(ids.some((id,i)=>i>0&&alreadyEmailed.has([ids[i-1],id].join(',')))) return; add('contact','phone',recs); });
+  // contacts with the SAME NAME under the SAME ACCOUNT — import dupes that have no email/phone
+  // to match on (e.g. two blank "Main Line" rows). BUT same name + all-DIFFERENT numbers = a
+  // chain's separate location lines (Cilantro Taqueria has 5 real "Main Line"s), so only flag
+  // when a number repeats or a record has no number at all. Skips sets already caught above.
+  const seenCt=new Set(); groups.filter(g=>g.type==='contact').forEach(g=>seenCt.add(g.recs.map(r=>r.id).slice().sort().join(',')));
+  const cn={}; contacts().forEach(c=>{ const k=_dnorm(cname(c)); if(!k||k==='noname'||!c.accountId) return;
+    const kk=c.accountId+'|'+k; (cn[kk]=cn[kk]||[]).push(c); });
+  Object.keys(cn).forEach(k=>{ const recs=cn[k]; if(recs.length<2) return;
+    const ps=recs.map(r=>_dphone(r.phone||r.mobile||''));
+    const dupPhone=ps.some((p,i)=>p&&ps.indexOf(p)<i), hasBlank=ps.some(p=>!p);
+    if(!dupPhone&&!hasBlank) return;
+    if(seenCt.has(recs.map(r=>r.id).slice().sort().join(','))) return; add('contact','same name & account',recs); });
   // accounts linked by a SHARED contact phone or email = the SAME business under two names — e.g. a
   // calendar-created person-named account ("Andrew Fraga") + the real business, or an import dupe.
   // Only fires when 2+ DISTINCT accounts share the identifier; skips sets already caught by name.
@@ -3218,8 +3355,9 @@ function dedupeRow(g,gi,r){
     '<button class="btn sm pri" onclick="dedupeMergeIdx('+gi+',\''+r.id+'\')" title="Keep this record; merge the other'+(g.recs.length>2?'s':'')+' into it">Keep this ▸ merge</button></div>';
 }
 function dedupeCard(g,gi){
-  const rlabel={name:'Same name',email:'Same email',phone:'Same phone','shared phone':'Shared phone — same business?','shared email':'Shared email — same business?'}[g.reason]||'Possible match';
-  const caveat=(g.reason==='phone'||g.reason==='shared phone'||g.reason==='shared email')?' <span class="tsub" style="font-size:10px;font-weight:400">— could be a shared location line, check first</span>':'';
+  const rlabel={name:'Same name',email:'Same email',phone:'Same phone','shared phone':'Shared phone — same business?','shared email':'Shared email — same business?','similar name':'Similar name — LLC/Inc/The stripped','same name & account':'Same name, same account'}[g.reason]||'Possible match';
+  const caveat=(g.reason==='phone'||g.reason==='shared phone'||g.reason==='shared email')?' <span class="tsub" style="font-size:10px;font-weight:400">— could be a shared location line, check first</span>':
+    (g.reason==='similar name'||g.reason==='same name & account'?' <span class="tsub" style="font-size:10px;font-weight:400">— could be two locations of a chain, check first</span>':'');
   let h='<div class="panel" style="margin:0"><div class="ph" style="padding:9px 12px"><h3 style="font-size:13px">'+rlabel+caveat+'</h3>'+
     '<span class="sub">'+g.recs.length+' records</span></div><div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">';
   g.recs.forEach(r=>{ h+=dedupeRow(g,gi,r); });
@@ -3228,11 +3366,26 @@ function dedupeCard(g,gi){
 }
 function renderDedupe(){
   _dedupeGroups=dedupeScan();
-  const g=_dedupeGroups;
+  const g=_dedupeGroups, sc=splitCandidates();
   let h='<div class="panel"><div class="ph"><h3>Dedupe review</h3><span class="sub">'+g.length+' suspected duplicate group'+(g.length!==1?'s':'')+
+    (sc.length?' · '+sc.length+' combined-name contact'+(sc.length!==1?'s':''):'')+
     ' — nothing is removed without your OK</span><button class="btn sm gh" style="margin-left:auto" onclick="switchTab(\'accounts\')">Done</button></div>';
-  if(!g.length){ h+='<div class="qempty" style="padding:24px">✓ No duplicates found — your book is clean.</div></div>'; el('view-dedupe').innerHTML=h; return; }
+  if(!g.length&&!sc.length){ h+='<div class="qempty" style="padding:24px">✓ No duplicates found — your book is clean.</div></div>'; el('view-dedupe').innerHTML=h; return; }
   h+='<div style="padding:12px;display:flex;flex-direction:column;gap:12px">';
+  if(sc.length){
+    h+='<div class="panel" style="margin:0"><div class="ph" style="padding:9px 12px"><h3 style="font-size:13px">✂️ Two people in one contact?</h3>'+
+      '<span class="sub">'+sc.length+' "Mary &amp; Joe"-style names — split so each person gets their own record</span></div>'+
+      '<div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">'+
+      sc.slice(0,40).map(c=>{ const p=splitParts(c), a=acct(c.accountId);
+        const nA=(p.a.first+' '+(p.a.last||'')).trim(), nB=(p.b.first+' '+(p.b.last||'')).trim();
+        return '<div style="display:flex;align-items:center;gap:10px;border:1px solid var(--bd);border-radius:8px;padding:8px 10px">'+
+          '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:13px;cursor:pointer" onclick="openContact(\''+c.id+'\')">'+esc(cname(c))+'</div>'+
+          '<div class="tsub" style="font-size:11px">'+(a?esc(aname(a))+' · ':'')+'→ <b>'+esc(nA)+'</b> + <b>'+esc(nB)+'</b> (email &amp; history stay on '+esc(nA)+')</div></div>'+
+          '<button class="btn sm pri" onclick="splitContact(\''+c.id+'\')">✂️ Split</button>'+
+          '<button class="btn sm gh" title="It\'s really one contact (or a brand name) — stop suggesting" onclick="splitKeep(\''+c.id+'\')">Keep as one</button></div>'; }).join('')+
+      (sc.length>40?'<div class="tsub">…and '+(sc.length-40)+' more — split some to see the rest.</div>':'')+
+      '</div></div>';
+  }
   g.forEach((grp,gi)=>{ h+=dedupeCard(grp,gi); });
   h+='</div></div>';
   el('view-dedupe').innerHTML=h;
@@ -3451,7 +3604,10 @@ function smartImport(text){
 }
 function prepCallImport(rows,idx){
   const iDir=idx('direction'),iFrom=idx('from'),iTo=idx('to'),iDur=idx('duration'),
-        iType=idx('type');
+        iType=idx('type'),
+        // OpenPhone exports name the dialing teammate (User/Owner col) — carry it so the SDR's
+        // imported dials show under HIS name in Team Activity, not as anonymous history.
+        iUser=idx('user name','username','user','owner name','owner','operator','member','agent','rep');
   // Every time-ish column, in preference order. Missed calls leave answeredAt blank,
   // so we fall back through the list to the first cell that actually parses.
   const H=rows[0].map(h=>h.toLowerCase().trim());
@@ -3465,7 +3621,8 @@ function prepCallImport(rows,idx){
     const n=norm10(out?(iTo>=0?r[iTo]:''):(iFrom>=0?r[iFrom]:'')); if(!n) return;
     const dur=parseInt(iDur>=0?r[iDur]:0)||0, ts=rowTs(r);
     const txt=dur>0?((out?'📞 Called → ':'📞 Inbound call ← ')+fmtDur(dur)):(out?'📞 Called → no answer':'📞 Missed call ←');
-    plan.push({n,ts,txt}); all.add(n);
+    const by=iUser>=0?String(r[iUser]||'').trim():'';
+    plan.push(by?{n,ts,txt,by}:{n,ts,txt}); all.add(n);
   });
   if(!plan.length){toast('No call rows found');return;}
   let create=0; all.forEach(n=>{ if(!p2c[n])create++; });
@@ -3516,8 +3673,10 @@ function applyLogImport(plan,kind){
     let cid=kind==='call'?(map[key]||ensureCallContact(p.n)):resolveEmailContact(p.email,p.company); map[key]=cid;
     const c=contact(cid); if(!c)return; c.log=c.log||[];
     if(kind==='email'){ if(p.seq) c.apolloSeq=p.seq; if(p.kind==='reply') c.replied=true; }
-    if(c.log.some(l=>l.txt===p.txt&&(!p.ts||l.ts===p.ts)))return;   // same txt (+ts if known) → skip dupe
-    c.log.push({ts:p.ts||Date.now(),txt:p.txt,sys:true}); added++;
+    const dup=c.log.find(l=>l.txt===p.txt&&(!p.ts||l.ts===p.ts));   // same txt (+ts if known) → dupe
+    if(dup){ if(p.by&&!dup.by){ dup.by=p.by; stampU(c); touched[cid]=1; } return; }  // …but backfill who dialed
+    const e={ts:p.ts||Date.now(),txt:p.txt,sys:true}; if(p.by)e.by=p.by;
+    c.log.push(e); added++;
     if(kind==='call'){ c.callCount=(+c.callCount||0)+1; if(p.ts>(+c.lastContactedTs||0)){ c.lastContactedTs=p.ts; c.lastContacted=fmtD(new Date(p.ts)); } }
     else { if(p.kind==='open'&&p.ts>(+c.lastEmailOpenTs||0)) c.lastEmailOpenTs=p.ts;
            if(p.kind==='sent'&&p.ts>(+c.lastContactedTs||0)){ c.lastContactedTs=p.ts; c.lastContacted=fmtD(new Date(p.ts)); } }
@@ -3609,9 +3768,10 @@ function boot(){
   let t='today'; try{ t=localStorage.getItem('shipday_crm_tab')||'today'; }catch(e){}
   const valid=['today','hotlist','pipeline','accounts','contacts','intent','closed','live','quota'];
   if(!valid.includes(t)) t='today';
-  buildFilters(); renderStats(); renderCounts(); renderTaskWidget();
+  buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
   switchTab(t);
   syncRail(); checkBackupBanner(); initSync();
+  if(!myRep()) repGate(true);   // sign in before working — attribution + lead-locking need a name
   // Refresh the live Apollo count on load; the cloud pull preserves whichever sync is newer (see initSync),
   // so this fresh number is never reverted to the stale saved one — fixes the 269-until-manual-↻ flap.
   if(SYNC_FN){ Promise.resolve(syncApollo(true)).then(()=>{ renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); }).catch(()=>{}); }
