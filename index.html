@@ -481,7 +481,7 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z50';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z54';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
 const AUTH_ON = false;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
@@ -525,6 +525,16 @@ function norm(s){
   s.__quota=s.__quota||b.__quota; s.__quota.history=s.__quota.history||{}; s.__quota.targets=s.__quota.targets||{}; s.__keys=s.__keys||b.__keys; s.__probs=s.__probs||{}; s.__cal=s.__cal||{syncedAt:0,events:[]}; s.__tasks=Array.isArray(s.__tasks)?s.__tasks:[]; s.__seq=s.__seq||1;
   s.__rep=s.__rep||b.__rep; s.__email=s.__email||b.__email; s.__team=Array.isArray(s.__team)&&s.__team.length?s.__team:b.__team.slice();
   s.__del=s.__del||{};
+  // DoorDash/UberEats/Grubhub are delivery marketplaces, not POS — self-heal any that
+  // landed in a.pos (old imports) into a.delivery. Runs on every load/pull, idempotent.
+  const DELIV_RX=/(door\s*dash|uber\s*eats|grub\s*hub|postmates)/gi;
+  Object.values(s.accounts).forEach(a=>{ const p=String(a.pos||''); if(!p||!DELIV_RX.test(p)) return;
+    DELIV_RX.lastIndex=0; const hits=[...new Set((p.match(DELIV_RX)||[]).map(x=>x.replace(/\s+/g,'')))];
+    a.pos=p.replace(DELIV_RX,'').replace(/\s*[\/,&+]\s*$|^\s*[\/,&+]\s*/g,'').replace(/\s{2,}/g,' ').replace(/^[\s\/,&+-]+|[\s\/,&+-]+$/g,'').trim();
+    const have=String(a.delivery||'').toLowerCase();
+    const add=hits.filter(hx=>!have.includes(hx.toLowerCase()));
+    if(add.length) a.delivery=(a.delivery?a.delivery+', ':'')+add.join(', ');
+  });
   if(SEED && SEED.__seedV && !s.__seedV) s.__seedV=SEED.__seedV;
   return s;
 }
@@ -770,8 +780,9 @@ function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFi
 // multi = brand parent or one of its locations; single = standalone account
 function matchLoc(a){ if(!UI.loc||!UI.loc.size) return true; const multi=isBrand(a)||isLocation(a);
   return (UI.loc.has('multi')&&multi)||(UI.loc.has('single')&&!multi); }
-// POS free text ("Toast + UberEats", "toast pos") buckets to a known brand so the chips don't fragment
-const POS_BRANDS=['Toast','Square','Clover','Olo','ChowNow','Deliverect','Lunchbox','Slice','Menufy','Popmenu','BentoBox','Grubhub','DoorDash','UberEats'];
+// POS free text ("Toast + UberEats", "toast pos") buckets to a known brand so the chips don't fragment.
+// Delivery marketplaces (DoorDash/UberEats/Grubhub) are NOT POS systems — they live in a.delivery.
+const POS_BRANDS=['Toast','Square','Clover','Olo','ChowNow','Deliverect','Lunchbox','Slice','Menufy','Popmenu','BentoBox'];
 function posOf(a){ const p=(a&&a.pos||'').trim(); if(!p) return ''; const low=p.toLowerCase();
   const b=POS_BRANDS.find(x=>low.includes(x.toLowerCase())); return b||'Other'; }
 function cuiOf(a){ return (a&&a.cuisine||'').trim(); }
@@ -1528,7 +1539,8 @@ const COL={
 function lastTouchTs(c){ if(!c) return 0;
   let t=+c.lastContactedTs||0;
   if(!t && c.lastContacted){ const p=Date.parse(c.lastContacted); if(!isNaN(p)) t=p; }
-  if(c.log&&c.log.length){ const lt=Math.max(...c.log.map(l=>+l.ts||0)); if(lt>t) t=lt; }
+  // 📝 notes are intel, not outreach — a sheet-imported note must not make a lead look "just contacted"
+  if(c.log&&c.log.length){ const lt=Math.max(0,...c.log.filter(l=>!/^📝/.test(l.txt||'')).map(l=>+l.ts||0)); if(lt>t) t=lt; }
   return t;
 }
 function lastTouchLabel(c){ const t=lastTouchTs(c); return t?fmtAgo(t):'never'; }
@@ -1595,6 +1607,73 @@ function tierC(c){ const i=intentC(c), ph=!!telNum(c);
 function hasOpenDeal(c){ if(!c) return false;
   return deals().some(d=>d.stage!=='Closed Lost'&&d.stage!=='Closed Deal'&&
     (d.contactId===c.id||(c.accountId&&d.accountId===c.accountId))); }
+/* ---- account-level rollups + plain-English "AI read" for the drawers ---- */
+function acctHeat(a){ const cs=contactsOf(a.id).filter(c=>!c.internal); return cs.length?Math.max(...cs.map(heat)):0; }
+function acctIntentScore(a){ const cs=contactsOf(a.id).filter(c=>!c.internal); return cs.length?Math.max(...cs.map(intentC)):0; }
+function acctLastTouch(a){ const cs=contactsOf(a.id); return cs.length?Math.max(0,...cs.map(lastTouchTs)):0; }
+function acctLastOpen(a){ const cs=contactsOf(a.id); return cs.length?Math.max(0,...cs.map(lastOpenTs)):0; }
+function acctRecentCalls(aid){ const rows=[];
+  contactsOf(aid).forEach(c=>(c.log||[]).forEach(l=>{ if(/📞|☎/.test(l.txt||'')) rows.push({ts:+l.ts||0,txt:l.txt,by:l.by||'',who:cname(c),cid:c.id}); }));
+  rows.sort((a,b)=>b.ts-a.ts); return rows.slice(0,4); }
+// Deterministic one-line read of where the record stands (no LLM — same signals as heat/intent).
+function contactAI(c){ if(!c) return '';
+  const i=intentC(c), ph=telNum(c), open=lastOpenTs(c), touch=lastTouchTs(c), lc=lastCallTs(c);
+  const miss=[]; if(!c.email&&!c.email2)miss.push('email'); if(!ph)miss.push('phone'); if(!c.title)miss.push('role');
+  if(c.replied) return '↩️ Replied to an email — get them scheduled while it’s warm.';
+  if(open&&open>touch&&ph) return '🔥 Opening emails since your last touch — call now.';
+  if(open&&open>touch) return '📧 Reading your emails but no number on file — enrich a phone or push for a reply.';
+  if(i>0&&ph) return '📈 Warming — some engagement; keep in the dial rotation.';
+  if(miss.length>=2) return '🧩 Needs enrichment — missing '+miss.join(', ')+'.';
+  if(ph&&!lc) return '☎️ Never dialed — fresh cold-call candidate.';
+  if(lc) return '⏳ Worked '+fmtAgo(lc)+(c.dispo?' ('+c.dispo+')':'')+' — snoozing back up the queue.';
+  if(miss.length) return '🧩 Needs enrichment — missing '+miss.join(', ')+'.';
+  return '💤 Dormant — no signals yet.';
+}
+function acctAI(a){ if(!a) return '';
+  if(a.isCustomer) return '🏆 Customer'+(a.onboard?' — '+a.onboard:'')+'.';
+  const cs=contactsOf(a.id).filter(c=>!c.internal);
+  if(!cs.length) return '🧩 No contacts yet — find a person to reach.';
+  if(dealsOf(a.id).some(d=>d.stage!=='Closed Lost'&&d.stage!=='Closed Deal')) return '📅 In the pipeline — work the deal, not the list.';
+  const hot=cs.map(c=>({c,i:intentC(c)})).sort((x,y)=>y.i-x.i)[0];
+  if(hot.i>=180) return '🔥 '+cname(hot.c)+' is engaging — this account is ready for a call.';
+  if(hot.i>0) return '📈 Warming — '+cname(hot.c)+' shows recent engagement.';
+  if(!cs.some(telNum)) return '🧩 Needs enrichment — no callable number on the account.';
+  const lt=acctLastTouch(a);
+  if(!lt) return '☎️ Untouched — cold-call ready.';
+  return '⏳ Worked — last touch '+fmtAgo(lt)+', no live signals since.';
+}
+// Lenient "open now?" from a free-text hours field ("Mon-Fri 11am-9pm; Sat 12-8").
+// Returns true / false / null (null = can't tell, show nothing).
+function hoursOpenNow(a){ const h=(a&&a.hours||'').trim(); if(!h) return null;
+  const now=new Date(), day=now.getDay(), mins=now.getHours()*60+now.getMinutes();
+  const DAYS={sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
+  const toMin=s=>{ const m=String(s).trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/); if(!m) return null;
+    let hh=+m[1]; const mm=+(m[2]||0), ap=m[3];
+    if(ap==='pm'&&hh<12)hh+=12; if(ap==='am'&&hh===12)hh=0;
+    if(!ap&&hh<=7)hh+=12;   // bare "9-5" style: small hour with no am/pm reads as PM
+    return hh*60+mm; };
+  let sawRange=false;
+  for(const seg of h.split(/[;,]+/)){
+    const low=seg.toLowerCase();
+    let days=null;
+    const dm=low.match(/(sun|mon|tue|wed|thu|fri|sat)[a-z]*\s*(?:-|–|to)\s*(sun|mon|tue|wed|thu|fri|sat)[a-z]*/);
+    const d1=low.match(/\b(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/);
+    if(dm){ days=[]; let i=DAYS[dm[1]]; for(let k=0;k<7;k++){ days.push(i); if(i===DAYS[dm[2]])break; i=(i+1)%7; } }
+    else if(d1) days=[DAYS[d1[1]]];
+    if(/closed/.test(low)){ if(days&&days.includes(day)) return false; continue; }
+    const tm=low.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:-|–|to)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/);
+    if(!tm) continue;
+    const o=toMin(tm[1]), c2=toMin(tm[2]); if(o==null||c2==null) continue;
+    sawRange=true;
+    if(!days||days.includes(day)){ if(c2>o ? (mins>=o&&mins<c2) : (mins>=o||mins<c2)) return true; }
+  }
+  return sawRange?false:null;
+}
+const statChip=(l,v,color)=>'<div style="flex:1;min-width:86px;border:1px solid var(--bd);border-radius:8px;padding:5px 9px">'+
+  '<div class="tsub" style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px">'+l+'</div>'+
+  '<div style="font-weight:800;font-size:13.5px'+(color?';color:'+color:'')+'">'+v+'</div></div>';
+const statStrip=chips=>'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px">'+chips.join('')+'</div>';
+const aiLine=txt=>'<div style="border:1px solid var(--bd);border-left:3px solid var(--sig);border-radius:8px;padding:7px 10px;margin:0 0 12px;font-size:12.5px">'+txt+'</div>';
 const LEAD_COLS=[COL.warmth,COL.name,COL.acct,COL.phone,COL.status,COL.apollo,COL.next];
 const CONTACT_COLS=[COL.warmth,COL.name,COL.acct,COL.email,COL.phone,COL.status,COL.apollo];
 /* ---- customizable columns ---- */
@@ -2756,9 +2835,9 @@ const A_COLS=[
   {k:'source',t:'Source',val:a=>a.source||''},
   {k:'assigned',t:'Assigned to',val:a=>a.assignee||'',cell:a=>a.assignee?'<span class="tag">'+esc(a.assignee)+'</span>':'<span class="tsub">—</span>'}
 ];
-COLDEF.accounts=['name','cuisine','loc','pos','delivery','contacts','type','mrr','source'];
-COLDEF.closed=['name','onboard','pos','contacts','mrr','source'];
-COLDEF.live=['name','onboard','mrr','pos','contacts','source'];
+COLDEF.accounts=['name','cuisine','loc','pos','delivery','contacts','type','mrr'];
+COLDEF.closed=['name','onboard','pos','contacts','mrr'];
+COLDEF.live=['name','onboard','mrr','pos','contacts'];
 function renderAccounts(){
   let recs=activeAccts().filter(a=>matchLoc(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')+' '+(a.state||'')));
   if(!(TSORT.accounts&&TSORT.accounts.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
@@ -3101,6 +3180,14 @@ function openContact(id){
     '<div class="tsub">'+esc(c.title||'')+(a?' · <a onclick="event.stopPropagation();openAccount(\''+a.id+'\')">'+esc(a.name)+'</a>':'')+'</div></div>'+
     warmBadge(c.warmth)+'<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
+  // ---- at-a-glance: tier + both scores + freshness, then the plain-English read ----
+  { const hh=heat(c), ii=intentC(c), lt=lastTouchTs(c), lo=lastOpenTs(c), t=tierC(c), n=openCount(c);
+    b+=statStrip([ statChip('Tier',t.t),
+      statChip('Heat',hh,hh>=350?'var(--hot)':hh>=180?'var(--warm)':''),
+      statChip('Intent',ii||'—',ii>=180?'var(--sig)':ii>0?'var(--warm)':''),
+      statChip('Last contacted',lt?fmtAgo(lt):'never'),
+      statChip('Last email open',lo?fmtAgo(lo)+(n?' ('+n+'x)':''):'—',lo?'var(--sig)':'') ]);
+    b+=aiLine(contactAI(c)); }
   // One call affordance only: the inline 📞 beside each number below (no duplicate call bar).
   // Inline call button beside a number: dials that specific line, opens the ONE dispo modal.
   // If a contact has both phone + mobile the SDR can call either; a single outcome (set after
@@ -3109,9 +3196,9 @@ function openContact(id){
   const phoneFld=(lab,field,val)=> fld(lab,'<div style="display:flex;gap:6px;align-items:center"><div style="flex:1">'+inp("setC('"+id+"','"+field+"',this.value)",val)+'</div>'+callBtn(val)+'</div>');
   b+='<div class="f2">'+fld('First',inp("setC('"+id+"','first',this.value)",c.first))+fld('Last',inp("setC('"+id+"','last',this.value)",c.last))+'</div>';
   const sp=splitParts(c); if(sp) b+='<div class="tsub" style="margin:-4px 0 10px">Looks like two people — <a style="cursor:pointer;color:var(--sig)" onclick="splitContact(\''+id+'\')">✂️ split into '+esc(sp.a.first)+' + '+esc(sp.b.first)+'</a></div>';
-  b+=fld('Title',inp("setC('"+id+"','title',this.value)",c.title));
+  b+=fld('Role / title',inp("setC('"+id+"','title',this.value)",c.title));
   b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+fld('Alt email',inp("setC('"+id+"','email2',this.value)",c.email2))+'</div>';
-  b+='<div class="f2">'+phoneFld('Phone','phone',c.phone)+phoneFld('Mobile','mobile',c.mobile)+'</div>';
+  b+='<div class="f2">'+phoneFld('Direct number','phone',c.phone)+phoneFld('Mobile / other','mobile',c.mobile)+'</div>';
   b+=fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin));
   b+='<div class="f3">'+fld('Warmth',sel("setC('"+id+"','warmth',this.value)",WARMTHS,c.warmth||'Cold'))+
      fld('Status',sel("setC('"+id+"','status',this.value)",C_STATUS,c.status||'New'))+
@@ -3161,13 +3248,26 @@ function openAccount(id){
     (a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing customer</span>':a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
     '<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
-  b+=fld('Name',inp("setA('"+id+"','name',this.value)",a.name));
+  // ---- at-a-glance: account heat/intent + freshness + open-now ----
+  { const lt=acctLastTouch(a), lo=acctLastOpen(a), open=hoursOpenNow(a), hh=acctHeat(a), ii=acctIntentScore(a);
+    const chips=[ statChip('Heat',hh,hh>=350?'var(--hot)':hh>=180?'var(--warm)':''),
+      statChip('Intent',ii||'—',ii>=180?'var(--sig)':ii>0?'var(--warm)':''),
+      statChip('Last contacted',lt?fmtAgo(lt):'never'),
+      statChip('Last email open',lo?fmtAgo(lo):'—',lo?'var(--sig)':'') ];
+    if(open!==null) chips.push(statChip('Right now',open?'🟢 Open':'🔴 Closed',open?'var(--sig)':'var(--hot)'));
+    b+=statStrip(chips)+aiLine(acctAI(a)); }
+  // Customer marker up front — customers stay OUT of the Accounts list (they live on Closed/Live) but still exist
+  b+='<div class="f2">'+fld('Name',inp("setA('"+id+"','name',this.value)",a.name))+
+     fld('Current customer?',sel("setAcustType('"+id+"',this.value)",['No','Yes — my customer','Existing — not mine'],a.existingCust?'Existing — not mine':a.isCustomer?'Yes — my customer':'No'))+'</div>';
+  if(a.isCustomer) b+='<div class="tsub" style="margin:-4px 0 8px">'+(a.existingCust?'🏢 Already on Shipday — not your win, kept out of the call queue.':'🏆 Hidden from the Accounts list — lives on the Closed / Live tabs.')+'</div>';
+  b+='<div class="f2">'+fld('Phone (direct / corporate)',inp("setA('"+id+"','phone',this.value)",a.phone))+fld('Email (general / corporate)',inp("setA('"+id+"','email',this.value)",a.email))+'</div>';
   b+='<div class="f2">'+fld('Cuisine',inp("setA('"+id+"','cuisine',this.value)",a.cuisine))+fld('# Locations',inp("setA('"+id+"','employees',this.value)",a.employees))+'</div>';
-  b+=fld('Address',inp("setA('"+id+"','address',this.value)",a.address));
+  b+=fld('Street address',inp("setA('"+id+"','address',this.value)",a.address));
   b+='<div class="f2">'+fld('City',inp("setA('"+id+"','city',this.value)",a.city))+fld('State',inp("setA('"+id+"','state',this.value)",a.state))+'</div>';
   b+='<div class="f2">'+fld('Website',inp("setA('"+id+"','website',this.value)",a.website))+fld('Online ordering link',inp("setA('"+id+"','ordering',this.value)",a.ordering))+'</div>';
-  b+='<div class="f2">'+fld('POS',inp("setA('"+id+"','pos',this.value)",a.pos))+fld('Delivery apps',inp("setA('"+id+"','delivery',this.value)",a.delivery))+'</div>';
-  b+='<div class="f2">'+fld('Source',inp("setA('"+id+"','source',this.value)",a.source))+fld('Assigned to',assignPicker("setAssignee('a','"+id+"',this.value)",a.assignee))+'</div>';
+  b+='<div class="f2">'+fld('POS',inp("setA('"+id+"','pos',this.value)",a.pos))+fld('3rd-party delivery (DoorDash / UberEats…)',inp("setA('"+id+"','delivery',this.value)",a.delivery))+'</div>';
+  b+=fld('Hours (e.g. Mon-Fri 11am-9pm; Sat 12pm-8pm)',inp("setA('"+id+"','hours',this.value)",a.hours));
+  b+=fld('Assigned to',assignPicker("setAssignee('a','"+id+"',this.value)",a.assignee));  // source kept in data, not shown (Saad's ask)
   // ---- location structure ----
   const par=brandOf(a);
   b+='<div class="sec">Location structure</div>';
@@ -3188,10 +3288,8 @@ function openAccount(id){
      (a.ordering?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.ordering))+'">🛒 Ordering</a>':'')+
      '<a class="btn sm gh" target="_blank" href="https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||a.state||'')+' facebook')+'">f Facebook</a>'+
      '</div>';
-  b+='<div class="sec">Customer</div>';
-  b+=fld('Customer status',sel("setAcustType('"+id+"',this.value)",['No','Yes — my customer','Existing — not mine'],a.existingCust?'Existing — not mine':a.isCustomer?'Yes — my customer':'No'));
-  if(a.existingCust) b+='<div class="tsub" style="margin:-4px 0 8px">🏢 Already on Shipday — kept out of your call queue, not counted as your win.</div>';
   if(a.isCustomer&&!a.existingCust){
+    b+='<div class="sec">Customer</div>';
     b+='<div class="f2">'+fld('Plan $/mo',selN("setAplan('"+id+"',this.value)",PLANS.map(String),a.plan?String(a.plan):''))+fld('MRR',inp("setA('"+id+"','mrr',+this.value)",a.mrr,'number'))+'</div>';
     b+='<div class="f3">'+fld('Onboarding',selN("setA('"+id+"','onboard',this.value)",['Closed Won','Onboarding','Live','Paused','Churned'],a.onboard))+
        fld('Health',selN("setA('"+id+"','health',this.value)",['Green','Yellow','Red'],a.health))+
@@ -3203,10 +3301,19 @@ function openAccount(id){
   b+='<div class="sec">Contacts <button class="btn sm gh" style="float:right" onclick="addContact(\''+id+'\')">+ Add</button></div>';
   const cs=contactsOf(id);
   b+= cs.length? cs.map(c=>'<div class="mini" onclick="openContact(\''+c.id+'\')"><div class="mn">'+esc(cname(c))+' '+warmBadge(c.warmth)+'</div><div class="ms">'+esc(c.title||'')+' · '+esc(c.email||c.phone||'')+' · '+esc(c.status||'New')+'</div></div>').join('') : '<div class="tsub">No contacts.</div>';
-  // deals under account
-  b+='<div class="sec">Deals <button class="btn sm gh" style="float:right" onclick="addDeal(\''+id+'\')">+ Add</button></div>';
-  const ds=dealsOf(id);
-  b+= ds.length? ds.map(d=>'<div class="mini" onclick="openDeal(\''+d.id+'\')"><div class="mn">'+esc(d.name||a.name)+'</div><div class="ms"><span class="stg">'+esc(d.stage)+'</span> '+(d.value?money(d.value):'')+(d.mrr?' · '+money(d.mrr)+'/mo':'')+'</div></div>').join('') : '<div class="tsub">No deals.</div>';
+  // meetings & deals under account — open first, closed history below (tap any → deal drawer)
+  b+='<div class="sec">Meetings &amp; deals <button class="btn sm gh" style="float:right" onclick="addDeal(\''+id+'\')">+ Add</button></div>';
+  const ds=dealsOf(id), dRow=d=>'<div class="mini" onclick="openDeal(\''+d.id+'\')"><div class="mn">'+esc(d.name||a.name)+
+    (d.stage===WON?' <span class="tag cust">✓ Won</span>':d.stage==='Closed Lost'?' <span class="tag" style="color:var(--hot)">✗ Lost</span>':'')+'</div>'+
+    '<div class="ms"><span class="stg">'+esc(d.stage)+'</span> '+(d.demoDate?'📅 '+esc(fmtDT(d.demoDate))+' · ':'')+
+    (d.closedAt?'closed '+esc(fmtD(d.closedAt))+' · ':'')+(d.value?money(d.value):'')+(d.mrr?' · '+money(d.mrr)+'/mo':'')+'</div></div>';
+  const dsOpen=ds.filter(d=>!CLOSED.includes(d.stage)), dsPrev=ds.filter(d=>CLOSED.includes(d.stage));
+  b+= dsOpen.length? dsOpen.map(dRow).join('') : '<div class="tsub">No open deals.</div>';
+  if(dsPrev.length){ b+='<div class="sec" style="margin-top:8px">Previous deals</div>'+dsPrev.sort((x,y)=>(+y.closedAt||0)-(+x.closedAt||0)).map(dRow).join(''); }
+  // recent dials across every contact on the account
+  { const rc=acctRecentCalls(id);
+    b+='<div class="sec">Recent calls</div>';
+    b+= rc.length? rc.map(r=>'<div class="mini" onclick="openContact(\''+r.cid+'\')"><div class="mn">'+esc(r.txt)+'</div><div class="ms">'+esc(r.who)+' · '+new Date(r.ts).toLocaleString()+(r.by?' · '+esc(r.by):'')+'</div></div>').join('') : '<div class="tsub">No calls logged yet.</div>'; }
   b+='<div class="sec">Activity</div>'+logBar('a',id)+'<div id="log-a'+id+'">'+logList(a,'a',id)+'</div>';
   el('drawer-body').innerHTML=b;
   el('drawer-foot').innerHTML='<button class="btn pri" onclick="saveNow()">💾 Save</button>'+
@@ -3222,6 +3329,14 @@ function openDeal(id){
     '<div class="tsub">'+(a?'<a onclick="openAccount(\''+a.id+'\')">'+esc(a.name)+'</a>':'')+(c?' · '+esc(cname(c)):'')+'</div></div>'+
     '<span class="stg">'+esc(d.stage)+'</span><button class="x" onclick="closeDrawer()">×</button>';
   let b='';
+  // ---- deal at a glance: worth, when it was demoed/closed, how long it's been alive ----
+  { const born=+d.createdAt||+d._u||0, age=born?Math.max(1,Math.round((Date.now()-born)/_DAY)):0;
+    const chips=[ statChip('Stage',esc(d.stage),d.stage===WON?'var(--won)':d.stage==='Closed Lost'?'var(--hot)':''),
+      statChip('MRR',d.mrr?money(d.mrr)+'/mo':'—'),
+      statChip('Demo',d.demoDate?fmtDT(d.demoDate):'—'),
+      CLOSED.includes(d.stage)?statChip('Closed',d.closedAt?fmtD(d.closedAt):'—'):statChip('Close odds',dealProb(d)+'%'),
+      statChip('Age',age?age+'d':'—') ];
+    b+=statStrip(chips); }
   b+='<div class="f2">'+fld('Stage',sel("setDstage('"+id+"',this.value)",STAGES,d.stage))+(CLOSED.includes(d.stage)?'':fld('Warmth',sel("setD('"+id+"','warmth',this.value)",WARMTHS,d.warmth||'Warm')))+'</div>';
   if(!CLOSED.includes(d.stage)) b+='<div class="f2">'+fld('Chance to close %',inp("setDealProb('"+id+"',this.value)",dealProb(d),'number'))+'<div class="tsub" style="align-self:center">Drives the pipeline forecast (MRR × this %). Defaults from stage.</div></div>';
   b+='<div class="f3">'+fld('Deal value',inp("setD('"+id+"','value',+this.value)",d.value,'number'))+fld('Plan $/mo',selN("setDplan('"+id+"',this.value)",PLANS.map(String),d.plan?String(d.plan):''))+fld('Demo date',inp("setD('"+id+"','demoDate',this.value)",d.demoDate,'datetime-local'))+'</div>';
@@ -3635,7 +3750,9 @@ function importCSV(text){
   const iAcc=col('account','restaurant','company'),iFirst=col('first'),iLast=col('last'),iName=col('contact name','owner','name'),
     iTitle=col('title'),iEmail=col('email'),iPhone=col('phone'),iCity=col('city','area'),iState=col('state'),
     iWeb=col('website'),iPos=col('pos','platform'),iWarm=col('warmth','tier','health','priority'),iStage=col('stage'),iVal=col('value'),
-    iCui=col('cuisine','food type','category'),iOrd=col('online ordering','ordering link','order link','ordering url','order url','ordering');
+    iCui=col('cuisine','food type','category'),iOrd=col('online ordering','ordering link','order link','ordering url','order url','ordering'),
+    iAddr=col('address','street'),iDispo=col('call disposition','disposition','dispo'),iNote=col('notes','note'),
+    iDel=col('delivery apps','delivery'),iLocs=col('# locs','# locations','locations');
   // ---- Engagement columns → intent signals (so an imported list shows up in Intent) ----
   const iOpens=col('opens','opened','pixel_visits','pixel visits','email opens'),
     iOpenAt=col('last opened','opened at','last_open','last open'),
@@ -3677,10 +3794,16 @@ function importCSV(text){
     }
     if(!an)return;
     let aid=byName[an.toLowerCase()];
-    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),isCustomer:false}; byName[an.toLowerCase()]=aid; na++; }
+    // "# Locs" > 1 = a multi-location group (sets locType + the # Locations field)
+    const locsN=(iLocs>=0?parseInt(String(r[iLocs]||'').replace(/\.0$/,'')):0)||0;
+    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),isCustomer:false};
+      if(locsN>1){ store.accounts[aid].employees=String(locsN); store.accounts[aid].locType='multi'; }
+      byName[an.toLowerCase()]=aid; na++; }
     else { // account already in book — fill in blanks only (re-importing an enriched sheet enriches, never clobbers)
       const a0=acct(aid); if(a0){ let f=false; const fill=(k,i)=>{ const v=(i>=0?String(r[i]||''):'').trim(); if(v&&!a0[k]){ a0[k]=v; f=true; } };
-        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState);
+        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel);
+        if(locsN>1&&!a0.employees){ a0.employees=String(locsN); f=true; }
+        if(locsN>1&&(!a0.locType||a0.locType==='single')&&!isLocation(a0)){ a0.locType='multi'; f=true; }
         if(f) stampU(a0); } }
     const email=(iEmail>=0?r[iEmail]:'').trim();
     let first='',last='';
@@ -3689,13 +3812,34 @@ function importCSV(text){
     if(email||first){ const phone=(iPhone>=0?r[iPhone]:'').trim(), pk=norm10(phone), nm=((first||'')+' '+(last||'')).toLowerCase().trim();
       // Dedup: match on email, else same name under the same account, else same phone number.
       const exist=(email&&byEmail[email.toLowerCase()]) || (nm&&byNameAcct[aid+'|'+nm]) || (pk&&byPhone[pk]);
-      if(exist){ const c=contact(exist); if(c){ if(email&&!c.email){ c.email=email; byEmail[email.toLowerCase()]=exist; } if(phone&&!c.phone&&!c.mobile){ c.phone=phone; if(pk)byPhone[pk]=exist; } stampEngage(c,r); } }
+      // Sheet metadata → matched or new contact: fill blank title/dispo, log a 📝 note once (txt-dedup),
+      // and upgrade warmth (Cold→Warm→Hot, never downgrade) when the sheet says the lead is hotter.
+      const stampMeta=c=>{ if(!c) return; let f=false;
+        const ttl=(iTitle>=0?String(r[iTitle]||'').trim():''); if(ttl&&ttl.toLowerCase()!=='none'&&!c.title){ c.title=ttl; f=true; }
+        const dv=(iDispo>=0?String(r[iDispo]||'').trim():''); if(dv&&dv.toLowerCase()!=='none'&&!c.dispo){ c.dispo=dv; f=true; }
+        const nv=(iNote>=0?String(r[iNote]||'').trim():'');
+        if(nv&&nv.toLowerCase()!=='none'){ const txt='📝 '+nv; c.log=c.log||[];
+          if(!c.log.some(l=>l.txt===txt||l.txt===txt+' (sheet import)')){ c.log.push({ts:Date.now(),txt,sys:true}); f=true; } }
+        const wv=(iWarm>=0?String(r[iWarm]||'').trim().toLowerCase():'');
+        const wNew=(wv.includes('hot')||wv.includes('high'))?'Hot':(wv.includes('warm')||wv.includes('med'))?'Warm':'';
+        const rank={Cold:0,Warm:1,Hot:2};
+        if(wNew&&(rank[wNew]||0)>(rank[c.warmth]||0)){ c.warmth=wNew; f=true; }
+        if(f) stampU(c); };
+      if(exist){ const c=contact(exist); if(c){ if(email&&!c.email){ c.email=email; byEmail[email.toLowerCase()]=exist; }
+        if(phone&&!c.phone&&!c.mobile){ c.phone=phone; if(pk)byPhone[pk]=exist; }
+        if(!c.accountId||!acct(c.accountId)){ c.accountId=aid; stampU(c); }   // orphan self-heals onto the row's account
+        stampMeta(c); stampEngage(c,r); } }
       else { const cid=uid('c');
       let warm='Cold'; const wv=(iWarm>=0?r[iWarm]:'').toLowerCase(); if(wv.includes('hot')||wv.includes('a ')||wv.includes('high'))warm='Hot'; else if(wv.includes('warm')||wv.includes('b ')||wv.includes('med'))warm='Warm';
       store.contacts[cid]={id:cid,accountId:aid,first,last,title:(iTitle>=0?r[iTitle]:'').trim(),email,phone,warmth:warm,status:'New',log:[]};
       if(isInternalEmail(email)) store.contacts[cid].internal=true;   // colleague on our own domain — keep out of queue/Intent
+      stampMeta(contact(cid));
       stampEngage(contact(cid),r);
       if(email)byEmail[email.toLowerCase()]=cid; if(nm)byNameAcct[aid+'|'+nm]=cid; if(pk)byPhone[pk]=cid; nc++; } }
+    else { // no contact on the row — a note still lands on the ACCOUNT's activity log (txt-dedup'd)
+      const nv=(iNote>=0?String(r[iNote]||'').trim():'');
+      if(nv&&nv.toLowerCase()!=='none'){ const a1=acct(aid); if(a1){ const txt='📝 '+nv; a1.log=a1.log||[];
+        if(!a1.log.some(l=>l.txt===txt)){ a1.log.push({ts:Date.now(),txt,sys:true}); stampU(a1); } } } }
   });
   save(); render(); toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':''));
 }
