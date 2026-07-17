@@ -293,6 +293,40 @@ tr.tdone td{opacity:.5}
 #taskwidget .tw-ap{display:flex;align-items:center;gap:8px;padding:11px 16px;border-top:1px solid var(--line);font-size:12px}
 @media(max-width:640px){#taskwidget{left:3vw;right:3vw;width:auto;bottom:82px}}
 
+/* Selly — read-only Shipday sales copilot */
+#sellyfab{position:fixed;bottom:20px;left:84px;z-index:89;height:54px;min-width:54px;padding:0 17px;border-radius:28px;
+  background:linear-gradient(135deg,var(--sig),#1fbcff);color:#04121f;border:none;font-size:14px;font-weight:900;
+  box-shadow:0 8px 26px rgba(0,193,106,.28),0 6px 20px rgba(0,0,0,.42);display:flex;align-items:center;gap:8px;
+  justify-content:center;transition:transform .15s ease,filter .15s ease}
+#sellyfab:hover{transform:translateY(-2px);filter:brightness(1.06)}
+#sellyfab.open{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
+.selly-mark{display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:50%;
+  background:rgba(4,18,31,.16);font-size:15px;font-weight:950}
+#sellypanel{position:fixed;left:20px;bottom:86px;z-index:89;width:min(460px,94vw);height:min(650px,76vh);
+  background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 58px rgba(0,0,0,.62);
+  display:none;flex-direction:column;overflow:hidden}
+.selly-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);
+  background:linear-gradient(90deg,rgba(0,193,106,.10),rgba(31,188,255,.05))}
+.selly-head .selly-mark{background:linear-gradient(135deg,var(--sig),#1fbcff);color:#04121f}
+.selly-title{font-size:14px;font-weight:850}.selly-sub{font-size:10.5px;color:var(--mut)}
+.selly-x{margin-left:auto;color:var(--mut);font-size:22px;line-height:1;padding:2px 6px}.selly-x:hover{color:var(--ink)}
+#sellymsgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.selly-msg{max-width:88%;padding:9px 11px;border-radius:11px;font-size:12.5px;line-height:1.5;white-space:normal}
+.selly-msg.bot{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
+.selly-msg.user{align-self:flex-end;background:rgba(0,193,106,.15);border:1px solid rgba(0,193,106,.35)}
+.selly-meta{display:block;color:var(--dim);font-size:9.5px;margin-top:5px}
+.selly-thinking{color:var(--mut);font-style:italic}.selly-thinking:after{content:'…';animation:sellyDots 1.2s infinite}
+@keyframes sellyDots{0%,25%{opacity:.35}50%{opacity:.7}75%,100%{opacity:1}}
+.selly-suggest{display:flex;gap:6px;overflow-x:auto;padding:0 12px 10px;scrollbar-width:none}
+.selly-suggest button{white-space:nowrap;padding:5px 9px;border-radius:16px;border:1px solid var(--line);background:var(--panel2);
+  color:var(--mut);font-size:10.5px}.selly-suggest button:hover{border-color:var(--sig);color:var(--ink)}
+.selly-compose{border-top:1px solid var(--line);padding:10px 11px;background:var(--panel)}
+.selly-compose-row{display:flex;align-items:flex-end;gap:7px}.selly-compose textarea{min-height:42px;max-height:110px;resize:vertical;
+  background:var(--bg);line-height:1.35}.selly-send{width:42px;height:42px;flex:0 0 42px;border-radius:10px;background:var(--sig);
+  color:#04121f;font-size:18px;font-weight:900}.selly-send:disabled{opacity:.4;cursor:default}
+.selly-privacy{font-size:9.5px;color:var(--dim);padding-top:6px;line-height:1.35}
+@media(max-width:640px){#sellypanel{right:3vw;left:3vw;width:auto;bottom:82px;height:72vh}#sellyfab{left:78px;bottom:14px}}
+
 /* Rep sign-in gate (identity picker — real password auth stays Phase C) */
 #repgate{position:fixed;inset:0;background:rgba(4,7,12,.78);backdrop-filter:blur(5px);z-index:120;display:none;align-items:center;justify-content:center;padding:16px}
 #repgate .rbtn{display:block;width:100%;text-align:left;font-size:14px;padding:12px 14px;margin-bottom:8px}
@@ -474,6 +508,19 @@ small.hint{color:var(--dim);font-size:11px}
   <div class="tw-body" id="taskwidget-body"></div>
 </div>
 
+<button id="sellyfab" onclick="toggleSelly()" title="Ask Selly about your CRM"><span class="selly-mark">S</span><span>Selly</span></button>
+<div id="sellypanel" aria-label="Selly sales copilot">
+  <div class="selly-head"><span class="selly-mark">S</span><div><div class="selly-title">Selly</div><div class="selly-sub">Shipday Sales Copilot · read-only</div></div><button class="selly-x" onclick="toggleSelly(false)">×</button></div>
+  <div id="sellymsgs"></div>
+  <div class="selly-suggest">
+    <button onclick="sellyAsk('Who should I call next and why?')">Who should I call?</button>
+    <button onclick="sellyAsk('What needs my attention today?')">Today’s priorities</button>
+    <button onclick="sellyAsk('Summarize the record I have open and recommend the next step.')">Summarize open record</button>
+    <button onclick="sellyAsk('Review my open pipeline and flag the biggest risks.')">Pipeline risks</button>
+  </div>
+  <div class="selly-compose"><div class="selly-compose-row"><textarea id="sellyq" placeholder="Ask about an account, lead, task, or pipeline…" onkeydown="sellyKey(event)"></textarea><button class="selly-send" id="sellysend" onclick="sellyAsk()" title="Send">↑</button></div><div class="selly-privacy">Selly sends only a relevant slice of CRM data to OpenAI. She cannot change records.</div></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -483,7 +530,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z61';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z62';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1340,6 +1387,7 @@ function renderTaskWidget(){ const b=el('taskwidget-body'); if(b) b.innerHTML=ta
   if(fab){ const dueSoon=tasks().some(t=>!t.done&&(+t.due<today0().getTime()+864e5)); fab.classList.toggle('due',dueSoon); } }
 function toggleTaskWidget(force){ const w=el('taskwidget'); if(!w)return;
   const show=(force===undefined)?w.style.display!=='flex':!!force;
+  if(show&&typeof toggleSelly==='function') toggleSelly(false);
   w.style.display=show?'flex':'none'; const fab=el('taskfab'); if(fab) fab.classList.toggle('open',show);
   if(show) renderTaskWidget(); }
 function recordTasks(pred){ const list=tasks().filter(pred).sort((a,b)=>(a.done-b.done)||((+a.due)-(+b.due)));
@@ -4158,6 +4206,57 @@ function reloadSeed(){
   store=norm(JSON.parse(JSON.stringify(SEED)));
   Object.assign(store,keep); store.__updatedAt=Date.now();
   save(); render(); toast('Imported data reloaded'); }
+
+/* ====================== SELLY — READ-ONLY SALES COPILOT ====================== */
+let SELLY_H=[], SELLY_BUSY=false, SELLY_WELCOMED=false;
+function toggleSelly(force){ const p=el('sellypanel'); if(!p)return;
+  const show=(force===undefined)?p.style.display!=='flex':!!force;
+  p.style.display=show?'flex':'none'; const fab=el('sellyfab'); if(fab)fab.classList.toggle('open',show);
+  if(show){ const tw=el('taskwidget'); if(tw&&tw.style.display==='flex') toggleTaskWidget(false);
+    if(!SELLY_WELCOMED){ SELLY_WELCOMED=true; sellyAdd('bot','Hey — I’m Selly. Ask me who to call, what needs attention, or open any account/contact and ask me to summarize it. I’m read-only, so I’ll never change CRM data.'); }
+    setTimeout(()=>{ const q=el('sellyq'); if(q)q.focus(); },80); }
+}
+function sellyKey(e){ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sellyAsk(); } }
+function sellyFmt(t){ return esc(t).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\n/g,'<br>'); }
+function sellyAdd(role,text,meta){ const box=el('sellymsgs'); if(!box)return null; const d=document.createElement('div');
+  d.className='selly-msg '+(role==='user'?'user':'bot'); d.innerHTML=sellyFmt(text)+(meta?'<span class="selly-meta">'+esc(meta)+'</span>':''); box.appendChild(d); box.scrollTop=box.scrollHeight; return d; }
+function sellyLog(r,n){ return (r&&Array.isArray(r.log)?r.log:[]).slice().sort((a,b)=>(+b.ts||0)-(+a.ts||0)).slice(0,n||8).map(x=>({date:fmtDT(x.ts),activity:String(x.txt||'').slice(0,260),by:x.by||''})); }
+function sellyAccount(a){ if(!a)return null; return {name:a.name||'',city:a.city||'',state:a.state||'',address:a.address||'',cuisine:a.cuisine||'',locations:isBrand(a)?childLocs(a.id).length:(+a.employees||0),pos:a.pos||'',delivery:a.delivery||'',hours:a.hours||'',website:a.website||'',ordering:a.ordering||'',phone:a.phone||'',email:a.email||'',assignee:a.assignee||'',customer:!!a.isCustomer,onboarding:a.onboard||'',health:a.health||'',notes:String(a.notes||'').slice(0,900),recentActivity:sellyLog(a,6)}; }
+function sellyContact(c){ if(!c)return null; const a=acct(c.accountId); return {name:cname(c),account:a?a.name:'',title:c.title||'',email:c.email||'',altEmail:c.email2||'',phone:c.phone||'',mobile:c.mobile||'',warmth:c.warmth||'',status:c.status||'',tier:typeof tierC==='function'?tierC(c).t:'',heat:typeof heat==='function'?heat(c):0,intent:typeof intentC==='function'?intentC(c):0,assignee:c.assignee||'',disposition:c.dispo||'',nextCall:c.nextCallAt?fmtDT(c.nextCallAt):'',lastContacted:c.lastContacted||'',emailOpens:+c.emailOpens||+c.openCount||0,replied:!!c.replied,notes:String(c.notes||'').slice(0,900),nextStep:String(c.nextStep||'').slice(0,500),recentActivity:sellyLog(c,10)}; }
+function sellyDeal(d){ if(!d)return null; const a=acct(d.accountId),c=contact(d.contactId); return {name:d.name||(a&&a.name)||'',account:a?a.name:'',contact:c?cname(c):'',stage:d.stage||'',mrr:+d.mrr||+d.plan||0,warmth:d.warmth||'',assignee:d.assignee||'',demoDate:d.demoDate?fmtDT(d.demoDate):'',created:d.createdAt?fmtDT(d.createdAt):'',closeChance:+d.prob||0,nextStep:String(d.nextStep||'').slice(0,500),notes:String(d.notes||'').slice(0,900),recentActivity:sellyLog(d,8)}; }
+function sellyTask(t){ return {type:t.type||'',title:t.title||'',due:t.due?fmtDT(t.due):'',overdue:!t.done&&(+t.due<today0().getTime()),assignee:t.assignee||'',contact:t.contactId&&contact(t.contactId)?cname(contact(t.contactId)):'',account:t.accountId&&acct(t.accountId)?aname(acct(t.accountId)):''}; }
+function sellyFocus(){ if(!curDrawer)return null;
+  if(curDrawer.ent==='c'){ const c=contact(curDrawer.id); if(!c)return null; const a=acct(c.accountId); return {type:'contact',contact:sellyContact(c),account:sellyAccount(a),deals:dealsOf(c.accountId).map(sellyDeal)}; }
+  if(curDrawer.ent==='a'){ const a=acct(curDrawer.id); if(!a)return null; return {type:'account',account:sellyAccount(a),contacts:contactsOf(a.id).map(sellyContact),deals:dealsOf(a.id).map(sellyDeal),locations:childLocs(a.id).map(sellyAccount)}; }
+  if(curDrawer.ent==='d'){ const d=deal(curDrawer.id); if(!d)return null; return {type:'deal',deal:sellyDeal(d),account:sellyAccount(acct(d.accountId)),contact:sellyContact(contact(d.contactId))}; }
+  return null;
+}
+const SELLY_STOP=new Set(['the','and','for','with','about','what','who','which','should','could','would','this','that','from','into','have','open','record','next','please','today']);
+function sellyTerms(q){ return (String(q||'').toLowerCase().match(/[a-z0-9@.]+/g)||[]).filter(x=>x.length>2&&!SELLY_STOP.has(x)).slice(0,10); }
+function sellySearch(q){ const terms=sellyTerms(q); if(!terms.length)return null; const score=s=>terms.reduce((n,t)=>n+(String(s||'').toLowerCase().includes(t)?1:0),0);
+  const aa=accounts().map(a=>({r:a,n:score([a.name,a.city,a.state,a.cuisine,a.pos,a.delivery,a.notes].join(' '))})).filter(x=>x.n).sort((x,y)=>y.n-x.n);
+  const cc=contacts().map(c=>({r:c,n:score([cname(c),c.email,c.email2,c.phone,c.mobile,c.title,c.notes,acct(c.accountId)&&acct(c.accountId).name].join(' '))})).filter(x=>x.n).sort((x,y)=>y.n-x.n);
+  const dd=deals().map(d=>({r:d,n:score([d.name,d.stage,d.notes,acct(d.accountId)&&acct(d.accountId).name].join(' '))})).filter(x=>x.n).sort((x,y)=>y.n-x.n);
+  return {terms,totalAccountMatches:aa.length,totalContactMatches:cc.length,totalDealMatches:dd.length,accounts:aa.slice(0,15).map(x=>sellyAccount(x.r)),contacts:cc.slice(0,15).map(x=>sellyContact(x.r)),deals:dd.slice(0,12).map(x=>sellyDeal(x.r))}; }
+function sellyContext(q){ const low=String(q||'').toLowerCase(), now=today0().getTime(), openDeals=deals().filter(d=>!CLOSED.includes(d.stage));
+  const ctx={generatedAt:new Date().toISOString(),currentPage:UI.tab,focus:sellyFocus(),summary:{accounts:accounts().length,contacts:contacts().length,openDeals:openDeals.length,pipelineMRR:openDeals.reduce((n,d)=>n+(+d.mrr||+d.plan||0),0),customers:closedAccts().length,liveCustomers:liveAccts().length,openTasks:tasks().filter(t=>!t.done).length,overdueTasks:tasks().filter(t=>!t.done&&+t.due<now).length},search:sellySearch(q)};
+  if(/call|dial|priority|hot|lead/.test(low)&&typeof hotQueue==='function') ctx.callPriority=hotQueue().slice(0,18).map(sellyContact);
+  if(/pipeline|deal|demo|close|risk|opportun/.test(low)) ctx.pipeline=openDeals.slice().sort((a,b)=>(+b.mrr||+b.plan||0)-(+a.mrr||+a.plan||0)).slice(0,20).map(sellyDeal);
+  if(/task|today|attention|follow|overdue/.test(low)) ctx.actionableTasks=tasks().filter(t=>!t.done&&+t.due<now+864e5).sort((a,b)=>(+a.due)-(+b.due)).slice(0,25).map(sellyTask);
+  if(/customer|live|onboard|health/.test(low)) ctx.customers=liveAccts().slice(0,20).map(sellyAccount);
+  return ctx;
+}
+async function sellyToken(){ if(!sb||!sb.auth)return ''; try{ const {data}=await sb.auth.getSession(); return data&&data.session?data.session.access_token:''; }catch(e){return '';} }
+async function sellyAsk(prefill){ if(SELLY_BUSY)return; const qel=el('sellyq'); const q=String(prefill!==undefined?prefill:(qel&&qel.value)||'').trim(); if(!q)return;
+  toggleSelly(true); if(qel)qel.value=''; const prior=SELLY_H.slice(-6); SELLY_H.push({role:'user',content:q}); sellyAdd('user',q);
+  const wait=sellyAdd('bot','Selly is thinking'); if(wait)wait.classList.add('selly-thinking'); SELLY_BUSY=true; const send=el('sellysend'); if(send)send.disabled=true;
+  try{ const tok=await sellyToken(); if(!tok)throw new Error('Please sign in again to use Selly.');
+    const r=await fetch(SYNC_FN+'/selly',{method:'POST',headers:{Authorization:'Bearer '+tok,'Content-Type':'application/json'},body:JSON.stringify({question:q,context:sellyContext(q),history:prior,page:UI.tab,rep:myRep()||store.__rep||'Saad Sheikh'})});
+    const d=await r.json().catch(()=>({})); if(!r.ok)throw new Error(d.error||('Selly request failed ('+r.status+')'));
+    if(wait)wait.remove(); const usage=d.usage||{}, total=+usage.total_tokens||((+usage.input_tokens||0)+(+usage.output_tokens||0)); sellyAdd('bot',d.answer,total?total.toLocaleString()+' tokens · '+(d.model||'GPT-5.6 Luna'):(d.model||'GPT-5.6 Luna')); SELLY_H.push({role:'assistant',content:d.answer});
+  }catch(e){ if(wait)wait.remove(); sellyAdd('bot','I couldn’t answer that yet: '+(e.message||String(e)),'No CRM data was changed'); }
+  finally{ SELLY_BUSY=false; if(send)send.disabled=false; if(qel)qel.focus(); }
+}
 
 /* ====================== AI EMAIL (local template) ====================== */
 function aiEmail(t,id){
