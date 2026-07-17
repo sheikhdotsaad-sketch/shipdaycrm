@@ -530,7 +530,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z62';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z63';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2993,7 +2993,7 @@ function setProb(stage,v){ store.__probs=store.__probs||{}; let n=Math.max(0,Mat
    kanban tracking — the forecast is driven purely by (deal MRR × its chance to close). */
 function dealProb(d){ if(!d) return 0; if(d.closePct!=null&&d.closePct!=='') return Math.max(0,Math.min(100,+d.closePct||0)); return prob(d.stage); }
 /* Forecast MRR is the per-location rate multiplied by the deal's locations. */
-function dealLocations(d){ if(!d)return 1; const a=acct(d.accountId); const n=+(d.locations||d.locationCount||0); if(n>0)return n; if(a){ const child=isBrand(a)?childLocs(a.id).length:0; if(child>0)return child; const e=+(a.employees||0); if(e>0)return e; } return 1; }
+function dealLocations(d){ if(!d)return 1; const a=acct(d.accountId); const n=+(d.locations||d.locationCount||0); if(n>0)return n; if(a){ const explicit=+(a.locationCount||a.locations||0); if(explicit>0)return explicit; const child=isBrand(a)?childLocs(a.id).length:0; if(child>0)return child; } return 1; }
 function dealMRR(d){ if(!d)return 0; const base=+(d.plan||d.mrr||0); return base*Math.max(1,dealLocations(d)); }
 function setDealProb(id,v){ const d=deal(id); if(!d)return; d.closePct=Math.max(0,Math.min(100,+v||0)); stampU(d); save(); renderPipeline(); }
 function renderPipeline(){
@@ -3433,14 +3433,15 @@ function openDeal(id){
   // ---- deal at a glance: worth, when it was demoed/closed, how long it's been alive ----
   { const born=+d.createdAt||+d._u||0, age=born?Math.max(1,Math.round((Date.now()-born)/_DAY)):0;
     const chips=[ statChip('Stage',esc(d.stage),d.stage===WON?'var(--won)':d.stage==='Closed Lost'?'var(--hot)':''),
-      statChip('MRR',d.mrr?money(d.mrr)+'/mo':'—'),
+      statChip('MRR',dealMRR(d)?money(dealMRR(d))+'/mo':'—'),
       statChip('Demo',d.demoDate?fmtDT(d.demoDate):'—'),
       CLOSED.includes(d.stage)?statChip('Closed',d.closedAt?fmtD(d.closedAt):'—'):statChip('Close odds',dealProb(d)+'%'),
       statChip('Age',age?age+'d':'—') ];
     b+=statStrip(chips); }
   b+='<div class="f2">'+fld('Stage',sel("setDstage('"+id+"',this.value)",STAGES,d.stage))+(CLOSED.includes(d.stage)?'':fld('Warmth',sel("setD('"+id+"','warmth',this.value)",WARMTHS,d.warmth||'Warm')))+'</div>';
   if(!CLOSED.includes(d.stage)) b+='<div class="f2">'+fld('Chance to close %',inp("setDealProb('"+id+"',this.value)",dealProb(d),'number'))+'<div class="tsub" style="align-self:center">Drives the pipeline forecast (MRR × this %). Defaults from stage.</div></div>';
-  b+='<div class="f3">'+fld('Deal value',inp("setD('"+id+"','value',+this.value)",d.value,'number'))+fld('Plan $/mo',selN("setDplan('"+id+"',this.value)",PLANS.map(String),d.plan?String(d.plan):''))+fld('Demo date',inp("setD('"+id+"','demoDate',this.value)",d.demoDate,'datetime-local'))+'</div>';
+  b+='<div class="f3">'+fld('Deal value',inp("setD('"+id+"','value',+this.value)",d.value,'number'))+fld('Plan $/location/mo',selN("setDplan('"+id+"',this.value)",PLANS.map(String),d.plan?String(d.plan):''))+fld('Locations in deal',inp("setD('"+id+"','locationCount',Math.max(1,+this.value||1))",dealLocations(d),'number'))+'</div>';
+  b+='<div class="f2">'+fld('Demo date',inp("setD('"+id+"','demoDate',this.value)",d.demoDate,'datetime-local'))+'<div class="tsub" style="align-self:center">Forecast MRR = plan per location × locations in this deal.</div></div>';
   if(d.demoDate) b+='<div style="margin:-4px 0 10px">'+(d.calEventId?'<span class="tag cust">📅 On Google Calendar</span>'+(d.calLink?' <a href="'+esc(d.calLink)+'" target="_blank" style="font-size:11px">Open ↗</a>':''):'<button class="btn sm" onclick="pushDemoToCalendar(\''+id+'\')">📅 Add to Google Calendar</button>')+'</div>';
   if(CLOSED.includes(d.stage)) b+='<div class="f2">'+fld('Close date',inp("setDclosed('"+id+"',this.value)",dateInputVal(d.closedAt),'date'))+'</div>';
   b+='<div class="f2">'+fld('Account',dealAccountPicker(id,d.accountId))+fld('Contact',contactPicker("setD('"+id+"','contactId',this.value)",d.accountId,d.contactId))+'</div>';
