@@ -403,7 +403,7 @@ small.hint{color:var(--dim);font-size:11px}
 </header>
 
 <nav id="nav">
-  <button class="on" data-v="today">Today <span class="pill" id="p-today">0</span></button>
+  <button class="on" data-v="today">Today <span class="pill" id="p-today">…</span></button>
   <button data-v="accounts">Accounts <span class="pill" id="p-accts">0</span></button>
   <button data-v="contacts">Contacts <span class="pill" id="p-cts">0</span></button>
   <button data-v="intent">Intent <span class="pill" id="p-intent">0</span></button>
@@ -531,7 +531,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z64';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul17·z65';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -680,7 +680,7 @@ function setSync(cls,msg){ const d=document.getElementById('sync-dot'),s=documen
 function syncReady(){ const c=syncCfg(); return sb && c.url && c.key; }
 async function initSync(){
   const c=syncCfg();
-  if(!c.url||!c.key||!window.supabase){ setSync('off','Local only'); return; }
+  if(!c.url||!c.key||!window.supabase){ syncPulled=true; setSync('off','Local only'); renderCounts(); return; }
   try{
     // Reuse the client the login gate already created — a fresh client here would drop the
     // signed-in session and every request would hit RLS as anon (locked-down = silent failure).
@@ -711,9 +711,9 @@ async function initSync(){
     subscribeRealtime(c.row);
     subscribeClaims();
     await loadClaims(); if(UI.tab==='hotlist'&&!drawerOpen()) renderHotList();
-    setSync('ok','Synced');
+    setSync('ok','Synced'); renderCounts();
     if((store.__updatedAt||0) && Object.keys(store.accounts).length) pushCloudNow();
-  }catch(e){ console.warn(e); setSync('err','Sync error'); }
+  }catch(e){ console.warn(e); syncPulled=true; setSync('err','Sync error'); renderCounts(); }
 }
 function subscribeRealtime(row){
   if(sbChan) sb.removeChannel(sbChan);
@@ -909,7 +909,7 @@ function renderCounts(){
   el('p-accts').textContent=activeAccts().length; el('p-cts').textContent=activeContacts().length;
   el('p-closed').textContent=closed; el('p-live').textContent=live;
   const pi=el('p-intent'); if(pi){ try{ pi.textContent=intentRows().filter(r=>r.trending).length; }catch(e){ pi.textContent=0; } }
-  const td=el('p-today'); if(td) td.textContent=(store.__apollo&&store.__apollo.totalDue)||0;
+  const td=el('p-today'); if(td) td.textContent=syncPulled?((store.__apollo&&store.__apollo.totalDue)||0):'…';
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
 function closedAccts(){ const s=new Set(deals().filter(d=>d.stage===WON).map(d=>d.accountId)); return accounts().filter(a=>a.isCustomer||s.has(a.id)); }
