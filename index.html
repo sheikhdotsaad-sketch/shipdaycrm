@@ -481,9 +481,11 @@ var SEED = /*__SEED_START__*/{"accounts":{"a21547":{"id":"a21547","name":"Carson
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z54';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
-// Phase 2: to lock to your team, set AUTH_ON=true and bake in URL+key below.
-const AUTH_ON = false;
+const BUILD = 'build Jul17·z55';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+// Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
+// (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
+// is switched to authenticated-only — see the lockdown SQL in the deploy notes.
+const AUTH_ON = true;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
 
 /* ====================== CONSTANTS ====================== */
@@ -625,7 +627,9 @@ async function initSync(){
   const c=syncCfg();
   if(!c.url||!c.key||!window.supabase){ setSync('off','Local only'); return; }
   try{
-    sb=window.supabase.createClient(c.url,c.key);
+    // Reuse the client the login gate already created — a fresh client here would drop the
+    // signed-in session and every request would hit RLS as anon (locked-down = silent failure).
+    if(!sb) sb=window.supabase.createClient(c.url,c.key);
     setSync('busy','Connecting…');
     const {data,error}=await sb.from('crm_state').select('data,updated_at').eq('id',c.row).maybeSingle();
     if(error) throw error;
@@ -3752,7 +3756,8 @@ function importCSV(text){
     iWeb=col('website'),iPos=col('pos','platform'),iWarm=col('warmth','tier','health','priority'),iStage=col('stage'),iVal=col('value'),
     iCui=col('cuisine','food type','category'),iOrd=col('online ordering','ordering link','order link','ordering url','order url','ordering'),
     iAddr=col('address','street'),iDispo=col('call disposition','disposition','dispo'),iNote=col('notes','note'),
-    iDel=col('delivery apps','delivery'),iLocs=col('# locs','# locations','locations');
+    iDel=col('delivery apps','delivery'),iLocs=col('# locs','# locations','locations'),
+    iHours=col('hours'),iParent=col('parent account','brand account','parent brand','parent');
   // ---- Engagement columns → intent signals (so an imported list shows up in Intent) ----
   const iOpens=col('opens','opened','pixel_visits','pixel visits','email opens'),
     iOpenAt=col('last opened','opened at','last_open','last open'),
@@ -3796,15 +3801,23 @@ function importCSV(text){
     let aid=byName[an.toLowerCase()];
     // "# Locs" > 1 = a multi-location group (sets locType + the # Locations field)
     const locsN=(iLocs>=0?parseInt(String(r[iLocs]||'').replace(/\.0$/,'')):0)||0;
-    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),isCustomer:false};
+    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),hours:(iHours>=0?String(r[iHours]||'').trim():''),isCustomer:false};
       if(locsN>1){ store.accounts[aid].employees=String(locsN); store.accounts[aid].locType='multi'; }
       byName[an.toLowerCase()]=aid; na++; }
     else { // account already in book — fill in blanks only (re-importing an enriched sheet enriches, never clobbers)
       const a0=acct(aid); if(a0){ let f=false; const fill=(k,i)=>{ const v=(i>=0?String(r[i]||''):'').trim(); if(v&&!a0[k]){ a0[k]=v; f=true; } };
-        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel);
+        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel); fill('hours',iHours);
         if(locsN>1&&!a0.employees){ a0.employees=String(locsN); f=true; }
         if(locsN>1&&(!a0.locType||a0.locType==='single')&&!isLocation(a0)){ a0.locType='multi'; f=true; }
         if(f) stampU(a0); } }
+    // "Parent Account" col = multi-location structure: this row's account becomes a LOCATION of the
+    // named brand (brand must already exist / appear earlier in the sheet). Fill-blank only.
+    if(iParent>=0){ const pn=String(r[iParent]||'').trim();
+      if(pn){ const pid=byName[pn.toLowerCase()];
+        const a0=acct(aid), pa=pid?acct(pid):null;
+        if(pa&&a0&&pid!==aid&&!a0.parentId&&!isBrand(a0)){
+          a0.parentId=pid; a0.locType='single'; stampU(a0);
+          if(pa.locType!=='multi'){ pa.locType='multi'; stampU(pa); } } } }
     const email=(iEmail>=0?r[iEmail]:'').trim();
     let first='',last='';
     if(iFirst>=0){first=(r[iFirst]||'').trim();last=(iLast>=0?r[iLast]:'').trim();}
@@ -4071,6 +4084,9 @@ async function gateInit(){
   if(!AUTH_ON){ el('gate').classList.add('hidden'); el('app').style.display='block'; boot(); return; }
   store.__sbUrl=TEAM.url; store.__sbKey=TEAM.key; store.__sbId=TEAM.row;
   sb=window.supabase.createClient(TEAM.url,TEAM.key);
+  // If the session dies (signed out elsewhere / token revoked) drop back to the gate
+  // instead of silently failing every cloud write.
+  sb.auth.onAuthStateChange(ev=>{ if(ev==='SIGNED_OUT') location.reload(); });
   const {data}=await sb.auth.getSession();
   if(data&&data.session){ enterApp(); } else { el('gate').classList.remove('hidden'); }
 }
