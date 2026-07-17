@@ -4208,7 +4208,7 @@ function reloadSeed(){
   save(); render(); toast('Imported data reloaded'); }
 
 /* ====================== SELLY — READ-ONLY SALES COPILOT ====================== */
-let SELLY_H=[], SELLY_BUSY=false, SELLY_WELCOMED=false;
+let SELLY_H=[], SELLY_BUSY=false, SELLY_WELCOMED=false, SELLY_USER_ID='';
 function toggleSelly(force){ const p=el('sellypanel'); if(!p)return;
   const show=(force===undefined)?p.style.display!=='flex':!!force;
   p.style.display=show?'flex':'none'; const fab=el('sellyfab'); if(fab)fab.classList.toggle('open',show);
@@ -4246,7 +4246,7 @@ function sellyContext(q){ const low=String(q||'').toLowerCase(), now=today0().ge
   if(/customer|live|onboard|health/.test(low)) ctx.customers=liveAccts().slice(0,20).map(sellyAccount);
   return ctx;
 }
-async function sellyToken(){ if(!sb||!sb.auth)return ''; try{ const {data}=await sb.auth.getSession(); return data&&data.session?data.session.access_token:''; }catch(e){return '';} }
+async function sellyToken(){ if(!sb||!sb.auth)return ''; try{ const {data}=await sb.auth.getSession(); const session=data&&data.session; const uid=session&&session.user&&session.user.id||''; if(uid&&SELLY_USER_ID&&uid!==SELLY_USER_ID){ SELLY_H=[]; SELLY_WELCOMED=false; const box=el('sellymsgs'); if(box)box.innerHTML=''; } if(uid)SELLY_USER_ID=uid; return session?session.access_token:''; }catch(e){return '';} }
 async function sellyAsk(prefill){ if(SELLY_BUSY)return; const qel=el('sellyq'); const q=String(prefill!==undefined?prefill:(qel&&qel.value)||'').trim(); if(!q)return;
   toggleSelly(true); if(qel)qel.value=''; const prior=SELLY_H.slice(-6); SELLY_H.push({role:'user',content:q}); sellyAdd('user',q);
   const wait=sellyAdd('bot','Selly is thinking'); if(wait)wait.classList.add('selly-thinking'); SELLY_BUSY=true; const send=el('sellysend'); if(send)send.disabled=true;
