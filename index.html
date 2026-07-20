@@ -407,6 +407,7 @@ small.hint{color:var(--dim);font-size:11px}
   <button data-v="accounts">Accounts <span class="pill" id="p-accts">0</span></button>
   <button data-v="contacts">Contacts <span class="pill" id="p-cts">0</span></button>
   <button data-v="intent">Intent <span class="pill" id="p-intent">0</span></button>
+  <button data-v="sequences">Sequences <span class="pill" id="p-seq">0</span></button>
   <button data-v="hotlist">Hot List <span class="pill" id="p-hot">0</span></button>
   <button data-v="pipeline">Pipeline <span class="pill" id="p-pipe">0</span></button>
   <button data-v="closed">Closed <span class="pill" id="p-closed">0</span></button>
@@ -487,6 +488,7 @@ small.hint{color:var(--dim);font-size:11px}
     <section class="view" id="view-accounts"></section>
     <section class="view" id="view-contacts"></section>
     <section class="view" id="view-intent"></section>
+    <section class="view" id="view-sequences"></section>
     <section class="view" id="view-hotlist"></section>
     <section class="view" id="view-pipeline"></section>
     <section class="view" id="view-closed"></section>
@@ -532,7 +534,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z68';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z71';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -897,6 +899,7 @@ function renderActive(){
   else if(v==='accounts') renderAccounts();
   else if(v==='contacts') renderContacts();
   else if(v==='intent') renderIntent();
+  else if(v==='sequences') renderSequences();
   else if(v==='closed') renderClosed();
   else if(v==='live') renderLive();
   else if(v==='quota') renderQuota();
@@ -922,6 +925,7 @@ function renderCounts(){
   el('p-accts').textContent=activeAccts().length; el('p-cts').textContent=activeContacts().length;
   el('p-closed').textContent=closed; el('p-live').textContent=live;
   const pi=el('p-intent'); if(pi){ try{ pi.textContent=intentRows().filter(r=>r.trending).length; }catch(e){ pi.textContent=0; } }
+  const ps=el('p-seq'); if(ps){ try{ ps.textContent=contacts().filter(c=>c.emailSeq&&!c.emailSeq.done).length; }catch(e){ ps.textContent=0; } }
   const td=el('p-today'); if(td) td.textContent=todayCountReady?((store.__apollo&&store.__apollo.totalDue)||0):'…';
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
@@ -2059,10 +2063,14 @@ async function releaseClaim(c){ if(!c||!claimsReady()) return; const r=claimsMap
 function callPriority(c){ return heat(c); }
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
+// In a live sequence = a running manual cadence OR still enrolled in Apollo. These are your active
+// working set, so they belong in the Hot List even without a phone number on file (Saad's rule).
+const inSeq=c=>!!(c&&((c.emailSeq&&!c.emailSeq.done)||c.apolloSeq));
 function hotQueue(){ const now=Date.now();
   // In-pipe contacts (booked demo / follow-up / no-show deals on them or their account) live in
   // the Pipeline tab — the Hot List is strictly the cold/warm-call playlist.
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&hasRealPhone(c)&&!hasOpenDeal(c);
+  // Phone is required to be callable — UNLESS the contact is in a sequence (then they show anyway).
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&(hasRealPhone(c)||inSeq(c))&&!hasOpenDeal(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
@@ -2074,6 +2082,11 @@ function hotQueue(){ const now=Date.now();
     due=due.concat(extra.slice(0,HOT_CAP-due.length));
   }
   if(due.length>HOT_CAP) due=due.slice(0,HOT_CAP);          // top 150 highest-heat calls
+  // GUARANTEE every in-sequence contact appears, even past the 150 cap — sequences are the working
+  // list and must never be dropped just because the cap filled with cold-call heat.
+  const haveDue=new Set(due.map(c=>c.id));
+  const seqExtra=prefilter(contacts().filter(c=>!haveDue.has(c.id)&&elig(c)&&inSeq(c)&&isDue(c))).sort(byHeat);
+  if(seqExtra.length) due=due.concat(seqExtra);
   return {due,snoozed};
 }
 // Bulk re-tier every non-customer, non-pipeline contact — INTENT-AWARE:
@@ -2557,7 +2570,19 @@ Best,
 Saad`},
  ]},
 ];
-function seqById(id){ if(id==='custom'){ const cu=store&&store.__cadence; return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return SEQ_LIB.find(q=>q.id===id)||null; }
+// A step's KIND drives how it's worked: 'email' (new/reply — sent + tracked), 'call' (dial + log),
+// 'task' (any manual to-do). 'new'/'reply' are email subtypes; reply threads onto the prior email.
+function stepKind(s){ const t=((s&&s.type)||'').toLowerCase(); return (t==='call'||t==='task')?t:'email'; }
+function isEmailStep(s){ return stepKind(s)==='email'; }
+// seqLib(): the live play library = built-in SEQ_LIB, with the team's edits/additions from
+// store.__seqLib layered on top (replace-by-id, else append). Everything that used to read SEQ_LIB
+// directly now reads seqLib() so custom + edited sequences flow everywhere (drawer, tab, editor).
+function seqLib(){ const ov=store&&store.__seqLib;
+  if(!Array.isArray(ov)||!ov.length) return SEQ_LIB;
+  const out=SEQ_LIB.slice(); const idx={}; out.forEach((q,i)=>{ idx[q.id]=i; });
+  ov.forEach(q=>{ if(!q||!q.id) return; if(idx[q.id]!=null) out[idx[q.id]]=q; else { idx[q.id]=out.length; out.push(q); } });
+  return out; }
+function seqById(id){ if(id==='custom'){ const cu=store&&store.__cadence; return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return seqLib().find(q=>q.id===id)||null; }
 // Suggest the play that matches the account's stack; rep can always override in the picker.
 function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'').toLowerCase(), dl=((a&&a.delivery)||'').toLowerCase();
   if(/square/.test(pos)) return 'square';
@@ -2612,15 +2637,27 @@ function clearEmailTasks(id){ store.__tasks=tasks().filter(t=>!(t.emailCad&&t.co
 function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def=cadDefFor(c), N=def.length; if(step<1||step>N) return;
   if(tasks().some(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===step&&!t.done)) return;   // already an open task for this step
   const s=def[step-1], lbl=s&&s.label?(' — '+s.label):''; const wait=(+ (s&&s.d)||0);            // days after the prior step
-  addTask({title:'Email '+step+'/'+N+lbl,type:'email',contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:c.assignee||''}); }
-function markEmailStepSent(c,n,by){ if(!c) return; const N=cadNFor(c); const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
-  if(s.done && (+s.step||1)>n) return;                                // already fully sent past this step
-  const e=emailStep(c,n);
-  logAuto(c,'📧 Email '+n+'/'+N+' sent by '+by+' — '+e.subj);         // counts as an email touch (lastSentTs)
+  const k=stepKind(s); const noun=k==='call'?'Call':k==='task'?'Task':'Email'; const tt=k==='call'?'call':k==='task'?'other':'email';
+  addTask({title:noun+' '+step+'/'+N+lbl,type:tt,contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:c.assignee||''}); }
+// advanceStep: the shared engine behind every "step done" — logs the touch, moves emailSeq.step
+// forward, closes THIS step's task, and spawns the next. Works for any step kind; the caller
+// supplies the log line so the icon/wording matches (📧 email / 📞 call / ✅ task).
+function advanceStep(c,n,by,logLine){ if(!c) return; const N=cadNFor(c); const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
+  if(s.done && (+s.step||1)>n) return;                                // already past this step
+  logAuto(c,logLine);
   s.lastBy=by; s.lastSentAt=Date.now(); if((+s.step||1)<=n) s.step=n+1; if(s.step>N) s.done=true;
   const tk=tasks().find(t=>t.emailCad&&t.contactId===c.id&&(+t.cadStep||0)===n&&!t.done); if(tk){ tk.done=true; tk.doneTs=Date.now(); }  // close this step's task
   if(!s.done) ensureEmailTask(c.id,n+1);                              // …and drop the next step's task
   stampU(c); }
+function markEmailStepSent(c,n,by){ if(!c) return; const N=cadNFor(c); const e=emailStep(c,n);
+  advanceStep(c,n,by,'📧 Email '+n+'/'+N+' sent by '+by+' — '+e.subj); }
+// completeSeqStep: mark a call/task step done (no send). Advances the cadence just like a sent email.
+function completeSeqStep(id){ const c=contact(id); if(!c) return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
+  const N=cadNFor(c); const n=Math.min(+s.step||1,N); const def=cadDefFor(c)[n-1]||{}; const k=stepKind(def); const by=senderName();
+  const noun=k==='call'?'Call':'Task'; const icon=k==='call'?'📞':'✅'; const lbl=def.label?(' — '+def.label):'';
+  advanceStep(c,n,by,icon+' '+noun+' '+n+'/'+N+lbl+' done by '+by);
+  save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+  toast(c.emailSeq.done?('Sequence complete — '+noun.toLowerCase()+' '+n+' done'):(noun+' '+n+' done · step '+(n+1)+' queued')); }
 // Revert one step: undo the most recent send, reopen that step's task, drop any later task.
 function revertEmailStep(id){ const c=contact(id); const s=c&&c.emailSeq; if(!s){ toast('No email cadence'); return; }
   const N=cadNFor(c); const cur=s.done?N+1:Math.min(+s.step||1,N); const target=cur-1;
@@ -2645,6 +2682,34 @@ function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq
   save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   const nextD=cadDefFor(c)[n]?(+cadDefFor(c)[n].d||0):0;
   toast(c.emailSeq.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+nextD+'d')); }
+// ===== Native send: fire the current sequence step from YOUR Gmail (gmail-send edge fn) with a
+// tracking pixel, then advance the cadence exactly like a manual "Log sent". Reply-type steps
+// thread onto the prior message via the stored threadId + Message-ID so the conversation stays
+// intact. This is what lets the whole cadence run without ever opening Apollo or Gmail. =====
+async function sendSeqEmail(id){
+  const c=contact(id); if(!c) return;
+  if(!c.email){ toast('No email address on this contact'); return; }
+  if(!SYNC_FN){ toast('Connect integrations first'); return; }
+  const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
+  const N=cadNFor(c); const n=Math.min(+s.step||1,N); const e=emailStep(c,n);
+  const isReply=(e.type==='reply');
+  if(!confirm('Send Email '+n+'/'+N+' to '+cname(c)+' <'+c.email+'> now, from your Gmail?\n\nSubject: '+e.subj)) return;
+  const by=senderName();
+  setSync&&setSync('busy','Sending Email '+n+'…');
+  try{
+    const r=await fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
+      body:JSON.stringify({to:c.email,subject:e.subj,body:e.body,cid:c.id,
+        threadId:isReply?(s.threadId||''):'', inReplyTo:isReply?(s.lastMsgId||''):''})});
+    const d=await r.json();
+    if(!r.ok||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
+    if(d.threadId) s.threadId=d.threadId;      // remember the thread for the next reply step
+    if(d.messageId) s.lastMsgId=d.messageId;
+    markEmailStepSent(c,n,by);                  // advances step, closes this task, spawns the next
+    save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+    setSync&&setSync('ok','Sent');
+    toast(c.emailSeq.done?('✅ Cadence complete — Email '+n+' sent to '+cname(c)):('✅ Email '+n+' sent to '+cname(c)+' · Email '+(n+1)+' queued'));
+  }catch(err){ setSync&&setSync('err','Send failed'); toast('Send failed: '+((err&&err.message)||err)); }
+}
 function startApolloCadence(id){ toast('Apollo enrollment isn\'t wired yet — use the manual email cadence, or ask to connect your Apollo master key so any rep can enroll without a license.'); }
 // ===== Sequence copy editor: paste your real Apollo steps once, whole team sends them =====
 let cadEdit=null;
@@ -2679,24 +2744,47 @@ function saveCadence(){ cadSync();
 function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadState(c);
   if(st==='apollo') return '<div class="cadbox in"><b>● In Apollo sequence:</b> '+esc(c.apolloSeq)+'<div class="tsub" style="margin-top:3px">Managed in Apollo — no manual sends needed here.</div></div>';
   if(st==='none'){ const sug=suggestSeq(c);
-    let opts=SEQ_LIB.map(q=>'<option value="'+q.id+'"'+(q.id===sug?' selected':'')+'>'+esc(q.name)+' · '+q.steps.length+' steps</option>').join('');
+    let opts=seqLib().map(q=>'<option value="'+q.id+'"'+(q.id===sug?' selected':'')+'>'+esc(q.name)+' · '+q.steps.length+' steps</option>').join('');
     if(isCustomCad()) opts+='<option value="custom">Custom (your pasted copy) · '+cadN()+' steps</option>';
     return '<div class="cadbox"><div><b>Not in a sequence.</b> Pick the play that matches this prospect — the SDR sends your exact Apollo copy, step by step.</div>'+
     '<select id="seqPick_'+id+'" class="cflt" style="width:100%;margin-top:8px;box-sizing:border-box">'+opts+'</select>'+
     '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">✉️ Start sequence</button>'+
     '<button class="btn sm gh" onclick="openCadenceEditor()" title="Paste/tweak a fully custom sequence — used when you pick Custom">✎ Edit custom copy</button></div></div>'; }
-  const N=cadNFor(c), n=Math.min((+c.emailSeq.step||1),N), done=!!c.emailSeq.done, e=emailStep(c,n);
+  const N=cadNFor(c), n=Math.min((+c.emailSeq.step||1),N), done=!!c.emailSeq.done;
+  const def=cadDefFor(c)[n-1]||{}, k=stepKind(def);
   const lastBy=c.emailSeq.lastBy, lastAt=c.emailSeq.lastSentAt;
-  const qNow=seqById(c.emailSeq.seqId), seqName=(qNow&&qNow.name)||'Email sequence';
-  const stepLbl=(cadDefFor(c)[n-1]&&cadDefFor(c)[n-1].label)||('Email '+n);
-  const replyHint=(e.type==='reply')?' <span class="tag" style="background:#3a2f14;color:#e9c46a">↳ reply on the same thread</span>':'';
-  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>✉️ '+esc(seqName)+'</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' sent':'Email '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
-  h+='<div class="tsub" style="margin-top:4px">Sending as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span>'+(lastBy?' · last sent by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
+  const qNow=seqById(c.emailSeq.seqId), seqName=(qNow&&qNow.name)||'Sequence';
+  const noun=k==='call'?'Call':k==='task'?'Task':'Email';
+  const stepLbl=def.label||(noun+' '+n);
+  const headIcon=k==='call'?'📞':k==='task'?'✅':'✉️';
+  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>'+headIcon+' '+esc(seqName)+'</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' done':noun+' '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
+  h+='<div class="tsub" style="margin-top:4px">Working as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span>'+(lastBy?' · last step by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
   if(!done){
-    h+='<div style="margin-top:8px;font-size:12.5px"><b>Subject:</b> '+esc(e.subj)+replyHint+'</div>';
-    h+='<div class="cadbody">'+esc(e.body)+'</div>';
-    h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="copyEmailStep(\''+id+'\')">⧉ Copy Email '+n+'</button><button class="btn sm" onclick="logEmailSent(\''+id+'\')">✓ Log Email '+n+' sent</button>'+
-       (n>1?'<button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Undo the last send — go back a step">↩ Revert step</button>':'')+'</div>';
+    if(k==='email'){
+      const e=emailStep(c,n);
+      const replyHint=(e.type==='reply')?' <span class="tag" style="background:#3a2f14;color:#e9c46a">↳ reply on the same thread</span>':'';
+      h+='<div style="margin-top:8px;font-size:12.5px"><b>Subject:</b> '+esc(e.subj)+replyHint+'</div>';
+      h+='<div class="cadbody">'+esc(e.body)+'</div>';
+      h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="sendSeqEmail(\''+id+'\')" title="Send this step from your Gmail right now — tracked for opens, then advances the cadence">📤 Send Email '+n+'</button>'+
+         '<button class="btn sm gh" onclick="copyEmailStep(\''+id+'\')" title="Copy the copy to paste manually instead">⧉ Copy</button><button class="btn sm gh" onclick="logEmailSent(\''+id+'\')" title="Mark sent without sending from here (e.g. you sent it elsewhere)">✓ Log sent</button>'+
+         (n>1?'<button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Undo the last send — go back a step">↩ Revert step</button>':'')+'</div>';
+    } else if(k==='call'){
+      const p=telNum(c); const script=fillTokens(def.body||'',c);
+      h+='<div style="margin-top:8px;font-size:12.5px"><b>'+esc(def.label||'Call step')+'</b></div>';
+      if(script) h+='<div class="cadbody">'+esc(script)+'</div>';
+      else h+='<div class="tsub" style="margin-top:4px">Dial this contact, then mark the step done to advance the cadence.</div>';
+      h+='<div class="logbar" style="margin-top:8px">'+
+         (p?'<a class="btn sm pri" href="tel:'+esc(p)+'" onclick="openCallModal(\''+id+'\')" title="Dial and log the call">📞 Call '+esc(p)+'</a>':'<button class="btn sm gh" onclick="promptDirectLine(\''+id+'\')" title="No number on file — add one">＋ Add direct line</button>')+
+         '<button class="btn sm '+(p?'gh':'pri')+'" onclick="completeSeqStep(\''+id+'\')" title="Mark this call step done — advances the cadence">✓ Mark done</button>'+
+         (n>1?'<button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Go back a step">↩ Revert step</button>':'')+'</div>';
+    } else {
+      const note=fillTokens(def.body||'',c);
+      h+='<div style="margin-top:8px;font-size:12.5px"><b>'+esc(def.label||'Task')+'</b></div>';
+      if(note) h+='<div class="cadbody">'+esc(note)+'</div>';
+      else h+='<div class="tsub" style="margin-top:4px">Do this step, then mark it done to advance the cadence.</div>';
+      h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="completeSeqStep(\''+id+'\')" title="Mark this task done — advances the cadence">✓ Mark done</button>'+
+         (n>1?'<button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Go back a step">↩ Revert step</button>':'')+'</div>';
+    }
   } else {
     h+='<div class="logbar" style="margin-top:8px"><button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Reopen the last step">↩ Revert step</button><button class="btn sm gh" onclick="restartCadence(\''+id+'\')">↻ Restart cadence</button></div>';
   }
@@ -2779,7 +2867,7 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-bits">'+bits.join(' · ')+'</div>';
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
-  h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="openCallModal(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<span class="tsub">no phone on file</span>';
+  h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="openCallModal(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<button class="btn cc-call gh" onclick="promptDirectLine(\''+c.id+'\')" title="No number on file — add a direct line">＋ Add direct line</button>';
   h+='<button class="btn cc-open" onclick="openContact(\''+c.id+'\')">👤 Open contact ↗</button>';
   h+='</div></div>';
   h+='<div style="padding:0 16px 4px">'+callBrief(c)+'</div>';
@@ -2960,6 +3048,152 @@ function renderIntent(){
   h+='<div class="panel"><div class="ph"><h3>⬆ Ranked accounts</h3><span class="sub">'+t.count+(focusLbl?' · '+focusLbl:' with signal')+' · sorted by intent · 👑=owner engaged · type in any column box to filter'+clr+'</span></div>'+t.html+'</div>';
   el('view-intent').innerHTML=h; restoreFlt();
 }
+/* ====================== SEQUENCES ======================
+   The Apollo "Sequences" screen, rebuilt inside the CRM: every play in SEQ_LIB, how many
+   contacts are enrolled and at what step, the exact step copy, and a click-through to each
+   enrolled person. Enrollment/step state is the same c.emailSeq the drawer already drives, so
+   this tab is a read/nav cockpit — no new data model. */
+let seqFocus=null; const seqStepsOpen={};
+// Roll up every contact's emailSeq into per-sequence buckets: active enrollees + completed +
+// a step histogram so we can show where people are stuck in each play.
+function seqStats(){
+  const map={}; seqLib().forEach(q=>{ map[q.id]={q,active:[],done:[],hist:{}}; });
+  map.__custom={q:{id:'__custom',name:'Default / pasted cadence',steps:cadDef()},active:[],done:[],hist:{}};
+  contacts().forEach(c=>{ const s=c.emailSeq; if(!s) return;
+    const key=(s.seqId&&map[s.seqId])?s.seqId:'__custom'; const m=map[key];
+    if(s.done){ m.done.push(c); return; }
+    m.active.push(c); const N=(m.q.steps||[]).length||cadNFor(c); const st=Math.min(Math.max(+s.step||1,1),N||1); m.hist[st]=(m.hist[st]||0)+1;
+  });
+  return map;
+}
+function setSeqFocus(id){ seqFocus=(seqFocus===id?null:id); renderSequences(); }
+function toggleSeqSteps(id){ seqStepsOpen[id]=!seqStepsOpen[id]; renderSequences(); }
+function seqRowHtml(c){
+  const s=c.emailSeq||{}; const q=seqById(s.seqId); const N=cadNFor(c); const step=Math.min(Math.max(+s.step||1,1),N);
+  const done=!!s.done; const pct=Math.round((done?N:(step-1))/Math.max(N,1)*100);
+  const a=acct(c.accountId); const stepDef=cadDefFor(c)[step-1]||{}; const lbl=stepDef.label||'';
+  const last=s.lastSentAt?('sent '+fmtAgo(s.lastSentAt)+(s.lastBy?(' · '+esc(s.lastBy)):'')):'not sent yet';
+  return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
+    '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
+    '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
+    '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
+    '<td>'+(done?'<span class="tag cust">✓ complete</span>':('Email '+step+'/'+N+(lbl?' · '+esc(lbl):'')))+'</td>'+
+    '<td style="min-width:90px">'+bar(pct, done?'var(--won)':'var(--acc)')+'</td>'+
+    '<td class="tsub">'+last+'</td></tr>';
+}
+function renderSequences(){
+  const stats=seqStats();
+  const active=contacts().filter(c=>c.emailSeq&&!c.emailSeq.done);
+  const done=contacts().filter(c=>c.emailSeq&&c.emailSeq.done);
+  const apollo=contacts().filter(c=>c.apolloSeq);
+  let h='<div class="panel"><div class="ph"><h3>✉️ Sequences</h3><span class="sub">your Apollo plays, run from inside the CRM — enroll from any contact drawer · click a play to see who\'s in it</span></div>'+
+    '<div style="padding:14px 16px"><div class="grid">'+
+      stat(active.length,'In a sequence',true,"setSeqFocus(null)",seqFocus===null)+
+      stat(done.length,'Completed cadences',false)+
+      stat(apollo.length,'Still in Apollo',false,"setSeqFocus('__apollo')",seqFocus==='__apollo')+
+      stat(seqLib().length,'Plays available',false)+'</div>'+
+      (apollo.length?'<div class="sub" style="margin-top:10px">⚠️ '+apollo.length+' contact'+(apollo.length===1?' is':'s are')+' still enrolled in Apollo — open each and start the matching CRM sequence to migrate off Apollo.</div>':'')+
+    '</div></div>';
+  // Play library — one card per sequence with enrollment + step histogram + copy preview.
+  h+='<div class="panel"><div class="ph"><h3>📚 Play library</h3><span class="sub">click "steps" to preview the copy · ✎ edit a play · click a card to filter the list below</span><button class="btn sm pri" style="margin-left:auto" onclick="openSeqEditor(null)">＋ New sequence</button></div><div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
+  seqLib().forEach(q=>{ const m=stats[q.id]; const N=q.steps.length; const sel=seqFocus===q.id;
+    const maxH=Math.max(1,...Object.values(m.hist),1);
+    const histBars=Array.from({length:N},(_,i)=>{ const n=i+1, cnt=m.hist[n]||0;
+      return '<div title="Email '+n+': '+cnt+' waiting" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px">'+
+        '<div style="width:100%;background:var(--acc);border-radius:2px 2px 0 0;height:'+Math.round(cnt/maxH*28)+'px;min-height:'+(cnt?3:0)+'px"></div>'+
+        '<span style="font-size:9px;color:var(--mut)">'+n+'</span></div>'; }).join('');
+    h+='<div class="stat" style="cursor:pointer;text-align:left;padding:12px'+(sel?';outline:2px solid var(--acc);outline-offset:-2px':'')+'" onclick="setSeqFocus(\''+q.id+'\')">'+
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px"><b style="font-size:13px">'+esc(q.name)+'</b><span class="tsub">'+N+' steps</span></div>'+
+      '<div class="sub" style="margin:4px 0 8px">'+m.active.length+' active · '+m.done.length+' done'+(q.match?' · matches: '+esc(q.match):'')+'</div>'+
+      '<div style="display:flex;align-items:flex-end;gap:3px;height:34px">'+histBars+'</div>'+
+      '<div class="logbar" style="margin-top:8px" onclick="event.stopPropagation()"><button class="btn sm gh" onclick="toggleSeqSteps(\''+q.id+'\')">'+(seqStepsOpen[q.id]?'▾ hide steps':'▸ steps')+'</button><button class="btn sm gh" onclick="openSeqEditor(\''+q.id+'\')" title="Edit this sequence — add calls, tasks, emails">✎ edit</button></div>'+
+      (seqStepsOpen[q.id]?('<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">'+q.steps.map((s,i)=>{ const kk=stepKind(s); const tlbl=kk==='call'?'📞 call':kk==='task'?'✅ task':(s.type==='reply'?'↩ reply':'✉ new'); return '<div style="margin-bottom:7px"><div style="font-size:11px;color:var(--mut)">Day '+(+s.d||0)+' · '+tlbl+(s.label?' · '+esc(s.label):'')+'</div>'+((s.subj||s.body)?'<div style="font-size:12px;font-weight:600">'+esc(s.subj||s.label||'')+'</div>':'')+'</div>'; }).join('')+'</div>'):'')+
+    '</div>';
+  });
+  h+='</div></div>';
+  // Enrolled list, filtered by the focused play (or Apollo, or all).
+  let list=active, title='Everyone in a sequence';
+  if(seqFocus==='__apollo'){ list=apollo.map(c=>c); title='Still in Apollo — migrate these'; }
+  else if(seqFocus){ const q=seqById(seqFocus); title='In "'+((q&&q.name)||seqFocus)+'"'; list=active.filter(c=>c.emailSeq&&c.emailSeq.seqId===seqFocus); }
+  list=list.slice().sort((a,b)=>((+((b.emailSeq&&b.emailSeq.lastSentAt))||0)-(+((a.emailSeq&&a.emailSeq.lastSentAt))||0)));
+  const clr=seqFocus?' · <a href="javascript:void(0)" onclick="setSeqFocus(null)" style="color:var(--acc)">clear ✕</a>':'';
+  let body;
+  if(!list.length) body='<div class="qempty">No contacts here yet — open a contact and hit “Start sequence” in the drawer.</div>';
+  else if(seqFocus==='__apollo') body='<table><tbody>'+apollo.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(c=>'<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer"><td><span class="tname">'+esc(cname(c))+'</span></td><td class="tsub">'+esc((acct(c.accountId)&&aname(acct(c.accountId)))||'')+'</td><td>'+esc(c.apolloSeq)+'</td><td class="tsub">Apollo</td></tr>').join('')+'</tbody></table>';
+  else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Sequence</th><th>Step</th><th>Progress</th><th>Last email</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
+  h+='<div class="panel"><div class="ph"><h3>👥 '+esc(title)+'</h3><span class="sub">'+list.length+' contact'+(list.length===1?'':'s')+clr+'</span></div>'+body+'</div>';
+  el('view-sequences').innerHTML=h;
+}
+/* ===== Sequence builder: create/edit a play with mixed steps (email / call / task). Edits to a
+   built-in play, and any brand-new play, are stored in store.__seqLib and merged over SEQ_LIB by
+   seqLib(), so the whole team gets them and every enrolled contact runs the updated steps. ===== */
+let seqEdit=null;
+const SEQ_TYPES=[['new','✉ Email (new thread)'],['reply','↩ Email (reply on thread)'],['call','📞 Call'],['task','✅ Task']];
+function isBuiltinSeq(id){ return SEQ_LIB.some(q=>q.id===id); }
+function openSeqEditor(id){
+  const q=id?seqById(id):null;
+  seqEdit=q?{ id:q.id, name:q.name||'', builtin:isBuiltinSeq(q.id),
+      steps:(q.steps||[]).map(s=>({type:(s.type||'new'),d:+s.d||0,label:s.label||'',subj:s.subj||'',body:s.body||''})) }
+    :{ id:uid('seq'), name:'', builtin:false, steps:[{type:'new',d:0,label:'',subj:'',body:''}] };
+  if(!seqEdit.steps.length) seqEdit.steps=[{type:'new',d:0,label:'',subj:'',body:''}];
+  let m=el('seqModal'); if(!m){ m=document.createElement('div'); m.id='seqModal'; m.className='cmodal-wrap';
+    m.addEventListener('click',function(e){ if(e.target===m) closeSeqEditor(); }); document.body.appendChild(m); }
+  renderSeqEditor(); m.style.display='flex';
+}
+function seqEditSync(){ if(!seqEdit) return; const nm=el('seqName'); if(nm) seqEdit.name=nm.value;
+  seqEdit.steps.forEach((s,i)=>{ const g=f=>{ const x=el('seq_'+f+'_'+i); return x?x.value:s[f]; };
+    s.type=g('type')||s.type; s.d=+g('d')||0; s.label=g('label'); s.subj=g('subj'); s.body=g('body'); }); }
+function seqEditType(i){ seqEditSync(); renderSeqEditor(); }
+function seqEditAdd(){ seqEditSync(); seqEdit.steps.push({type:'call',d:seqEdit.steps.length?2:0,label:'',subj:'',body:''}); renderSeqEditor(); }
+function seqEditDel(i){ seqEditSync(); seqEdit.steps.splice(i,1); if(!seqEdit.steps.length) seqEdit.steps=[{type:'new',d:0,label:'',subj:'',body:''}]; renderSeqEditor(); }
+function seqEditMove(i,dir){ seqEditSync(); const j=i+dir; if(j<0||j>=seqEdit.steps.length) return; const t=seqEdit.steps[i]; seqEdit.steps[i]=seqEdit.steps[j]; seqEdit.steps[j]=t; renderSeqEditor(); }
+function renderSeqEditor(){ const m=el('seqModal'); if(!m||!seqEdit) return;
+  const rows=seqEdit.steps.map((s,i)=>{ const k=stepKind(s);
+    const typeOpts=SEQ_TYPES.map(t=>'<option value="'+t[0]+'"'+(s.type===t[0]||(t[0]==='new'&&!s.type)?' selected':'')+'>'+t[1]+'</option>').join('');
+    let fields='<input id="seq_label_'+i+'" placeholder="'+(k==='email'?'Label (e.g. Intro)':k==='call'?'Call label (e.g. Discovery dial)':'Task label (e.g. Connect on LinkedIn)')+'" value="'+esc(s.label)+'" style="width:100%;box-sizing:border-box;margin-top:6px">';
+    if(k==='email') fields+='<input id="seq_subj_'+i+'" placeholder="Subject line" value="'+esc(s.subj)+'" style="width:100%;box-sizing:border-box;margin-top:6px"><textarea id="seq_body_'+i+'" class="cm-note" placeholder="Email body… tokens: {{first}} {{account}} {{apps}} {{locs}} {{rep}}">'+esc(s.body)+'</textarea>';
+    else fields+='<textarea id="seq_body_'+i+'" class="cm-note" placeholder="'+(k==='call'?'Call script / talking points (optional)':'What to do on this step (optional)')+' — tokens: {{first}} {{account}} {{apps}}">'+esc(s.body)+'</textarea>'+'<input id="seq_subj_'+i+'" type="hidden" value="'+esc(s.subj)+'">';
+    return '<div class="cadstep"><div class="cadstep-h"><b>Step '+(i+1)+'</b><span style="margin-left:auto;display:flex;gap:4px">'+
+      (i>0?'<button class="cm-x" onclick="seqEditMove('+i+',-1)" title="Move up">↑</button>':'')+
+      (i<seqEdit.steps.length-1?'<button class="cm-x" onclick="seqEditMove('+i+',1)" title="Move down">↓</button>':'')+
+      (seqEdit.steps.length>1?'<button class="cm-x" onclick="seqEditDel('+i+')" title="Remove step">✕</button>':'')+'</span></div>'+
+      '<div class="cadgrid"><select id="seq_type_'+i+'" class="cflt" onchange="seqEditType('+i+')">'+typeOpts+'</select><input id="seq_d_'+i+'" type="number" min="0" title="wait days before this step" value="'+esc(String(s.d))+'" style="width:96px"></div>'+
+      fields+'</div>';
+  }).join('');
+  m.innerHTML='<div class="cmodal" style="max-width:660px">'+
+    '<div class="cm-head"><div><div class="cm-name">🧩 '+(seqEdit.builtin?'Edit sequence':'New sequence')+'</div><div class="cm-sub">Mix emails, calls, and tasks. Wait-days set the gap before each step. Tokens: {{first}} {{account}} {{apps}} {{locs}} {{rep}}</div></div>'+
+      '<button class="cm-x" onclick="closeSeqEditor()">✕</button></div>'+
+    '<input id="seqName" placeholder="Sequence name" value="'+esc(seqEdit.name)+'" style="width:100%;box-sizing:border-box;margin-top:12px;font-weight:600">'+
+    '<div style="max-height:50vh;overflow:auto;margin-top:12px">'+rows+'</div>'+
+    '<div class="logbar" style="margin-top:8px"><button class="btn sm gh" onclick="seqEditAdd()">＋ Add step</button>'+
+      (seqEdit.builtin?'<button class="btn sm gh" onclick="resetBuiltinSeq()" title="Discard your edits — revert to the built-in copy">↺ Reset to built-in</button>':'')+'</div>'+
+    '<div class="cm-foot"><button class="btn gh" onclick="closeSeqEditor()">Cancel</button>'+
+      (seqEdit.builtin?'':'<button class="btn gh" onclick="deleteSeqEditor()" style="color:var(--lost)">Delete</button>')+
+      '<button class="btn pri" onclick="saveSeqEditor()">Save sequence</button></div></div>';
+}
+function closeSeqEditor(){ const m=el('seqModal'); if(m) m.style.display='none'; seqEdit=null; }
+function resetBuiltinSeq(){ if(!seqEdit) return; if(!confirm('Discard your edits and revert to the built-in copy?')) return;
+  store.__seqLib=(store.__seqLib||[]).filter(q=>q.id!==seqEdit.id); store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Reverted to built-in sequence'); }
+function saveSeqEditor(){ seqEditSync(); if(!seqEdit) return;
+  const name=(seqEdit.name||'').trim(); if(!name){ toast('Give the sequence a name'); return; }
+  const steps=seqEdit.steps.map(s=>{ const k=stepKind(s); const o={type:s.type||'new',d:+s.d||0,label:(s.label||'').trim()};
+    if(k==='email'){ o.subj=(s.subj||'').trim(); o.body=s.body||''; } else { o.body=s.body||''; } return o; })
+    .filter(s=>{ const k=stepKind(s); return k==='email'?(s.subj||s.body||s.label):(s.label||s.body); });
+  if(!steps.length){ toast('Add at least one step with content'); return; }
+  const entry={id:seqEdit.id,name:name,match:'',steps:steps};
+  const lib=(store.__seqLib||[]).slice(); const i=lib.findIndex(q=>q.id===entry.id);
+  if(i>=0) lib[i]=entry; else lib.push(entry); store.__seqLib=lib;
+  store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer();
+  toast('Saved "'+name+'" — '+steps.length+' step'+(steps.length===1?'':'s')); }
+function deleteSeqEditor(){ if(!seqEdit) return;
+  const enrolled=contacts().filter(c=>c.emailSeq&&c.emailSeq.seqId===seqEdit.id&&!c.emailSeq.done).length;
+  if(!confirm('Delete this sequence?'+(enrolled?(' '+enrolled+' contact'+(enrolled===1?' is':'s are')+' still in it — they will fall back to the default cadence.'):''))) return;
+  store.__seqLib=(store.__seqLib||[]).filter(q=>q.id!==seqEdit.id); store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Sequence deleted'); }
+// Add a direct line to a contact that has no dialable number (prefilled with the account's
+// corporate/direct line if we have one), so sequence contacts can still be called.
+function promptDirectLine(id){ const c=contact(id); if(!c) return; const a=acct(c.accountId);
+  const suggest=(a&&a.phone)||''; const v=(prompt('Direct line for '+cname(c)+':', c.phone||suggest||'')||'').trim();
+  if(!v) return; c.phone=v; stampU(c); logAuto(c,'☎️ Direct line added — '+v); save(); refreshDrawer(); if(typeof renderHotList==='function') renderHotList(); toast('Direct line saved'); }
 /* ====================== ACCOUNTS ====================== */
 const A_COLS=[
   {k:'name',t:'Account',val:a=>a.name,cell:a=>'<span class="tname">'+esc(a.name)+'</span>'+(isBrand(a)?' <span class="tsub">🏢'+childLocs(a.id).length+'</span>':isLocation(a)?' <span class="tsub">📍</span>':'')},
