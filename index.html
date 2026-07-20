@@ -532,7 +532,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z67';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z68';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -873,6 +873,18 @@ function switchTab(v){
   el('filter-card').style.display=(v==='hotlist'||v==='pipeline'||v==='contacts'||v==='accounts'||v==='closed'||v==='live')?'block':'none';
   applyFilterTabs();
   renderActive();
+  if(v==='today') maybeFreshenToday();
+}
+// Landing on Today pulls Apollo live (via the edge fn) if the cached count is stale, so the
+// task number always mirrors Apollo without a manual Sync. Throttled so re-renders don't hammer it.
+let _todayFresh=0;
+function maybeFreshenToday(){
+  if(!SYNC_FN) return;
+  const last=(store.__apollo&&+store.__apollo.syncedAt)||0;
+  if(Date.now()-last < 60000) return;        // already fresh (<1 min)
+  if(Date.now()-_todayFresh < 15000) return; // don't re-fire on rapid tab switches
+  _todayFresh=Date.now();
+  syncApollo(true).then(()=>{ if(UI.tab==='today') renderToday(); }).catch(()=>{});
 }
 // Show only the filter sections that make sense for the current tab (data-tabs allowlist).
 function applyFilterTabs(){ document.querySelectorAll('#filter-card .fsec').forEach(sec=>{
