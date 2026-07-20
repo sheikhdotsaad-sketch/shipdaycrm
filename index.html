@@ -467,6 +467,7 @@ small.hint{color:var(--dim);font-size:11px}
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="retierBook()">Re-tier book by heat</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="openDedupe()">Find duplicates</button>
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="repairAltEmails()" title="Pull the personal/alt addresses buried in merge notes (e.g. a gmail someone replied from) up onto the contact so future open/reply imports attach to the right person">Repair alternate emails</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="bulkSplitContacts()">✂️ Split multi-person contacts</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="fixCalNames()">Clean calendar names</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="restoreAutoBackup()">Restore auto-backup</button>
@@ -531,7 +532,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul17·z65';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z67';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -673,7 +674,7 @@ function rollingBackup(json){
   }catch(e){}
 }
 /* Supabase blob sync (model-agnostic, whole store) */
-let sb=null, sbChan=null, pushTimer=null, syncPulled=false;
+let sb=null, sbChan=null, pushTimer=null, syncPulled=false, todayCountReady=false;
 function syncCfg(){ return { url:(TEAM.url||store.__sbUrl||''), key:(TEAM.key||store.__sbKey||''), row:(TEAM.row||store.__sbId||'shipday-team') }; }
 function setSync(cls,msg){ const d=document.getElementById('sync-dot'),s=document.getElementById('sync-status');
   if(d)d.className='sync-dot '+cls; if(s)s.textContent=msg; }
@@ -909,7 +910,7 @@ function renderCounts(){
   el('p-accts').textContent=activeAccts().length; el('p-cts').textContent=activeContacts().length;
   el('p-closed').textContent=closed; el('p-live').textContent=live;
   const pi=el('p-intent'); if(pi){ try{ pi.textContent=intentRows().filter(r=>r.trending).length; }catch(e){ pi.textContent=0; } }
-  const td=el('p-today'); if(td) td.textContent=syncPulled?((store.__apollo&&store.__apollo.totalDue)||0):'…';
+  const td=el('p-today'); if(td) td.textContent=todayCountReady?((store.__apollo&&store.__apollo.totalDue)||0):'…';
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
 function closedAccts(){ const s=new Set(deals().filter(d=>d.stage===WON).map(d=>d.accountId)); return accounts().filter(a=>a.isCustomer||s.has(a.id)); }
@@ -929,8 +930,23 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
 /* ====================== TODAY (live dashboard) ====================== */
 function fmtAgo(ts){ if(!ts) return 'never'; const m=Math.round((Date.now()-ts)/60000); if(m<1)return'just now'; if(m<60)return m+'m ago'; const hr=Math.round(m/60); if(hr<24)return hr+'h ago'; return Math.round(hr/24)+'d ago'; }
 const SYNC_FN='https://muidkwqinwcfnfvnducj.functions.supabase.co'; /* Supabase Edge Function base URL — apollo-tasks deployed */
-function byEmail(){ const m={}; contacts().forEach(c=>{ if(c.email2) m[c.email2.trim().toLowerCase()]=c; });
-  contacts().forEach(c=>{ if(c.email) m[c.email.trim().toLowerCase()]=c; }); return m; }
+// Every address a contact is known by: primary (email) + alternates (email2 + altEmails[]).
+// A reply/open that arrives on ANY of these must attach to the SAME person — otherwise
+// engagement under a personal gmail (Trent replied from trentiacono@gmail.com, not his
+// listed rr.com address) gets orphaned and the record looks dead when it's actually hot.
+function altAddrs(c){ const out=[]; if(c&&c.email2)out.push(c.email2); if(c&&Array.isArray(c.altEmails))c.altEmails.forEach(e=>out.push(e));
+  return out.map(e=>String(e||'').toLowerCase().trim()).filter(e=>e.includes('@')); }
+function allAddrs(c){ const a=altAddrs(c); const p=String(c&&c.email||'').toLowerCase().trim(); if(p&&p.includes('@'))a.unshift(p); return a; }
+// Register em as an alternate of c (into email2 if empty, else altEmails[]). Skips the primary,
+// existing alts, and internal (own-domain) addresses. Returns true if newly added.
+function addAltEmail(c,em){ em=String(em||'').toLowerCase().trim(); if(!c||!em||!em.includes('@'))return false;
+  if(typeof isInternalEmail==='function'&&isInternalEmail(em))return false;
+  if(String(c.email||'').toLowerCase().trim()===em)return false;
+  if(altAddrs(c).includes(em))return false;
+  if(!c.email2){ c.email2=em; } else { c.altEmails=Array.isArray(c.altEmails)?c.altEmails:[]; c.altEmails.push(em); }
+  return true; }
+function byEmail(){ const m={}; contacts().forEach(c=>{ altAddrs(c).forEach(e=>{ m[e]=c; }); });
+  contacts().forEach(c=>{ if(c.email) m[c.email.trim().toLowerCase()]=c; }); return m; }   // primary wins over an alt shared with someone
 function pushSignal(c,kind,ts,src){ store.__signals=Array.isArray(store.__signals)?store.__signals:[];
   // dedupe: drop any prior signal for same contact+kind, keep newest on top
   store.__signals=store.__signals.filter(s=>!(s.cid===c.id&&s.kind===kind));
@@ -943,6 +959,22 @@ function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=by
     if(u.apolloSeq) c.apolloSeq=u.apolloSeq;
     if(u.replied){ const prev=+c.lastReplyTs||0; const ts=u.lastReplyTs||Date.now(); if(ts>prev && Date.now()-ts<RECENT) pushSignal(c,'reply',ts,''); c.lastReplyTs=ts; }
   }); return n; }
+// Gmail replies used to be shown once on Today and then lost — never written to the record, so
+// they didn't set replied, didn't log, and didn't feed heat/Hot List. Persist each matched reply
+// as a durable log entry + replied flag. Alt-email aware (byEmail), idempotent per subject+day.
+function persistReplies(replies){ if(!Array.isArray(replies)||!replies.length)return 0; const m=byEmail(); let n=0;
+  const emailOf=s=>{ const x=String(s||'').match(/<([^>]+)>/); return (x?x[1]:s).trim().toLowerCase(); };
+  replies.forEach(r=>{ const e=emailOf(r.from); const c=e&&m[e]; if(!c)return;
+    const ts=Date.parse(r.date||'')||Date.now(); const sub=String(r.subject||'').replace(/^\s*re:\s*/i,'').trim().slice(0,120);
+    const txt='↩️ Replied: '+(sub||'(no subject)'); const day=new Date(ts).toDateString();
+    c.log=c.log||[];
+    if(c.log.some(l=>l.txt===txt && new Date(+l.ts||0).toDateString()===day)) return;  // already logged this reply today
+    c.log.push({ts,txt,sys:true}); if(c.log.length>50){ c.log.sort((a,b)=>(+a.ts||0)-(+b.ts||0)); c.log=c.log.slice(-50); }
+    c.replied=true; if(ts>(+c.lastReplyTs||0))c.lastReplyTs=ts;
+    if(Date.now()-ts<RECENT_REPLY) pushSignal(c,'reply',ts,'');
+    stampU(c); n++; });
+  return n; }
+const RECENT_REPLY=7*864e5;
 async function syncApollo(bg){
   const key=(store.__keys&&store.__keys.apollo)||'';
   if(!SYNC_FN){ if(!bg)toast(key?'Apollo key saved — live sync activates once hosted':'Add your Apollo key in Integrations first'); return 0; }
@@ -955,7 +987,8 @@ async function syncGmail(bg){
   if(!SYNC_FN){ if(!bg)toast((store.__keys&&store.__keys.google)?'Gmail sync activates once hosted':'Connect Google in Integrations first'); return 0; }
   try{ if(!bg)setSync('busy','Syncing Gmail…'); const r=await fetch(SYNC_FN+'/gmail-replies',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     store.__gmail={syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]};
-    const n=applyContactUpdates(d.contacts); save(); if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')); } return n; }
+    const n=applyContactUpdates(d.contacts); const rp=persistReplies(d.replies||[]); save();
+    if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')); } return n; }
   catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Gmail sync failed'); } return 0; }
 }
 // One-click header sync: pulls new opens/replies from Apollo + Gmail, then shows what changed.
@@ -3930,11 +3963,14 @@ function importCSV(text){
     iOpenAt=col('last opened','opened at','last_open','last open'),
     iReplied=col('replied','reply','has replied'),
     iSeq=col('sequence','campaign','sequence name'),
-    iLastAct=col('last contacted','last activity','last touch','lastcontacted','last engaged');
+    iLastAct=col('last contacted','last activity','last touch','lastcontacted','last engaged'),
+    // Apollo contact exports carry the personal/alt addresses people actually reply from — capture
+    // them so future open/reply imports attach to the right person instead of spawning a duplicate.
+    iEmail2=col('secondary email','alt email','email 2','personal email'),iEmail3=col('tertiary email');
   const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='y'||v==='1'; };
   let na=0,nc=0,nsig=0;
   const byName={}; accounts().forEach(a=>byName[a.name.toLowerCase()]=a.id);
-  const byEmail={}; contacts().forEach(c=>{if(c.email2)byEmail[c.email2.toLowerCase()]=c.id;});
+  const byEmail={}; contacts().forEach(c=>{altAddrs(c).forEach(e=>{byEmail[e]=c.id;});});
   contacts().forEach(c=>{if(c.email)byEmail[c.email.toLowerCase()]=c.id;});
   // Second dedup key: same person name under the same account (for rows with no email).
   const byNameAcct={}; contacts().forEach(c=>{ const nm=((c.first||'')+' '+(c.last||'')).toLowerCase().trim(); if(nm) byNameAcct[c.accountId+'|'+nm]=c.id; });
@@ -4004,6 +4040,7 @@ function importCSV(text){
         const wNew=(wv.includes('hot')||wv.includes('high'))?'Hot':(wv.includes('warm')||wv.includes('med'))?'Warm':'';
         const rank={Cold:0,Warm:1,Hot:2};
         if(wNew&&(rank[wNew]||0)>(rank[c.warmth]||0)){ c.warmth=wNew; f=true; }
+        [iEmail2,iEmail3].forEach(ix=>{ if(ix>=0){ const av=String(r[ix]||'').trim(); if(av.includes('@')&&av.toLowerCase()!=='none'&&addAltEmail(c,av)){ byEmail[av.toLowerCase()]=c.id; f=true; } } });
         if(f) stampU(c); };
       if(exist){ const c=contact(exist); if(c){ if(email&&!c.email){ c.email=email; byEmail[email.toLowerCase()]=exist; }
         if(phone&&!c.phone&&!c.mobile){ c.phone=phone; if(pk)byPhone[pk]=exist; }
@@ -4032,7 +4069,7 @@ function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10
 function fmtDur(s){ s=+s||0; const m=Math.floor(s/60),ss=s%60; return m?(m+'m '+ss+'s'):(ss+'s'); }
 function fmtPhone10(n){ return '('+n.slice(0,3)+') '+n.slice(3,6)+'-'+n.slice(6); }
 function phoneIndex(){ const m={}; contacts().forEach(c=>{ [c.phone,c.mobile].forEach(p=>{const n=norm10(p); if(n&&!m[n])m[n]=c.id;}); }); return m; }
-function emailIndex(){ const m={}; contacts().forEach(c=>{ if(c.email2)m[c.email2.toLowerCase().trim()]=c.id; });
+function emailIndex(){ const m={}; contacts().forEach(c=>{ altAddrs(c).forEach(e=>{ if(!m[e])m[e]=c.id; }); });
   contacts().forEach(c=>{ if(c.email)m[c.email.toLowerCase().trim()]=c.id; }); return m; }   // primary email wins over someone's alt
 function ensureCallContact(n){ const aid=newAccount(fmtPhone10(n)); const cid=uid('c');
   store.contacts[cid]={id:cid,accountId:aid,first:'Main',last:'Line',title:'',email:'',phone:'+1'+n,warmth:'Warm',status:'New',source:'CSV import',log:[]}; return cid; }
@@ -4204,6 +4241,19 @@ function checkBackupBanner(){
 function resetAll(){ if(!confirm('Erase ALL data? Sync creds are kept.'))return;
   const keep={__sbUrl:store.__sbUrl,__sbKey:store.__sbKey,__sbId:store.__sbId};
   store=blank(); Object.assign(store,keep); save(); render(); toast('Reset'); }
+// Past dedupes recorded a merged-away address only as a log note ("…also: trentiacono@gmail.com").
+// That address is where the person actually engages, but matching never saw it. Sweep those notes
+// and promote any embedded email to a real alternate, so re-imported opens/replies attach correctly.
+function repairAltEmails(){
+  if(!confirm('Scan contact notes for alternate email addresses and attach them to the right contact?\n\nSafe + reversible-by-backup. Recommended before re-importing email opens.')) return;
+  let added=0, people=0;
+  contacts().forEach(c=>{ let touched=false;
+    (c.log||[]).forEach(l=>{ const t=String(l.txt||''); if(!/also:|merged dup|alt email|other email/i.test(t)) return;
+      (t.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)||[]).forEach(em=>{ if(addAltEmail(c,em)){ added++; touched=true; } }); });
+    if(touched){ stampU(c); people++; } });
+  save(); render();
+  toast(added? ('Attached '+added+' alt email'+(added===1?'':'s')+' to '+people+' contact'+(people===1?'':'s')) : 'No new alternate emails found in notes');
+}
 function reloadSeed(){
   if(!SEED){ alert('No imported data is bundled in this file.'); return; }
   if(!confirm('Reload the imported spreadsheet data?\n\nThis REPLACES your current accounts/contacts/deals with the freshly imported set. Your Supabase sync creds are kept. Export a backup first if unsure.')) return;
@@ -4329,11 +4379,13 @@ function boot(){
   if(!valid.includes(t)) t='today';
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
   switchTab(t);
-  syncRail(); checkBackupBanner(); initSync();
+  syncRail(); checkBackupBanner();
+  const cloudStart=Promise.resolve(initSync());
   if(!myRep()) repGate(true);   // sign in before working — attribution + lead-locking need a name
   // Refresh the live Apollo count on load; the cloud pull preserves whichever sync is newer (see initSync),
   // so this fresh number is never reverted to the stale saved one — fixes the 269-until-manual-↻ flap.
-  if(SYNC_FN){ Promise.resolve(syncApollo(true)).then(()=>{ renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); }).catch(()=>{}); }
+  const apolloStart=SYNC_FN?Promise.resolve(syncApollo(true)):Promise.resolve(0);
+  Promise.allSettled([cloudStart,apolloStart]).then(()=>{ todayCountReady=true; renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); });
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
