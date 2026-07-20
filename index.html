@@ -534,7 +534,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z73';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z74';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -972,7 +972,9 @@ function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=by
   list.forEach(u=>{ const c=u.email&&m[String(u.email).trim().toLowerCase()]; if(!c)return; n++;
     if(u.lastContactedTs){ c.lastContactedTs=u.lastContactedTs; c.lastContacted=fmtD(new Date(u.lastContactedTs)); }
     if(u.lastEmailOpenTs){ const prev=+c.lastEmailOpenTs||0; if(u.lastEmailOpenTs>prev && Date.now()-u.lastEmailOpenTs<RECENT) pushSignal(c,'open',u.lastEmailOpenTs,u.apolloSeq||''); c.lastEmailOpenTs=u.lastEmailOpenTs; }
-    if(u.apolloSeq) c.apolloSeq=u.apolloSeq;
+    if(u.apolloSeq && !c.apolloDone) c.apolloSeq=u.apolloSeq;   // apolloDone = migrated to a CRM play; don't re-flag
+    if(u.apolloStep!=null && !c.apolloDone) c.apolloStep=+u.apolloStep||0;   // current Apollo step, for resume-where-they-are
+    if(u.apolloStatus && !c.apolloDone) c.apolloStatus=u.apolloStatus;
     if(u.replied){ const prev=+c.lastReplyTs||0; const ts=u.lastReplyTs||Date.now(); if(ts>prev && Date.now()-ts<RECENT) pushSignal(c,'reply',ts,''); c.lastReplyTs=ts; }
   }); return n; }
 // Gmail replies used to be shown once on Today and then lost — never written to the record, so
@@ -3092,6 +3094,49 @@ function seqRowHtml(c){
     '<td style="min-width:90px">'+bar(pct, done?'var(--won)':'var(--acc)')+'</td>'+
     '<td class="tsub">'+last+'</td></tr>';
 }
+// Map an Apollo sequence NAME to the matching CRM play id (keyword match, order matters —
+// "toast delivery"/TDS is checked before "toast pickup"). Returns '' when there's no CRM twin
+// (those contacts stay in Apollo). Keeps Apollo campaign IDs out of the CRM entirely.
+function apolloSeqToId(name){ const s=String(name||'').toLowerCase();
+  if(/\btds\b|toast delivery/.test(s)) return 'tds';
+  if(/doordash|uber/.test(s)) return 'dd-ue';
+  if(/toast pickup|pickup-only|no delivery at all/.test(s)) return 'toast-pickup';
+  if(/owner\.com|\bowner\b/.test(s)) return 'owner';
+  if(/square/.test(s)) return 'square';
+  if(/no.?show/.test(s)) return 'no-show';
+  if(/closed lost|re.?engag/.test(s)) return 'closed-lost';
+  return ''; }
+// One-click migration off Apollo: every contact still flagged in an Apollo sequence is enrolled
+// in the matching CRM play AT THE SAME STEP (c.apolloStep, synced from Apollo), so nobody gets
+// re-spammed from step 1. apolloDone stops the next Apollo sync from re-flagging them. Reversible.
+let __apolloUndo=null;
+function migrateFromApollo(){
+  const cand=contacts().filter(c=>c.apolloSeq&&!c.apolloDone);
+  if(!cand.length){ toast('No Apollo-enrolled contacts to migrate'); return; }
+  const plan=cand.map(c=>({c,seqId:apolloSeqToId(c.apolloSeq)})).filter(x=>x.seqId);
+  const skip=cand.length-plan.length;
+  if(!plan.length){ toast('None of the '+cand.length+' Apollo sequences map to a CRM play'); return; }
+  const withStep=plan.filter(x=>+x.c.apolloStep>0).length;
+  if(!withStep){ if(!confirm('Heads up: no current-step data has synced from Apollo yet, so all '+plan.length+' would RESTART at step 1.\n\nTo resume everyone where they left off, redeploy the apollo-tasks function and hit ↻ Sync first.\n\nMigrate at step 1 anyway?')) return; }
+  else if(!confirm('Migrate '+plan.length+' contact'+(plan.length===1?'':'s')+' from Apollo into the matching CRM sequence, resuming each at their current step?'+(skip?('\n\n'+skip+' will stay in Apollo (no matching CRM play).'):'')+'\n\nReversible with Undo.')) return;
+  const undo=[];
+  plan.forEach(({c,seqId})=>{ const q=seqById(seqId); const N=(q&&q.steps&&q.steps.length)||1;
+    const step=Math.min(Math.max(+c.apolloStep||1,1),N);
+    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,emailSeq:c.emailSeq});
+    c.emailSeq={step:step,startedAt:Date.now(),seqId:seqId,migratedFrom:'apollo'};
+    c.apolloDone=true; c.apolloSeq='';
+    stampU(c); logAuto(c,'⇄ Migrated from Apollo → CRM play "'+((q&&q.name)||seqId)+'" at step '+step);
+    if(typeof ensureEmailTask==='function') ensureEmailTask(c.id,step);
+  });
+  __apolloUndo=undo; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+  toast('Migrated '+plan.length+' contact'+(plan.length===1?'':'s')+' off Apollo'+(skip?(' · '+skip+' left in Apollo'):'')+' — Undo available');
+}
+function undoApolloMigrate(){ if(!__apolloUndo||!__apolloUndo.length){ toast('Nothing to undo'); return; }
+  __apolloUndo.forEach(u=>{ const c=contact(u.id); if(!c) return;
+    c.emailSeq=u.emailSeq||null; c.apolloDone=u.apolloDone||false; c.apolloSeq=u.apolloSeq; c.apolloStep=u.apolloStep; c.apolloStatus=u.apolloStatus;
+    if(typeof clearEmailTasks==='function') clearEmailTasks(u.id); stampU(c); });
+  const n=__apolloUndo.length; __apolloUndo=null; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+  toast('Migration undone — '+n+' contact'+(n===1?'':'s')+' restored to Apollo'); }
 function renderSequences(){
   const stats=seqStats();
   const active=contacts().filter(c=>c.emailSeq&&!c.emailSeq.done);
@@ -3103,7 +3148,7 @@ function renderSequences(){
       stat(done.length,'Completed cadences',false)+
       stat(apollo.length,'Still in Apollo',false,"setSeqFocus('__apollo')",seqFocus==='__apollo')+
       stat(seqLib().length,'Plays available',false)+'</div>'+
-      (apollo.length?'<div class="sub" style="margin-top:10px">⚠️ '+apollo.length+' contact'+(apollo.length===1?' is':'s are')+' still enrolled in Apollo — open each and start the matching CRM sequence to migrate off Apollo.</div>':'')+
+      (apollo.length?'<div class="sub" style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">⚠️ '+apollo.length+' contact'+(apollo.length===1?' is':'s are')+' still enrolled in Apollo. <button class="btn sm pri" onclick="migrateFromApollo()">⇄ Migrate all into CRM sequences</button>'+((__apolloUndo&&__apolloUndo.length)?'<button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button>':'')+'<span class="tsub">resumes each at their current Apollo step</span></div>':((__apolloUndo&&__apolloUndo.length)?'<div class="sub" style="margin-top:10px">✅ Migrated off Apollo. <button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button></div>':''))+
     '</div></div>';
   // Play library — one card per sequence with enrollment + step histogram + copy preview.
   h+='<div class="panel"><div class="ph"><h3>📚 Play library</h3><span class="sub">click "steps" to preview the copy · ✎ edit a play · click a card to filter the list below</span><button class="btn sm pri" style="margin-left:auto" onclick="openSeqEditor(null)">＋ New sequence</button></div><div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
