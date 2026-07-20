@@ -534,7 +534,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z71';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z72';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2698,7 +2698,7 @@ async function sendSeqEmail(id){
   setSync&&setSync('busy','Sending Email '+n+'…');
   try{
     const r=await fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
-      body:JSON.stringify({to:c.email,subject:e.subj,body:e.body,cid:c.id,
+      body:JSON.stringify({to:c.email,subject:e.subj,body:e.body,cid:c.id,rep:by,
         threadId:isReply?(s.threadId||''):'', inReplyTo:isReply?(s.lastMsgId||''):''})});
     const d=await r.json();
     if(!r.ok||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
