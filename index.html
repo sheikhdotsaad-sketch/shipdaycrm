@@ -534,7 +534,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z74';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z75';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -972,9 +972,9 @@ function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=by
   list.forEach(u=>{ const c=u.email&&m[String(u.email).trim().toLowerCase()]; if(!c)return; n++;
     if(u.lastContactedTs){ c.lastContactedTs=u.lastContactedTs; c.lastContacted=fmtD(new Date(u.lastContactedTs)); }
     if(u.lastEmailOpenTs){ const prev=+c.lastEmailOpenTs||0; if(u.lastEmailOpenTs>prev && Date.now()-u.lastEmailOpenTs<RECENT) pushSignal(c,'open',u.lastEmailOpenTs,u.apolloSeq||''); c.lastEmailOpenTs=u.lastEmailOpenTs; }
-    if(u.apolloSeq && !c.apolloDone) c.apolloSeq=u.apolloSeq;   // apolloDone = migrated to a CRM play; don't re-flag
-    if(u.apolloStep!=null && !c.apolloDone) c.apolloStep=+u.apolloStep||0;   // current Apollo step, for resume-where-they-are
-    if(u.apolloStatus && !c.apolloDone) c.apolloStatus=u.apolloStatus;
+    if(u.apolloSeq && !c.apolloDone) c.apolloSeq=u.apolloSeq;   // apolloDone = migrated to a CRM play; don't re-flag as "still in Apollo"
+    if(u.apolloStep!=null) c.apolloStep=+u.apolloStep||0;   // ALWAYS refresh the true Apollo step (even post-migration) so Re-sync steps can heal a wrong resume point
+    if(u.apolloStatus) c.apolloStatus=u.apolloStatus;
     if(u.replied){ const prev=+c.lastReplyTs||0; const ts=u.lastReplyTs||Date.now(); if(ts>prev && Date.now()-ts<RECENT) pushSignal(c,'reply',ts,''); c.lastReplyTs=ts; }
   }); return n; }
 // Gmail replies used to be shown once on Today and then lost — never written to the record, so
@@ -3137,11 +3137,32 @@ function undoApolloMigrate(){ if(!__apolloUndo||!__apolloUndo.length){ toast('No
     if(typeof clearEmailTasks==='function') clearEmailTasks(u.id); stampU(c); });
   const n=__apolloUndo.length; __apolloUndo=null; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   toast('Migration undone — '+n+' contact'+(n===1?'':'s')+' restored to Apollo'); }
+// Re-sync steps: heals contacts already migrated off Apollo whose emailSeq.step is wrong (e.g. a
+// migration that ran before real step data was flowing stamped everyone at step 1). For each
+// apollo-migrated contact, if the freshly-synced c.apolloStep now says a different (higher) step,
+// bump emailSeq.step to match. Only touches migratedFrom:'apollo' rows; reversible with Undo.
+function resyncApolloSteps(){
+  const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo'&&+c.apolloStep>0);
+  if(!migd.length){ toast('Nothing to re-sync — Sync from Apollo first so step data is fresh'); return; }
+  const undo=[]; let fixed=0;
+  migd.forEach(c=>{ const q=seqById(c.emailSeq.seqId); const N=(q&&q.steps&&q.steps.length)||1;
+    const step=Math.min(Math.max(+c.apolloStep||1,1),N);
+    if(step===(+c.emailSeq.step||1)) return;   // already correct
+    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,emailSeq:JSON.parse(JSON.stringify(c.emailSeq))});
+    const from=+c.emailSeq.step||1; c.emailSeq={...c.emailSeq,step:step};
+    stampU(c); logAuto(c,'⇄ Re-synced Apollo step '+from+' → '+step+' (matched to Apollo)');
+    if(typeof ensureEmailTask==='function') ensureEmailTask(c.id,step);
+    fixed++; });
+  if(!fixed){ toast('All '+migd.length+' migrated contacts already match their Apollo step ✅'); return; }
+  __apolloUndo=undo; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+  toast('Re-synced '+fixed+' contact'+(fixed===1?'':'s')+' to their true Apollo step — Undo available');
+}
 function renderSequences(){
   const stats=seqStats();
   const active=contacts().filter(c=>c.emailSeq&&!c.emailSeq.done);
   const done=contacts().filter(c=>c.emailSeq&&c.emailSeq.done);
   const apollo=contacts().filter(c=>c.apolloSeq);
+  const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo');
   let h='<div class="panel"><div class="ph"><h3>✉️ Sequences</h3><span class="sub">your Apollo plays, run from inside the CRM — enroll from any contact drawer · click a play to see who\'s in it</span></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
       stat(active.length,'In a sequence',true,"setSeqFocus(null)",seqFocus===null)+
@@ -3149,6 +3170,7 @@ function renderSequences(){
       stat(apollo.length,'Still in Apollo',false,"setSeqFocus('__apollo')",seqFocus==='__apollo')+
       stat(seqLib().length,'Plays available',false)+'</div>'+
       (apollo.length?'<div class="sub" style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">⚠️ '+apollo.length+' contact'+(apollo.length===1?' is':'s are')+' still enrolled in Apollo. <button class="btn sm pri" onclick="migrateFromApollo()">⇄ Migrate all into CRM sequences</button>'+((__apolloUndo&&__apolloUndo.length)?'<button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button>':'')+'<span class="tsub">resumes each at their current Apollo step</span></div>':((__apolloUndo&&__apolloUndo.length)?'<div class="sub" style="margin-top:10px">✅ Migrated off Apollo. <button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button></div>':''))+
+      (migd.length?'<div class="sub" style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">🔄 '+migd.length+' migrated from Apollo. <button class="btn sm" onclick="resyncApolloSteps()">⇄ Re-sync steps</button><span class="tsub">↻ Sync first, then click to fix anyone stuck on the wrong step</span></div>':'')+
     '</div></div>';
   // Play library — one card per sequence with enrollment + step histogram + copy preview.
   h+='<div class="panel"><div class="ph"><h3>📚 Play library</h3><span class="sub">click "steps" to preview the copy · ✎ edit a play · click a card to filter the list below</span><button class="btn sm pri" style="margin-left:auto" onclick="openSeqEditor(null)">＋ New sequence</button></div><div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
