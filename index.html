@@ -534,7 +534,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z72';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z73';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2682,6 +2682,17 @@ function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq
   save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   const nextD=cadDefFor(c)[n]?(+cadDefFor(c)[n].d||0):0;
   toast(c.emailSeq.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+nextD+'d')); }
+// ===== Self-serve Gmail connect: pop the gmail-oauth flow for the signed-in rep. After they
+// click Allow on Google, their refresh token is stored server-side (rep_gmail) keyed by rep name,
+// so their sends leave THEIR own inbox. One click, no tokens to paste. =====
+function connectGmail(){
+  if(!SYNC_FN){ toast('Connect integrations first'); return; }
+  const rep=senderName();
+  if(!rep || rep==='Saad'){ if(!confirm('You\'re signed in as "'+rep+'". Connect Gmail for this name?\n\nTip: use “change” first if this isn\'t you.')){ return; } }
+  const u=SYNC_FN+'/gmail-oauth?rep='+encodeURIComponent(rep);
+  window.open(u,'_blank','noopener');
+  toast('Opening Google sign-in for '+rep+' — click Allow, then come back.');
+}
 // ===== Native send: fire the current sequence step from YOUR Gmail (gmail-send edge fn) with a
 // tracking pixel, then advance the cadence exactly like a manual "Log sent". Reply-type steps
 // thread onto the prior message via the stored threadId + Message-ID so the conversation stays
@@ -2758,7 +2769,7 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
   const stepLbl=def.label||(noun+' '+n);
   const headIcon=k==='call'?'📞':k==='task'?'✅':'✉️';
   let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>'+headIcon+' '+esc(seqName)+'</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' done':noun+' '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
-  h+='<div class="tsub" style="margin-top:4px">Working as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span>'+(lastBy?' · last step by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
+  h+='<div class="tsub" style="margin-top:4px">Working as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="connectGmail()" style="cursor:pointer;color:var(--sig)" title="Connect your Gmail so sends leave your own inbox">🔗 connect Gmail</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span>'+(lastBy?' · last step by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
   if(!done){
     if(k==='email'){
       const e=emailStep(c,n);
