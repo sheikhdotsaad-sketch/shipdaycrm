@@ -534,7 +534,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z75';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z77';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -998,7 +998,7 @@ async function syncApollo(bg){
   if(!SYNC_FN){ if(!bg)toast(key?'Apollo key saved — live sync activates once hosted':'Add your Apollo key in Integrations first'); return 0; }
   try{ if(!bg)setSync('busy','Syncing Apollo…'); const r=await fetch(SYNC_FN+'/apollo-tasks',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     if(d.summary) store.__apollo=d.summary; else store.__apollo=d;
-    const n=applyContactUpdates(d.contacts); save(); if(!bg){ renderActive(); setSync('ok','Synced'); toast('Apollo synced'+(n?' · '+n+' contacts stamped':'')); } return n; }
+    const n=applyContactUpdates(d.contacts); syncSeqTasks(); save(); if(!bg){ renderActive(); renderTaskWidget(); setSync('ok','Synced'); toast('Apollo synced'+(n?' · '+n+' contacts stamped':'')); } return n; }
   catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Apollo sync failed'); } return 0; }
 }
 async function syncGmail(bg){
@@ -1391,10 +1391,13 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
       (tel?'<a class="btn sm gh" href="tel:'+esc(tel)+'">📞</a> ':'')+
       '<button class="btn sm gh" title="Snooze 1 day" onclick="snoozeTask(\''+t.id+'\',1)">+1d</button> '+
       '<button class="btn sm gh" title="Delete" onclick="deleteTask(\''+t.id+'\')">×</button></td></tr>'; }
-function openTaskCount(){ return tasks().filter(t=>!t.done).length; }
+// Per-rep task view: each rep sees their OWN tasks + anything unassigned (shared pool). Assigned
+// tasks stay private to that rep, so Saad's book doesn't clutter Embert's queue and vice-versa.
+function taskMine(t){ const mr=(typeof myRep==='function'&&myRep())||''; return !mr || !t.assignee || t.assignee===mr; }
+function openTaskCount(){ return tasks().filter(t=>!t.done&&taskMine(t)).length; }
 let twFilter='all';
 function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
-function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864e5; const list=tasks().slice();
+function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864e5; const list=tasks().filter(taskMine);   // only my tasks + unassigned
   const openAll=list.filter(t=>!t.done);
   // Dashboard shows only what's actionable now: overdue + due today. Future-dated steps (e.g. the
   // next email due in 2 days) stay hidden until they come due, so the queue isn't cluttered.
@@ -1436,7 +1439,7 @@ function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864
 function renderTaskWidget(){ const b=el('taskwidget-body'); if(b) b.innerHTML=taskWidgetInner();
   const o=openTaskCount(), bd=el('taskfab-badge'), fab=el('taskfab');
   if(bd){ bd.textContent=o; bd.style.display=o?'flex':'none'; }
-  if(fab){ const dueSoon=tasks().some(t=>!t.done&&(+t.due<today0().getTime()+864e5)); fab.classList.toggle('due',dueSoon); } }
+  if(fab){ const dueSoon=tasks().some(t=>!t.done&&taskMine(t)&&(+t.due<today0().getTime()+864e5)); fab.classList.toggle('due',dueSoon); } }
 function toggleTaskWidget(force){ const w=el('taskwidget'); if(!w)return;
   const show=(force===undefined)?w.style.display!=='flex':!!force;
   if(show&&typeof toggleSelly==='function') toggleSelly(false);
@@ -2641,6 +2644,23 @@ function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def
   const s=def[step-1], lbl=s&&s.label?(' — '+s.label):''; const wait=(+ (s&&s.d)||0);            // days after the prior step
   const k=stepKind(s); const noun=k==='call'?'Call':k==='task'?'Task':'Email'; const tt=k==='call'?'call':k==='task'?'other':'email';
   addTask({title:noun+' '+step+'/'+N+lbl,type:tt,contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:c.assignee||''}); }
+// syncSeqTasks: the task dashboard is DERIVED from emailSeq (the real source of truth, which merges
+// safely per-contact) instead of relying on __tasks alone — __tasks syncs last-writer-wins and can
+// be clobbered by another tab, silently emptying the queue. On every load + sync we regenerate a
+// due-TODAY task for each active-sequence contact's CURRENT step if one is missing. Idempotent
+// (dedups by contact+step), doesn't touch future-dated next-steps that already exist. This is what
+// puts the whole migrated Apollo book into your task queue and keeps it there. Caller must save().
+function syncSeqTasks(){ let made=0; const openMap={};
+  tasks().forEach(t=>{ if(t.emailCad&&!t.done) openMap[t.contactId+'|'+(+t.cadStep||0)]=1; });
+  contacts().forEach(c=>{ const s=c.emailSeq; if(!s||s.done) return;
+    const def=cadDefFor(c), N=def.length; if(!N) return;
+    const step=Math.min(Math.max(+s.step||1,1),N);
+    if(openMap[c.id+'|'+step]) return;                                   // already queued for this step
+    const st=def[step-1], lbl=(st&&st.label)?(' — '+st.label):'';
+    const k=stepKind(st), noun=k==='call'?'Call':k==='task'?'Task':'Email', tt=k==='call'?'call':k==='task'?'other':'email';
+    tasks().push({id:uid('t'),type:tt,title:noun+' '+step+'/'+N+lbl,due:today0().getTime(),done:false,createdAt:Date.now(),contactId:c.id,accountId:'',emailCad:true,cadStep:step,assignee:c.assignee||''});
+    openMap[c.id+'|'+step]=1; made++; });
+  return made; }
 // advanceStep: the shared engine behind every "step done" — logs the touch, moves emailSeq.step
 // forward, closes THIS step's task, and spawns the next. Works for any step kind; the caller
 // supplies the log line so the icon/wording matches (📧 email / 📞 call / ✅ task).
@@ -3119,43 +3139,52 @@ function migrateFromApollo(){
   const withStep=plan.filter(x=>+x.c.apolloStep>0).length;
   if(!withStep){ if(!confirm('Heads up: no current-step data has synced from Apollo yet, so all '+plan.length+' would RESTART at step 1.\n\nTo resume everyone where they left off, redeploy the apollo-tasks function and hit ↻ Sync first.\n\nMigrate at step 1 anyway?')) return; }
   else if(!confirm('Migrate '+plan.length+' contact'+(plan.length===1?'':'s')+' from Apollo into the matching CRM sequence, resuming each at their current step?'+(skip?('\n\n'+skip+' will stay in Apollo (no matching CRM play).'):'')+'\n\nReversible with Undo.')) return;
+  const MR=(typeof myRep==='function'&&myRep())||'';   // claim the migrated book to whoever runs it (the Apollo owner)
   const undo=[];
   plan.forEach(({c,seqId})=>{ const q=seqById(seqId); const N=(q&&q.steps&&q.steps.length)||1;
     const step=Math.min(Math.max(+c.apolloStep||1,1),N);
-    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,emailSeq:c.emailSeq});
+    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,assignee:c.assignee,emailSeq:c.emailSeq});
     c.emailSeq={step:step,startedAt:Date.now(),seqId:seqId,migratedFrom:'apollo'};
+    if(MR&&!c.assignee) c.assignee=MR;
     c.apolloDone=true; c.apolloSeq='';
     stampU(c); logAuto(c,'⇄ Migrated from Apollo → CRM play "'+((q&&q.name)||seqId)+'" at step '+step);
-    if(typeof ensureEmailTask==='function') ensureEmailTask(c.id,step);
   });
+  syncSeqTasks();   // put every just-migrated contact's current step into the task queue, due today
   __apolloUndo=undo; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
-  toast('Migrated '+plan.length+' contact'+(plan.length===1?'':'s')+' off Apollo'+(skip?(' · '+skip+' left in Apollo'):'')+' — Undo available');
+  toast('Migrated '+plan.length+' contact'+(plan.length===1?'':'s')+' off Apollo'+(skip?(' · '+skip+' left in Apollo'):'')+' — Undo available · check your task queue');
 }
 function undoApolloMigrate(){ if(!__apolloUndo||!__apolloUndo.length){ toast('Nothing to undo'); return; }
   __apolloUndo.forEach(u=>{ const c=contact(u.id); if(!c) return;
     c.emailSeq=u.emailSeq||null; c.apolloDone=u.apolloDone||false; c.apolloSeq=u.apolloSeq; c.apolloStep=u.apolloStep; c.apolloStatus=u.apolloStatus;
+    if('assignee' in u) c.assignee=u.assignee;
     if(typeof clearEmailTasks==='function') clearEmailTasks(u.id); stampU(c); });
   const n=__apolloUndo.length; __apolloUndo=null; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   toast('Migration undone — '+n+' contact'+(n===1?'':'s')+' restored to Apollo'); }
 // Re-sync steps: heals contacts already migrated off Apollo whose emailSeq.step is wrong (e.g. a
-// migration that ran before real step data was flowing stamped everyone at step 1). For each
-// apollo-migrated contact, if the freshly-synced c.apolloStep now says a different (higher) step,
-// bump emailSeq.step to match. Only touches migratedFrom:'apollo' rows; reversible with Undo.
+// migration that ran before real step data was flowing stamped everyone at step 1) AND claims the
+// migrated book to the current rep so it shows in THEIR task dash (not the shared/unassigned pool).
+// Bumps emailSeq.step to the freshly-synced c.apolloStep, assigns unowned rows, then regenerates every
+// task fresh (correct step + owner, due today). Only touches migratedFrom:'apollo' rows; reversible.
 function resyncApolloSteps(){
-  const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo'&&+c.apolloStep>0);
-  if(!migd.length){ toast('Nothing to re-sync — Sync from Apollo first so step data is fresh'); return; }
-  const undo=[]; let fixed=0;
+  const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo');
+  if(!migd.length){ toast('No migrated contacts yet — Migrate first'); return; }
+  if(!migd.some(c=>+c.apolloStep>0)){ toast('Nothing to re-sync — hit ↻ Sync first so Apollo step data is fresh'); return; }
+  const MR=(typeof myRep==='function'&&myRep())||'';
+  const undo=[]; let fixed=0, claimed=0;
   migd.forEach(c=>{ const q=seqById(c.emailSeq.seqId); const N=(q&&q.steps&&q.steps.length)||1;
-    const step=Math.min(Math.max(+c.apolloStep||1,1),N);
-    if(step===(+c.emailSeq.step||1)) return;   // already correct
-    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,emailSeq:JSON.parse(JSON.stringify(c.emailSeq))});
-    const from=+c.emailSeq.step||1; c.emailSeq={...c.emailSeq,step:step};
-    stampU(c); logAuto(c,'⇄ Re-synced Apollo step '+from+' → '+step+' (matched to Apollo)');
-    if(typeof ensureEmailTask==='function') ensureEmailTask(c.id,step);
-    fixed++; });
-  if(!fixed){ toast('All '+migd.length+' migrated contacts already match their Apollo step ✅'); return; }
+    const from=+c.emailSeq.step||1;
+    const step=(+c.apolloStep>0)?Math.min(Math.max(+c.apolloStep,1),N):from;
+    const needStep=step!==from, needClaim=!!(MR&&!c.assignee);
+    if(!needStep&&!needClaim) return;
+    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,assignee:c.assignee,emailSeq:JSON.parse(JSON.stringify(c.emailSeq))});
+    if(needStep){ c.emailSeq={...c.emailSeq,step:step}; logAuto(c,'⇄ Re-synced Apollo step '+from+' → '+step+' (matched to Apollo)'); fixed++; }
+    if(needClaim){ c.assignee=MR; claimed++; }
+    stampU(c); });
+  if(!fixed&&!claimed){ toast('All '+migd.length+' migrated contacts already match Apollo & are assigned ✅'); return; }
+  migd.forEach(c=>{ if(typeof clearEmailTasks==='function') clearEmailTasks(c.id); });   // wipe stale tasks…
+  syncSeqTasks();                                                                          // …regenerate with right step + owner, due today
   __apolloUndo=undo; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
-  toast('Re-synced '+fixed+' contact'+(fixed===1?'':'s')+' to their true Apollo step — Undo available');
+  toast('Re-synced '+fixed+' step'+(fixed===1?'':'s')+(claimed?(' · claimed '+claimed+' to you'):'')+' — task queue updated · Undo available');
 }
 function renderSequences(){
   const stats=seqStats();
@@ -4709,7 +4738,7 @@ function boot(){
   // Refresh the live Apollo count on load; the cloud pull preserves whichever sync is newer (see initSync),
   // so this fresh number is never reverted to the stale saved one — fixes the 269-until-manual-↻ flap.
   const apolloStart=SYNC_FN?Promise.resolve(syncApollo(true)):Promise.resolve(0);
-  Promise.allSettled([cloudStart,apolloStart]).then(()=>{ todayCountReady=true; renderCounts(); renderStats(); if(UI.tab==='today')renderToday(); });
+  Promise.allSettled([cloudStart,apolloStart]).then(()=>{ todayCountReady=true; if(syncSeqTasks())save(); renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); });
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
