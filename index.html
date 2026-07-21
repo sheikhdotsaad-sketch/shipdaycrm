@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul21·z84';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul21·z85';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2351,7 +2351,7 @@ function hotQueue(){ const now=Date.now();
   // Personal "fired to my Hot List" contacts pin to the very top of MY queue (most-recent first),
   // even if heat/cap wouldn't otherwise surface them. Never affects another rep's view.
   const me=(typeof myRep==='function'&&myRep())||'';
-  if(me){ const mine=prefilter(contacts().filter(c=>hotForMe(c)&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)))
+  if(me){ const mine=prefilter(contacts().filter(c=>hotForMe(c)&&!c.queueOut&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)))
       .sort((a,b)=>((b.hotFor&&b.hotFor[me])||0)-((a.hotFor&&a.hotFor[me])||0));
     if(mine.length){ const pin=new Set(mine.map(c=>c.id)); due=mine.concat(due.filter(c=>!pin.has(c.id))); } }
   return {due,snoozed};
