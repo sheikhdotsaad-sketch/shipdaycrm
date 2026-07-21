@@ -534,7 +534,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z77';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z78';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1397,6 +1397,10 @@ function taskMine(t){ const mr=(typeof myRep==='function'&&myRep())||''; return 
 function openTaskCount(){ return tasks().filter(t=>!t.done&&taskMine(t)).length; }
 let twFilter='all';
 function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
+let twSort='due';  // 'due' = soonest first · 'step' = batch by email step (1,2,3…)
+function setTwSort(s){ twSort=s; renderTaskWidget(); }
+// step# for batching: emailSeq cadStep first, else parse "Email 2/5" from the title
+function taskStep(t){ let s=+t.cadStep||0; if(!s){ const m=/(\d+)\s*\/\s*\d+/.exec(t.title||''); if(m)s=+m[1]; } return s||99; }
 function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864e5; const list=tasks().filter(taskMine);   // only my tasks + unassigned
   const openAll=list.filter(t=>!t.done);
   // Dashboard shows only what's actionable now: overdue + due today. Future-dated steps (e.g. the
@@ -1415,8 +1419,15 @@ function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864
   else if(twFilter==='call') rows=open.filter(t=>t.type==='call');
   else if(twFilter==='email') rows=open.filter(t=>t.type==='email');
   else rows=open;
+  // Batch mode: group by type (all emails, then all calls), each ordered by step (1,2,3…) then due —
+  // so a rep can rip through every Email 1, Email 2… then every Call, one motion at a time.
+  const typeRank=t=>t.type==='email'?0:t.type==='call'?1:2;
+  if(twSort==='step'&&twFilter!=='done') rows=rows.slice().sort((a,b)=>(typeRank(a)-typeRank(b))||(taskStep(a)-taskStep(b))||((+a.due)-(+b.due)));
   let h='<div class="tw-sub">'+open.length+' open'+(overdue?' · <span class="tw-od">'+overdue+' overdue</span>':'')+(dueToday?' · '+dueToday+' today':'')+(upcoming?' · '+upcoming+' upcoming':'')+'</div>';
-  h+='<div class="twtabs">'+chip('all','All',open.length)+chip('call','📞 Calls',nCall)+chip('email','✉️ Emails',nEmail)+chip('up','⏭ Upcoming',upcoming)+chip('done','✓ Done',nDone)+'</div>';
+  h+='<div class="twtabs">'+chip('all','All',open.length)+chip('call','📞 Calls',nCall)+chip('email','✉️ Emails',nEmail)+chip('up','⏭ Upcoming',upcoming)+chip('done','✓ Done',nDone)+
+     '<span style="margin-left:auto;display:inline-flex;gap:4px">'+
+     '<button class="twchip'+(twSort==='due'?' on':'')+'" title="Soonest due first" onclick="setTwSort(\'due\')">🕒 Due</button>'+
+     '<button class="twchip'+(twSort==='step'?' on':'')+'" title="Batch by type then step: all emails (1,2,3…) then all calls" onclick="setTwSort(\'step\')">↕ Batch</button></span></div>';
   // quick add
   h+='<div class="tkadd">'+
      '<input id="tk-title" placeholder="Add a follow-up…" onkeydown="if(event.key===\'Enter\')quickAddTask()">'+
@@ -2690,10 +2701,16 @@ function revertEmailStep(id){ const c=contact(id); const s=c&&c.emailSeq; if(!s)
   logAuto(c,'↩ Reverted to Email '+target); stampU(c); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Reverted to Email '+target); }
 function startEmailCadence(id){ const c=contact(id); if(!c)return;
   const sel=el('seqPick_'+id); const seqId=(sel&&sel.value)||(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c);
-  const q=seqById(seqId); c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId}; stampU(c);
-  logAuto(c,'✉️ Started sequence "'+((q&&q.name)||'Email')+'" ('+cadNFor(c)+' steps)'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Sequence started — Email 1 is in your task list'); }
+  const q=seqById(seqId); const was=switchSeqFor===id&&c.emailSeq&&c.emailSeq.seqId;
+  if(was){ const curName=(seqById(c.emailSeq.seqId)||{}).name||'the current sequence';
+    if(!confirm('Replace "'+curName+'" with "'+((q&&q.name)||'this sequence')+'"?\n\nProgress on the current sequence will be cleared and the new one starts at Email 1.')) return; }
+  switchSeqFor=null;
+  c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId}; stampU(c);
+  logAuto(c,(was?'⇄ Switched to sequence "':'✉️ Started sequence "')+((q&&q.name)||'Email')+'" ('+cadNFor(c)+' steps)'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast((was?'Switched to ':'Sequence started — ')+((q&&q.name)||'sequence')+' · Email 1 is in your task list'); }
 function restartCadence(id){ const c=contact(id); if(!c)return; const seqId=(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c); c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId}; stampU(c); logAuto(c,'↻ Restarted email cadence'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Cadence restarted'); }
-function switchSequence(id){ const c=contact(id); if(!c)return; if(!confirm('Switch this contact to a different sequence? Progress on the current one is cleared.')) return; c.emailSeq=null; clearEmailTasks(id); stampU(c); logAuto(c,'⇄ Cleared sequence — choosing another'); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); }
+let switchSeqFor=null;  // contact id currently showing the "pick a new sequence" inline picker
+function switchSequence(id){ switchSeqFor=id; refreshDrawer(); }   // reveal picker inline; nothing cleared until they Start
+function cancelSwitchSeq(){ switchSeqFor=null; refreshDrawer(); }
 function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadNFor(c)); const e=emailStep(c,n);
   const txt='Subject: '+e.subj+'\n\n'+e.body;
   const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
@@ -2776,12 +2793,13 @@ function saveCadence(){ cadSync();
   store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); }
 function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadState(c);
   if(st==='apollo') return '<div class="cadbox in"><b>● In Apollo sequence:</b> '+esc(c.apolloSeq)+'<div class="tsub" style="margin-top:3px">Managed in Apollo — no manual sends needed here.</div></div>';
-  if(st==='none'){ const sug=suggestSeq(c);
+  if(st==='none'||switchSeqFor===id){ const switching=switchSeqFor===id; const sug=(switching&&c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c);
     let opts=seqLib().map(q=>'<option value="'+q.id+'"'+(q.id===sug?' selected':'')+'>'+esc(q.name)+' · '+q.steps.length+' steps</option>').join('');
     if(isCustomCad()) opts+='<option value="custom">Custom (your pasted copy) · '+cadN()+' steps</option>';
-    return '<div class="cadbox"><div><b>Not in a sequence.</b> Pick the play that matches this prospect — the SDR sends your exact Apollo copy, step by step.</div>'+
+    return '<div class="cadbox"><div><b>'+(switching?'⇄ Switch sequence.':'Not in a sequence.')+'</b> '+(switching?'Pick a new play — current progress clears when you start.':'Pick the play that matches this prospect — the SDR sends your exact Apollo copy, step by step.')+'</div>'+
     '<select id="seqPick_'+id+'" class="cflt" style="width:100%;margin-top:8px;box-sizing:border-box">'+opts+'</select>'+
-    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">✉️ Start sequence</button>'+
+    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">'+(switching?'⇄ Switch to this sequence':'✉️ Start sequence')+'</button>'+
+    (switching?'<button class="btn sm gh" onclick="cancelSwitchSeq()">Cancel</button>':'')+
     '<button class="btn sm gh" onclick="openCadenceEditor()" title="Paste/tweak a fully custom sequence — used when you pick Custom">✎ Edit custom copy</button></div></div>'; }
   const N=cadNFor(c), n=Math.min((+c.emailSeq.step||1),N), done=!!c.emailSeq.done;
   const def=cadDefFor(c)[n-1]||{}, k=stepKind(def);
