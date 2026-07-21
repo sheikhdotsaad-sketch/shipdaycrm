@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul21·z81';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul21·z82';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2831,27 +2831,47 @@ function editSig(){ const me=senderName();
 function inApolloSeq(c){ return !!(c&&c.apolloSeq); }
 function cadState(c){ if(!c) return 'none'; if(inApolloSeq(c)) return 'apollo';
   const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=cadNFor(c)) return 'manual'; return 'none'; }
+// emailStep returns the copy for step n. Per-contact edits (c.emailSeq.override[n]) win over the
+// template, so a rep can tweak the subject/body for THIS contact in the drawer before sending.
 function emailStep(c,n){
+  let base;
   const custom=cadDefFor(c)[n-1];
-  if(custom&&(custom.subj||custom.body)) return {subj:fillTokens(custom.subj||'',c), body:applySig(fillTokens(custom.body||'',c)), type:custom.type||'', label:custom.label||''};
-  const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=senderName();
-  const apps=(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats';
-  const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
-  const sign='\n\n'+repSig();
-  const S=(subj,body)=>({subj,body:body+sign});
-  switch(n){
-    case 1: return S('Quick idea for '+an+' deliveries',
-'Hi '+fn+',\n\nI\'m '+rep+' with Shipday. We help restaurants like '+an+' run delivery on their own drivers — live dispatch, order tracking, and none of the 15-30% third-party commissions.\n\nWorth a quick 15-minute look this week?');
-    case 2: return S('How '+an+' could own its delivery',
-'Hi '+fn+',\n\nFollowing up. Here\'s the gist: you keep taking orders exactly how you do today, but dispatch to your own drivers (or our on-demand network) with live tracking your customers actually see — so you stop renting your delivery to '+apps+'.\n\nOpen to a short walkthrough?');
-    case 3: return S(an+' — restaurants already doing this',
-'Hi '+fn+',\n\nThought this might resonate: independent spots'+(locs>1?' and '+locs+'-location brands':'')+' near you are moving delivery in-house with Shipday, keeping the margin they used to hand to '+apps+' and owning their customer data.\n\nHappy to show exactly what that looks like for '+an+'. 15 minutes?');
-    case 4: return S('The math on '+an+' delivery fees',
-'Hi '+fn+',\n\nQuick ROI angle: even 50 delivery orders a week at a $30 ticket can mean $500-$1,000+/month in third-party commissions. Shipday is a flat platform fee — that difference goes back in your pocket.\n\nWant me to run the numbers for your volume on a quick call?');
-    default: return S('Should I close your file, '+fn+'?',
+  if(custom&&(custom.subj||custom.body)){ base={subj:fillTokens(custom.subj||'',c), body:applySig(fillTokens(custom.body||'',c)), type:custom.type||'', label:custom.label||''}; }
+  else {
+    const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=senderName();
+    const apps=(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats';
+    const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
+    const sign='\n\n'+repSig();
+    const S=(subj,body)=>({subj,body:body+sign});
+    switch(n){
+      case 1: base=S('Quick idea for '+an+' deliveries',
+'Hi '+fn+',\n\nI\'m '+rep+' with Shipday. We help restaurants like '+an+' run delivery on their own drivers — live dispatch, order tracking, and none of the 15-30% third-party commissions.\n\nWorth a quick 15-minute look this week?'); break;
+      case 2: base=S('How '+an+' could own its delivery',
+'Hi '+fn+',\n\nFollowing up. Here\'s the gist: you keep taking orders exactly how you do today, but dispatch to your own drivers (or our on-demand network) with live tracking your customers actually see — so you stop renting your delivery to '+apps+'.\n\nOpen to a short walkthrough?'); break;
+      case 3: base=S(an+' — restaurants already doing this',
+'Hi '+fn+',\n\nThought this might resonate: independent spots'+(locs>1?' and '+locs+'-location brands':'')+' near you are moving delivery in-house with Shipday, keeping the margin they used to hand to '+apps+' and owning their customer data.\n\nHappy to show exactly what that looks like for '+an+'. 15 minutes?'); break;
+      case 4: base=S('The math on '+an+' delivery fees',
+'Hi '+fn+',\n\nQuick ROI angle: even 50 delivery orders a week at a $30 ticket can mean $500-$1,000+/month in third-party commissions. Shipday is a flat platform fee — that difference goes back in your pocket.\n\nWant me to run the numbers for your volume on a quick call?'); break;
+      default: base=S('Should I close your file, '+fn+'?',
 'Hi '+fn+',\n\nI don\'t want to keep crowding your inbox. If running delivery in-house isn\'t a priority for '+an+' right now, just say the word and I\'ll close things out.\n\nIf it\'s worth 15 minutes, I\'ll make it easy.');
+    }
   }
+  const ov=c.emailSeq&&c.emailSeq.override&&c.emailSeq.override[n];
+  if(ov){ if(ov.subj!=null&&ov.subj!=='') base.subj=ov.subj; if(ov.body!=null&&ov.body!=='') base.body=ov.body; base.edited=true; }
+  return base;
 }
+// Persist the rep's inline edits to THIS contact's current step (read straight from the drawer
+// fields). Called on Send/Copy/Log so unsaved tweaks are never lost, and by "Save edits".
+function saveSeqEdit(id,silent){ const c=contact(id); if(!c||!c.emailSeq) return; const N=cadNFor(c); const n=Math.min(+c.emailSeq.step||1,N);
+  const sb=el('seqSubj_'+id), bd=el('seqBody_'+id); if(!sb&&!bd) return;
+  const base=(function(){ const o=c.emailSeq.override; c.emailSeq.override=null; const b=emailStep(c,n); c.emailSeq.override=o; return b; })();
+  const subj=sb?sb.value:base.subj, body=bd?bd.value:base.body;
+  const changed=(subj!==base.subj)||(body!==base.body);
+  c.emailSeq.override=c.emailSeq.override||{};
+  if(changed) c.emailSeq.override[n]={subj:subj,body:body}; else delete c.emailSeq.override[n];
+  stampU(c); save(); if(!silent){ refreshDrawer(); toast(changed?'Edits saved for '+cname(c):'Reset to template'); } }
+function resetSeqEdit(id){ const c=contact(id); if(!c||!c.emailSeq||!c.emailSeq.override) return; const N=cadNFor(c); const n=Math.min(+c.emailSeq.step||1,N);
+  if(c.emailSeq.override[n]){ delete c.emailSeq.override[n]; stampU(c); save(); refreshDrawer(); toast('Reset to the template copy'); } }
 // Email cadence surfaces ONE checkable task at a time — the step that's due now. Sending a step
 // (from the drawer OR by checking the task) advances the cadence and spawns the NEXT step's task.
 // emailSeq stays the source of truth; the task mirrors the current step. Steps are reversible.
@@ -2927,7 +2947,7 @@ function removeFromSeq(id){ const c=contact(id); if(!c||!c.emailSeq){ toast('Not
   save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   toast('Removed from sequence', ()=>{ c.emailSeq=prevSeq; prevTasks.forEach(t=>tasks().push(t)); stampU(c);
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); }); }
-function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadNFor(c)); const e=emailStep(c,n);
+function copyEmailStep(id){ const c=contact(id); if(!c)return; saveSeqEdit(id,true); const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadNFor(c)); const e=emailStep(c,n);
   const txt='Subject: '+e.subj+'\n\n'+e.body;
   const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
   try{ document.execCommand('copy'); }catch(_){} document.body.removeChild(ta); toast('Email '+n+' copied — paste into your inbox'); }
@@ -2957,6 +2977,7 @@ async function sendSeqEmail(id){
   if(!c.email){ toast('No email address on this contact'); return; }
   if(!SYNC_FN){ toast('Connect integrations first'); return; }
   const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
+  saveSeqEdit(id,true);
   const N=cadNFor(c); const n=Math.min(+s.step||1,N); const e=emailStep(c,n);
   const isReply=(e.type==='reply');
   if(!confirm('Send Email '+n+'/'+N+' to '+cname(c)+' <'+c.email+'> now, from your Gmail?\n\nSubject: '+e.subj)) return;
@@ -3030,10 +3051,13 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
     if(k==='email'){
       const e=emailStep(c,n);
       const replyHint=(e.type==='reply')?' <span class="tag" style="background:#3a2f14;color:#e9c46a">↳ reply on the same thread</span>':'';
-      h+='<div style="margin-top:8px;font-size:12.5px"><b>Subject:</b> '+esc(e.subj)+replyHint+'</div>';
-      h+='<div class="cadbody">'+esc(e.body)+'</div>';
+      const editedBadge=e.edited?' <span class="tag" style="background:#14361f;color:#7fd6a0" title="You customised this step — the template no longer applies to this contact">✎ edited</span>':'';
+      h+='<div style="margin-top:8px;font-size:12.5px;display:flex;align-items:center;gap:6px"><b>Subject</b>'+replyHint+editedBadge+'</div>';
+      h+='<input id="seqSubj_'+id+'" class="cflt" style="width:100%;box-sizing:border-box;margin-top:3px;font-size:12.5px" value="'+esc(e.subj)+'" onchange="saveSeqEdit(\''+id+'\')">';
+      h+='<textarea id="seqBody_'+id+'" class="cadbody" style="width:100%;box-sizing:border-box;margin-top:6px;resize:vertical;min-height:150px" onchange="saveSeqEdit(\''+id+'\')">'+esc(e.body)+'</textarea>';
       h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="sendSeqEmail(\''+id+'\')" title="Send this step from your Gmail right now — tracked for opens, then advances the cadence">📤 Send Email '+n+'</button>'+
          '<button class="btn sm gh" onclick="copyEmailStep(\''+id+'\')" title="Copy the copy to paste manually instead">⧉ Copy</button><button class="btn sm gh" onclick="logEmailSent(\''+id+'\')" title="Mark sent without sending from here (e.g. you sent it elsewhere)">✓ Log sent</button>'+
+         (e.edited?'<button class="btn sm gh" onclick="resetSeqEdit(\''+id+'\')" title="Discard your edits and go back to the template copy">↺ Reset to template</button>':'')+
          (n>1?'<button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Undo the last send — go back a step">↩ Revert step</button>':'')+'</div>';
     } else if(k==='call'){
       const p=telNum(c); const script=fillTokens(def.body||'',c);
