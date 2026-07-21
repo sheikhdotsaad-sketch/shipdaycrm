@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul21·z80';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul21·z81';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -648,7 +648,7 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   out.contacts=mergeRecs(base.contacts||{},over.contacts||{},del);
   out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
   const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
-  ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV','__dedupeKeep','__splitKeep'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
+  ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV','__dedupeKeep','__splitKeep','__sigs','__seqLib'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
   // __apollo/__gmail are live-fetched counts — keep whichever pull is NEWER (by syncedAt) regardless of which
   // store is base/over, so a stale cloud copy never reverts a fresh sync (was the 269-vs-241 flap on load/push).
   ['__apollo','__gmail'].forEach(k=>{ const a=base[k], b=over[k];
@@ -1399,8 +1399,13 @@ function completeTask(id){ const t=tasks().find(x=>x.id===id); if(!t)return; t.d
   save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
 function snoozeTask(id,days){ const t=tasks().find(x=>x.id===id); if(!t)return; t.due=(+t.due||today0().getTime())+days*864e5; t.done=false; save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
 function deleteTask(id){ const i=tasks().findIndex(x=>x.id===id); if(i<0)return; tasks().splice(i,1); save(); renderActive(); refreshDrawer(); renderTaskWidget(); }
-function addTaskFor(ent,id){ const title=(prompt('Follow-up task:')||'').trim(); if(!title)return;
-  addTask({title,type:'call',contactId:ent==='c'?id:'',accountId:ent==='a'?id:''}); toast('Task added'); renderActive(); refreshDrawer(); renderTaskWidget(); }
+function addTaskFor(ent,id){ const title=(prompt('Task / follow-up:')||'').trim(); if(!title)return;
+  const dRaw=prompt('Due in how many days?  (0 = today, 1 = tomorrow, …)','0'); if(dRaw==null) return;
+  const days=Math.max(0,parseInt(dRaw,10)||0);
+  const c=ent==='c'?contact(id):null;
+  addTask({title,type:'call',contactId:ent==='c'?id:'',accountId:ent==='a'?id:'',
+    due:today0().getTime()+days*864e5, assignee:(c&&c.assignee)||myRep()||''});
+  toast('Task added · due '+(days?('in '+days+'d'):'today')); renderActive(); refreshDrawer(); renderTaskWidget(); }
 // Preset 5-step call cadence (days 0,3,6,10,14), auto-linked to an account or contact
 const CADENCE_OFFSETS=[0,3,6,10,14];
 function startCadence(ent,id,silent){
@@ -2806,16 +2811,33 @@ function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
     locs:String(a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0) };
   return String(str).replace(/\{\{\s*(first_name|first|account|company|rep|apps|locs)\s*\}\}/gi,(m,k)=>map[k.toLowerCase()]||''); }
 function senderName(){ return myRep()||store.__rep||'Saad'; }
+// Per-rep email signature: every play's copy was pasted from Saad's Apollo and ends "Best,\nSaad",
+// which is wrong when Embert (or anyone else) sends. repSig() returns the CURRENT rep's own sign-off
+// (editable, stored per rep in store.__sigs), defaulting to their first name. applySig() swaps a
+// template's trailing sign-off block for the sender's, so no email ever goes out signed as someone else.
+function repSig(){ const me=senderName(); const sigs=(store&&store.__sigs)||{};
+  if(sigs[me]!=null && String(sigs[me]).trim()) return String(sigs[me]).replace(/\s+$/,'');
+  const first=String(me||'Saad').split(/\s+/)[0]; return 'Best,\n'+first+'\nShipday'; }
+function applySig(body){ body=String(body||'').replace(/\s+$/,'');
+  // strip a trailing sign-off (last "Best,/Thanks,/Cheers/…" line to end), then append this rep's sig
+  const stripped=body.replace(/\n+[ \t]*(Best regards|Warm regards|Best|Thanks so much|Thank you|Thanks|Cheers|Regards|Sincerely|Talk soon)[,.!]?[ \t]*\r?\n[\s\S]*$/i,'').replace(/\s+$/,'');
+  return stripped+'\n\n'+repSig(); }
+function editSig(){ const me=senderName();
+  if(!me||me==='Saad'){ toast('Set your name in the header first (click “change”)'); return; }
+  store.__sigs=store.__sigs||{}; const cur=store.__sigs[me]!=null?store.__sigs[me]:repSig();
+  const v=prompt('Your email signature — used on every sequence email you send as "'+me+'":', cur);
+  if(v==null) return; store.__sigs[me]=v; store.__updatedAt=Date.now(); save(); refreshDrawer();
+  toast('Signature saved for '+me); }
 function inApolloSeq(c){ return !!(c&&c.apolloSeq); }
 function cadState(c){ if(!c) return 'none'; if(inApolloSeq(c)) return 'apollo';
   const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=cadNFor(c)) return 'manual'; return 'none'; }
 function emailStep(c,n){
   const custom=cadDefFor(c)[n-1];
-  if(custom&&(custom.subj||custom.body)) return {subj:fillTokens(custom.subj||'',c), body:fillTokens(custom.body||'',c), type:custom.type||'', label:custom.label||''};
+  if(custom&&(custom.subj||custom.body)) return {subj:fillTokens(custom.subj||'',c), body:applySig(fillTokens(custom.body||'',c)), type:custom.type||'', label:custom.label||''};
   const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=senderName();
   const apps=(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats';
   const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
-  const sign='\n\nBest,\n'+rep+'\nShipday';
+  const sign='\n\n'+repSig();
   const S=(subj,body)=>({subj,body:body+sign});
   switch(n){
     case 1: return S('Quick idea for '+an+' deliveries',
@@ -2895,6 +2917,16 @@ function restartCadence(id){ const c=contact(id); if(!c)return; const seqId=(c.e
 let switchSeqFor=null;  // contact id currently showing the "pick a new sequence" inline picker
 function switchSequence(id){ switchSeqFor=id; refreshDrawer(); }   // reveal picker inline; nothing cleared until they Start
 function cancelSwitchSeq(){ switchSeqFor=null; refreshDrawer(); }
+// Unenroll one contact from their sequence (clears cadence tasks). Reversible via toast Undo —
+// restores the exact emailSeq + the cadence tasks that were removed, so nothing is lost by mistake.
+function removeFromSeq(id){ const c=contact(id); if(!c||!c.emailSeq){ toast('Not in a sequence'); return; }
+  const q=seqById(c.emailSeq.seqId), nm=(q&&q.name)||'sequence';
+  if(!confirm('Remove '+cname(c)+' from "'+nm+'"?\n\nTheir cadence tasks will be cleared.')) return;
+  const prevSeq=c.emailSeq; const prevTasks=tasks().filter(t=>t.emailCad&&t.contactId===id);
+  delete c.emailSeq; clearEmailTasks(id); logAuto(c,'✕ Removed from sequence "'+nm+'"'); stampU(c);
+  save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+  toast('Removed from sequence', ()=>{ c.emailSeq=prevSeq; prevTasks.forEach(t=>tasks().push(t)); stampU(c);
+    save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); }); }
 function copyEmailStep(id){ const c=contact(id); if(!c)return; const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadNFor(c)); const e=emailStep(c,n);
   const txt='Subject: '+e.subj+'\n\n'+e.body;
   const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
@@ -2993,7 +3025,7 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
   const stepLbl=def.label||(noun+' '+n);
   const headIcon=k==='call'?'📞':k==='task'?'✅':'✉️';
   let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>'+headIcon+' '+esc(seqName)+'</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' done':noun+' '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
-  h+='<div class="tsub" style="margin-top:4px">Working as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="connectGmail()" style="cursor:pointer;color:var(--sig)" title="Connect your Gmail so sends leave your own inbox">🔗 connect Gmail</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span>'+(lastBy?' · last step by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
+  h+='<div class="tsub" style="margin-top:4px">Working as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="connectGmail()" style="cursor:pointer;color:var(--sig)" title="Connect your Gmail so sends leave your own inbox">🔗 connect Gmail</span> · <span onclick="editSig()" style="cursor:pointer;color:var(--sig)" title="Set your own sign-off — replaces the template signature on emails you send">✎ signature</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span> · <span onclick="removeFromSeq(\''+id+'\')" style="cursor:pointer;color:var(--lost)" title="Take this contact out of the sequence and clear its cadence tasks">✕ remove</span>'+(lastBy?' · last step by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
   if(!done){
     if(k==='email'){
       const e=emailStep(c,n);
@@ -3288,7 +3320,7 @@ function renderIntent(){
    contacts are enrolled and at what step, the exact step copy, and a click-through to each
    enrolled person. Enrollment/step state is the same c.emailSeq the drawer already drives, so
    this tab is a read/nav cockpit — no new data model. */
-let seqFocus=null; const seqStepsOpen={};
+let seqFocus=null; let seqStepFocus=null; const seqStepsOpen={};
 // Roll up every contact's emailSeq into per-sequence buckets: active enrollees + completed +
 // a step histogram so we can show where people are stuck in each play.
 function seqStats(){
@@ -3301,7 +3333,11 @@ function seqStats(){
   });
   return map;
 }
-function setSeqFocus(id){ seqFocus=(seqFocus===id?null:id); renderSequences(); }
+function setSeqFocus(id){ seqFocus=(seqFocus===id?null:id); seqStepFocus=null; renderSequences(); }
+// Click a step bar in a play's histogram → focus that play AND that step, so the list below shows
+// only the people sitting on Email/Call N. Click the same bar again to clear the step filter.
+function setSeqStep(id,n){ if(seqFocus===id&&seqStepFocus===n){ seqStepFocus=null; }
+  else { seqFocus=id; seqStepFocus=n; } renderSequences(); }
 function toggleSeqSteps(id){ seqStepsOpen[id]=!seqStepsOpen[id]; renderSequences(); }
 function seqRowHtml(c){
   const s=c.emailSeq||{}; const q=seqById(s.seqId); const N=cadNFor(c); const step=Math.min(Math.max(+s.step||1,1),N);
@@ -3408,14 +3444,16 @@ function renderSequences(){
   seqLib().forEach(q=>{ const m=stats[q.id]; const N=q.steps.length; const sel=seqFocus===q.id;
     const maxH=Math.max(1,...Object.values(m.hist),1);
     const histBars=Array.from({length:N},(_,i)=>{ const n=i+1, cnt=m.hist[n]||0;
-      return '<div title="Email '+n+': '+cnt+' waiting" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px">'+
-        '<div style="width:100%;background:var(--acc);border-radius:2px 2px 0 0;height:'+Math.round(cnt/maxH*28)+'px;min-height:'+(cnt?3:0)+'px"></div>'+
-        '<span style="font-size:9px;color:var(--mut)">'+n+'</span></div>'; }).join('');
+      const sd=q.steps[i]||{}, kk=stepKind(sd), noun=kk==='call'?'Call':kk==='task'?'Task':'Email';
+      const on=(seqFocus===q.id&&seqStepFocus===n);
+      return '<div title="'+noun+' '+n+': '+cnt+' waiting — click to see them" onclick="event.stopPropagation();setSeqStep(\''+q.id+'\','+n+')" style="flex:1;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px">'+
+        '<div style="width:100%;background:'+(on?'var(--won)':'var(--acc)')+';border-radius:2px 2px 0 0;height:'+Math.round(cnt/maxH*28)+'px;min-height:'+(cnt?3:0)+'px"></div>'+
+        '<span style="font-size:9px;font-weight:'+(on?'800':'400')+';color:'+(on?'var(--ink)':'var(--mut)')+'">'+n+'</span></div>'; }).join('');
     h+='<div class="stat" style="cursor:pointer;text-align:left;padding:12px'+(sel?';outline:2px solid var(--acc);outline-offset:-2px':'')+'" onclick="setSeqFocus(\''+q.id+'\')">'+
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px"><b style="font-size:13px">'+esc(q.name)+'</b><span class="tsub">'+N+' steps</span></div>'+
       '<div class="sub" style="margin:4px 0 8px">'+m.active.length+' active · '+m.done.length+' done'+(q.match?' · matches: '+esc(q.match):'')+'</div>'+
       '<div style="display:flex;align-items:flex-end;gap:3px;height:34px">'+histBars+'</div>'+
-      '<div class="logbar" style="margin-top:8px" onclick="event.stopPropagation()"><button class="btn sm gh" onclick="toggleSeqSteps(\''+q.id+'\')">'+(seqStepsOpen[q.id]?'▾ hide steps':'▸ steps')+'</button><button class="btn sm gh" onclick="openSeqEditor(\''+q.id+'\')" title="Edit this sequence — add calls, tasks, emails">✎ edit</button></div>'+
+      '<div class="logbar" style="margin-top:8px" onclick="event.stopPropagation()"><button class="btn sm gh" onclick="toggleSeqSteps(\''+q.id+'\')">'+(seqStepsOpen[q.id]?'▾ hide steps':'▸ steps')+'</button><button class="btn sm gh" onclick="openSeqEditor(\''+q.id+'\')" title="Edit this sequence — add calls, tasks, emails">✎ edit</button><button class="btn sm gh" onclick="deleteSeqPlay(\''+q.id+'\')" title="'+(isBuiltinSeq(q.id)?'Reset to the built-in copy':'Delete this sequence')+'" style="color:var(--lost)">🗑</button></div>'+
       (seqStepsOpen[q.id]?('<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">'+q.steps.map((s,i)=>{ const kk=stepKind(s); const tlbl=kk==='call'?'📞 call':kk==='task'?'✅ task':(s.type==='reply'?'↩ reply':'✉ new'); return '<div style="margin-bottom:7px"><div style="font-size:11px;color:var(--mut)">Day '+(+s.d||0)+' · '+tlbl+(s.label?' · '+esc(s.label):'')+'</div>'+((s.subj||s.body)?'<div style="font-size:12px;font-weight:600">'+esc(s.subj||s.label||'')+'</div>':'')+'</div>'; }).join('')+'</div>'):'')+
     '</div>';
   });
@@ -3423,9 +3461,12 @@ function renderSequences(){
   // Enrolled list, filtered by the focused play (or Apollo, or all).
   let list=active, title='Everyone in a sequence';
   if(seqFocus==='__apollo'){ list=apollo.map(c=>c); title='Still in Apollo — migrate these'; }
-  else if(seqFocus){ const q=seqById(seqFocus); title='In "'+((q&&q.name)||seqFocus)+'"'; list=active.filter(c=>c.emailSeq&&c.emailSeq.seqId===seqFocus); }
+  else if(seqFocus){ const q=seqById(seqFocus); title='In "'+((q&&q.name)||seqFocus)+'"'; list=active.filter(c=>c.emailSeq&&c.emailSeq.seqId===seqFocus);
+    if(seqStepFocus!=null){ const sd=(q&&q.steps&&q.steps[seqStepFocus-1])||{}, kk=stepKind(sd), noun=kk==='call'?'Call':kk==='task'?'Task':'Email';
+      list=list.filter(c=>{ const N=cadNFor(c); return Math.min(Math.max(+((c.emailSeq&&c.emailSeq.step))||1,1),N)===seqStepFocus; });
+      title+=' · on '+noun+' '+seqStepFocus; } }
   list=list.slice().sort((a,b)=>((+((b.emailSeq&&b.emailSeq.lastSentAt))||0)-(+((a.emailSeq&&a.emailSeq.lastSentAt))||0)));
-  const clr=seqFocus?' · <a href="javascript:void(0)" onclick="setSeqFocus(null)" style="color:var(--acc)">clear ✕</a>':'';
+  const clr=(seqFocus||seqStepFocus!=null)?' · <a href="javascript:void(0)" onclick="setSeqFocus(null)" style="color:var(--acc)">clear ✕</a>':'';
   let body;
   if(!list.length) body='<div class="qempty">No contacts here yet — open a contact and hit “Start sequence” in the drawer.</div>';
   else if(seqFocus==='__apollo') body='<table><tbody>'+apollo.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(c=>'<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer"><td><span class="tname">'+esc(cname(c))+'</span></td><td class="tsub">'+esc((acct(c.accountId)&&aname(acct(c.accountId)))||'')+'</td><td>'+esc(c.apolloSeq)+'</td><td class="tsub">Apollo</td></tr>').join('')+'</tbody></table>';
@@ -3498,6 +3539,15 @@ function deleteSeqEditor(){ if(!seqEdit) return;
   const enrolled=contacts().filter(c=>c.emailSeq&&c.emailSeq.seqId===seqEdit.id&&!c.emailSeq.done).length;
   if(!confirm('Delete this sequence?'+(enrolled?(' '+enrolled+' contact'+(enrolled===1?' is':'s are')+' still in it — they will fall back to the default cadence.'):''))) return;
   store.__seqLib=(store.__seqLib||[]).filter(q=>q.id!==seqEdit.id); store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Sequence deleted'); }
+// Delete/reset a play straight from its library card (no need to open the editor). A built-in play
+// can't be truly deleted — this discards your custom override and reverts to the shipped copy.
+function deleteSeqPlay(id){ const q=seqById(id); if(!q) return; const builtin=isBuiltinSeq(id);
+  const enrolled=contacts().filter(c=>c.emailSeq&&c.emailSeq.seqId===id&&!c.emailSeq.done).length;
+  const msg=builtin?('Reset "'+q.name+'" to its built-in copy? Your custom edits will be discarded.')
+    :('Delete "'+q.name+'"?'+(enrolled?(' '+enrolled+' contact'+(enrolled===1?' is':'s are')+' still in it — they fall back to the default cadence.'):''));
+  if(!confirm(msg)) return;
+  store.__seqLib=(store.__seqLib||[]).filter(x=>x.id!==id); store.__updatedAt=Date.now(); save(); renderSequences(); refreshDrawer();
+  toast(builtin?'Reset to built-in':'Sequence deleted'); }
 // Add a direct line to a contact that has no dialable number (prefilled with the account's
 // corporate/direct line if we have one), so sequence contacts can still be called.
 function promptDirectLine(id){ const c=contact(id); if(!c) return; const a=acct(c.accountId);
@@ -3902,7 +3952,7 @@ function openContact(id){
   b+='<div class="f2">'+fld('Sequence / status',inp("setC('"+id+"','apolloSeq',this.value)",c.apolloSeq))+fld('Apollo link',inp("setC('"+id+"','apolloUrl',this.value)",c.apolloUrl))+'</div>';
   b+='<div class="sec">Cadence</div>'+cadenceBlock(id);
   b+=customBlock('c',id);
-  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')">＋ Follow-up task</button>'+(hasCadence('c',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+contactTasks(id);
+  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')" title="Add a task due today or in N days">＋ Add task</button>'+(hasCadence('c',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+contactTasks(id);
   b+='<div class="sec">Activity</div>'+logBar('c',id)+'<div id="log-c'+id+'">'+logList(c,'c',id)+'</div>';
   b+='<div class="sec">AI Follow-up</div><button class="btn sm" onclick="aiEmail(\'c\',\''+id+'\')">✦ Draft email</button><div id="ai-c'+id+'" style="margin-top:10px"></div>';
   el('drawer-body').innerHTML=b;
@@ -3986,7 +4036,7 @@ function openAccount(id){
        fld('Renewal',inp("setA('"+id+"','renewal',this.value)",a.renewal,'date'))+'</div>';
   }
   b+=customBlock('a',id);
-  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'a\',\''+id+'\')">＋ Follow-up task</button>'+(hasCadence('a',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'a\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+acctTasks(id);
+  b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'a\',\''+id+'\')" title="Add a task due today or in N days">＋ Add task</button>'+(hasCadence('a',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'a\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+acctTasks(id);
   // contacts under account
   b+='<div class="sec">Contacts <button class="btn sm gh" style="float:right" onclick="addContact(\''+id+'\')">+ Add</button></div>';
   const cs=contactsOf(id);
