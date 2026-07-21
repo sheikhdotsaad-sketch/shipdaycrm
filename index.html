@@ -290,12 +290,31 @@ tr.tdone td{opacity:.5}
 .twchip{font-size:12px;padding:5px 11px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);color:var(--mut);font-weight:600;cursor:pointer}
 .twchip.on{background:var(--sig);border-color:var(--sig);color:#fff}
 .twchip b{font-weight:800}
-.panel.hero{border:2px solid var(--acc)}
-.today-head{display:flex;align-items:baseline;gap:10px;margin:2px 0 14px;flex-wrap:wrap}
-.today-head h2{margin:0;font-size:21px}
+/* Batch-view step group headers — collapse to work one step at a time */
+tr.tgrp td{background:var(--panel2);font-weight:800;font-size:12px;cursor:pointer;padding:7px 12px;border-top:1px solid var(--line);user-select:none}
+tr.tgrp td:hover{color:var(--acc)}
+tr.tgrp .cnt{color:var(--mut);font-weight:700;margin-left:7px}
+tr.tgrp .car{float:right;color:var(--mut);font-weight:700}
+.panel.hero{border:1px solid var(--acc)}
+.today-head{display:flex;align-items:center;gap:10px;margin:0 0 10px;flex-wrap:wrap}
+.today-head h2{margin:0;font-size:17px;font-weight:800}
+.today-head .dt{color:var(--mut);font-size:13px;font-weight:600}
 .today-od{color:var(--hot);font-weight:700}
+/* segmented My | Team toggle */
+.vseg{display:inline-flex;margin-left:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.vseg button{background:transparent;border:0;color:var(--mut);font-weight:700;font-size:12px;padding:5px 12px;cursor:pointer}
+.vseg button.on{background:var(--acc);color:#04140c}
+/* slim glance strip */
+.glance{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+.gl{display:inline-flex;align-items:baseline;gap:6px;padding:7px 12px;border-radius:9px;background:var(--panel);border:1px solid var(--line);cursor:pointer;font-size:13px;color:var(--mut)}
+.gl:hover{border-color:var(--acc)}
+.gl b{font-size:16px;font-weight:800;color:var(--ink)}
+.gl.od b{color:var(--hot)}
+.gl.warn{border-color:#e0a000}
 .more-btn{width:100%;text-align:left;font-weight:700;background:transparent;border:0;color:var(--ink);padding:13px 16px;cursor:pointer;font-size:14px}
 .more-btn:hover{background:var(--panel2)}
+.seeall{margin-left:auto;font-size:12px;font-weight:700;color:var(--acc);background:transparent;border:0;cursor:pointer}
+.addlead{background:rgba(230,160,0,.14);color:#e0a000;border:1px solid #e0a000;border-radius:7px;font-size:11px;font-weight:700;padding:3px 9px;cursor:pointer}
 #taskwidget .tw-ap{display:flex;align-items:center;gap:8px;padding:11px 16px;border-top:1px solid var(--line);font-size:12px}
 @media(max-width:640px){#taskwidget{left:3vw;right:3vw;width:auto;bottom:82px}}
 
@@ -540,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z79';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul21·z80';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1402,7 +1421,9 @@ function advanceCallCadence(c){ if(!c) return null;
 function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.due<now); const lk=taskLink(t);
   const when=t.done?'done':(overdue?'overdue '+fmtWhen(+t.due):fmtWhen(+t.due));
   const badge=t.done?'<span class="tag">done</span>':'<span class="tag'+(overdue?' od':'')+'">'+esc(when)+'</span>';
-  const tel=t.contactId?telNum(contact(t.contactId)||{}):'';
+  const c=t.contactId?contact(t.contactId):null; const tel=c?telNum(c):'';
+  const hot=c?hotForMe(c):false;
+  const fireBtn=c?'<button class="btn sm '+(hot?'pri':'gh')+'" title="'+(hot?'In your Hot List — click to remove':'Send to your Hot List queue')+'" onclick="fireToMyHot(\''+t.contactId+'\')">🔥</button> ':'';
   return '<tr class="'+(t.done?'tdone':'')+'">'+
     '<td style="width:26px;text-align:center"><input type="checkbox" '+(t.done?'checked':'')+' onclick="completeTask(\''+t.id+'\')"></td>'+
     '<td><span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span> '+esc(t.title)+
@@ -1410,9 +1431,18 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
       (t.assignee?'<div class="tsub">👤 '+esc(t.assignee)+'</div>':'')+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+badge+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+
-      (tel?'<a class="btn sm gh" href="tel:'+esc(tel)+'">📞</a> ':'')+
+      (tel?'<a class="btn sm gh" href="tel:'+esc(tel)+'">📞</a> ':'')+fireBtn+
       '<button class="btn sm gh" title="Snooze 1 day" onclick="snoozeTask(\''+t.id+'\',1)">+1d</button> '+
       '<button class="btn sm gh" title="Delete" onclick="deleteTask(\''+t.id+'\')">×</button></td></tr>'; }
+// Personal "my Hot List" flag — per rep, stored on the contact keyed by rep name so it syncs but
+// only surfaces in that rep's own queue. Does NOT touch warmth or the shared Hot List for anyone else.
+function hotForMe(c){ const me=(typeof myRep==='function'&&myRep())||''; return !!(me&&c&&c.hotFor&&c.hotFor[me]); }
+function fireToMyHot(cid){ const c=contact(cid); if(!c) return; const me=myRep();
+  if(!me){ toast('Set your name in the header first'); return; }
+  c.hotFor=c.hotFor||{};
+  if(c.hotFor[me]){ delete c.hotFor[me]; stampU(c); save(); renderActive(); renderTaskWidget(); toast('Removed from your Hot List'); return; }
+  c.hotFor[me]=Date.now(); stampU(c); save(); renderActive(); renderTaskWidget();
+  toast('🔥 Pinned to your Hot List', ()=>{ delete c.hotFor[me]; stampU(c); save(); renderActive(); renderTaskWidget(); }); }
 // Per-rep task view: each rep sees their OWN tasks + anything unassigned (shared pool). Assigned
 // tasks stay private to that rep, so Saad's book doesn't clutter Embert's queue and vice-versa.
 function taskMine(t){ const mr=(typeof myRep==='function'&&myRep())||''; return !mr || !t.assignee || t.assignee===mr; }
@@ -1423,6 +1453,17 @@ let twSort='due';  // 'due' = soonest first · 'step' = batch by email step (1,2
 function setTwSort(s){ twSort=s; renderTaskWidget(); if(UI.tab==='today'&&typeof renderToday==='function') renderToday(); }
 // step# for batching: emailSeq cadStep first, else parse "Email 2/5" from the title
 function taskStep(t){ let s=+t.cadStep||0; if(!s){ const m=/(\d+)\s*\/\s*\d+/.exec(t.title||''); if(m)s=+m[1]; } return s||99; }
+// Batch view groups tasks by exact step so you can rip through "Email 1", then "Email 2", then
+// "Call 1"… one collapsible block at a time instead of one giant flat list.
+let twCollapsed={};
+function toggleTwGroup(k){ twCollapsed[k]=!twCollapsed[k]; renderTaskWidget(); }
+function taskGroupKey(t){ if(t.type==='email')return 'e'+taskStep(t); if(t.type==='call')return 'c'+taskStep(t); return 'm'; }
+function taskGroupMeta(k){ if(k==='m') return {rank:2,label:'✓ Manual / other'};
+  const n=k.slice(1), num=(n==='99'?'':' '+n);
+  return k[0]==='e'?{rank:0,label:'✉️ Email'+num}:{rank:1,label:'📞 Call'+num}; }
+function taskBatchGroups(rows){ const gm={}; rows.forEach(t=>{ const k=taskGroupKey(t); (gm[k]=gm[k]||[]).push(t); });
+  return Object.keys(gm).map(k=>Object.assign({key:k,tasks:gm[k]},taskGroupMeta(k)))
+    .sort((a,b)=>(a.rank-b.rank)||((a.key==='m'?0:+a.key.slice(1))-(b.key==='m'?0:+b.key.slice(1)))); }
 function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864e5; const list=tasks().filter(taskMine);   // only my tasks + unassigned
   const openAll=list.filter(t=>!t.done);
   // Dashboard shows only what's actionable now: overdue + due today. Future-dated steps (e.g. the
@@ -1458,7 +1499,14 @@ function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864
      '<input id="tk-due" type="date">'+
      '<button class="btn sm pri" onclick="quickAddTask()">＋ Add</button></div>';
   h+='<table><tbody>';
-  h+= rows.length? rows.map(taskRow).join('') : '<tr><td class="empty" colspan="4">'+(twFilter==='done'?'Nothing completed yet.':twFilter==='up'?'Nothing scheduled ahead.':'No tasks here.')+'</td></tr>';
+  if(!rows.length){ h+='<tr><td class="empty" colspan="4">'+(twFilter==='done'?'Nothing completed yet.':twFilter==='up'?'Nothing scheduled ahead.':'No tasks here.')+'</td></tr>'; }
+  else if(twSort==='step'&&twFilter!=='done'){   // grouped, collapsible: one step block at a time
+    taskBatchGroups(rows).forEach(g=>{ const col=twCollapsed[g.key];
+      h+='<tr class="tgrp" onclick="toggleTwGroup(\''+g.key+'\')"><td colspan="4">'+esc(g.label)+
+        '<span class="cnt">'+g.tasks.length+'</span><span class="car">'+(col?'▸':'▾')+'</span></td></tr>';
+      if(!col) h+=g.tasks.map(taskRow).join(''); });
+  }
+  else h+=rows.map(taskRow).join('');
   h+='</tbody></table>';
   // Apollo (synced, read-only)
   const ap=store.__apollo||{}; const apSeqs=ap.sequences||[];
@@ -1488,41 +1536,88 @@ function acctTasks(id){ return recordTasks(t=>t.accountId===id); }
 let todayMoreOpen=false; try{ todayMoreOpen=localStorage.getItem('shipday_crm_todaymore')==='1'; }catch(e){}
 function toggleTodayMore(){ todayMoreOpen=!todayMoreOpen; try{ localStorage.setItem('shipday_crm_todaymore',todayMoreOpen?'1':'0'); }catch(e){} renderToday(); }
 function todayScroll(id){ const e=el(id); if(e) e.scrollIntoView({behavior:'smooth',block:'start'}); }
+// My ↔ Team view: 'my' = my personal queue + schedule; 'team' = adds the team scoreboard up top.
+let todayView='my'; try{ todayView=localStorage.getItem('shipday_crm_todayview')||'my'; }catch(e){}
+function setTodayView(v){ todayView=v; try{ localStorage.setItem('shipday_crm_todayview',v); }catch(e){} renderToday(); }
 
 // ▶ Do Now — my queue: overdue + due-today tasks (mine + unassigned), same Due/Batch sort as
 // the fab widget. This is the HERO — the one thing the Today page is built around.
+const TODAY_QUEUE_CAP=6;   // Today shows only the next few; the full list lives in the task widget.
 function todayQueuePanel(){
   const now=today0().getTime(), endToday=now+864e5;
   const list=tasks().filter(taskMine).filter(t=>!t.done && +t.due<endToday);
   const overdue=list.filter(t=>+t.due<now).length;
   const typeRank=t=>t.type==='email'?0:t.type==='call'?1:2;
-  const rows=list.slice();
-  if(twSort==='step') rows.sort((a,b)=>(typeRank(a)-typeRank(b))||(taskStep(a)-taskStep(b))||((+a.due)-(+b.due)));
-  else rows.sort((a,b)=>(+a.due)-(+b.due));
+  const all=list.slice();
+  if(twSort==='step') all.sort((a,b)=>(typeRank(a)-typeRank(b))||(taskStep(a)-taskStep(b))||((+a.due)-(+b.due)));
+  else all.sort((a,b)=>(+a.due)-(+b.due));
+  const rows=all.slice(0,TODAY_QUEUE_CAP);
+  const hidden=all.length-rows.length;
   const sub=list.length+' to clear'+(overdue?' · <span class="today-od">'+overdue+' overdue</span>':'');
-  let h='<div class="panel hero" id="today-queue"><div class="ph"><h3>▶ Do Now — my queue</h3><span class="sub">'+sub+'</span>'+
+  let h='<div class="panel hero" id="today-queue"><div class="ph"><h3>▶ Do Now</h3><span class="sub">'+sub+'</span>'+
     '<span style="margin-left:auto;display:inline-flex;gap:4px">'+
     '<button class="twchip'+(twSort==='due'?' on':'')+'" title="Soonest due first" onclick="setTwSort(\'due\')">🕒 Due</button>'+
     '<button class="twchip'+(twSort==='step'?' on':'')+'" title="Batch by type then step: all emails (1,2,3…) then all calls" onclick="setTwSort(\'step\')">↕ Batch</button></span></div>';
   h+='<table><tbody>';
   h+= rows.length? rows.map(taskRow).join('') : '<tr><td class="empty" colspan="4" style="padding:26px;text-align:center;font-size:15px">All caught up 🎉</td></tr>';
-  h+='</tbody></table></div>';
+  h+='</tbody></table>';
+  if(hidden>0) h+='<div style="padding:9px 14px;border-top:1px solid var(--line)"><button class="seeall" style="margin:0" onclick="toggleTaskWidget(true)">＋'+hidden+' more — open full task list ▸</button></div>';
+  h+='</div>';
   return h;
 }
 
-// 📅 Today's Meetings — Google Calendar events today + demos dated today, merged & time-ordered.
-function todayMeetingsPanel(){
-  const now=today0().getTime(), end=now+864e5, cal=store.__cal||{};
-  const evs=(cal.events||[]).filter(e=>{ const t=new Date(e.start).getTime(); return t>=now&&t<end; }).map(e=>({ts:new Date(e.start).getTime(),kind:'cal',e}));
+// 📅 Today's Schedule — calendar events + demos, time-ordered. `days` window (1=today only).
+// Calendar guests already in the CRM are click-to-open; unknown guests get an inline ＋Add so a
+// brand-new lead on your calendar becomes an account+contact right here (leadFromEvent, reversible).
+function todayMeetingsPanel(days){
+  days=days||1; const now=today0().getTime(), end=now+days*864e5, cal=store.__cal||{};
+  const dealEvIds=new Set(deals().map(d=>d.calEventId).filter(Boolean));
+  const evs=(cal.events||[]).filter(e=>{ const t=new Date(e.start).getTime(); return t>=now&&t<end; })
+    .map(e=>({ts:new Date(e.start).getTime(),kind:'cal',e}));
   const demos=deals().filter(d=>d.demoDate&&!CLOSED.includes(d.stage)).filter(d=>{ const t=new Date(d.demoDate).getTime(); return t>=now&&t<end; }).map(d=>({ts:new Date(d.demoDate).getTime(),kind:'demo',d}));
   const all=evs.concat(demos).sort((a,b)=>a.ts-b.ts);
-  let h='<div class="panel" id="today-meetings"><div class="ph"><h3>📅 Today\'s Meetings</h3><span class="sub" style="margin-left:auto">'+all.length+' today · synced '+fmtAgo(cal.syncedAt)+'</span></div><table><tbody>';
-  if(!all.length) h+='<tr><td class="empty" colspan="2">Nothing on the calendar today.</td></tr>';
+  const label=days>1?'Upcoming Schedule':'Today\'s Schedule';
+  let h='<div class="panel" id="today-meetings"><div class="ph"><h3>📅 '+label+'</h3><span class="sub" style="margin-left:auto">'+all.length+(days>1?' next '+days+'d':' today')+' · synced '+fmtAgo(cal.syncedAt)+'</span></div><table><tbody>';
+  if(!all.length) h+='<tr><td class="empty" colspan="2">Nothing on the calendar.</td></tr>';
   else h+=all.map(m=>{
-    if(m.kind==='cal'){ const e=m.e; return '<tr><td class="tname">'+(e.htmlLink?'<a href="'+esc(e.htmlLink)+'" target="_blank">'+esc(e.summary||'(no title)')+'</a>':esc(e.summary||'(no title)'))+(e.location?'<div class="tsub">'+esc(e.location)+'</div>':'')+'</td><td class="tsub" style="text-align:right;white-space:nowrap">'+esc(fmtDT(e.start))+'</td></tr>'; }
+    if(m.kind==='cal'){ const e=m.e;
+      // already tied to a pipeline deal? show that below as the demo row instead of duplicating.
+      const c=matchEventContact(e); const hasGuest=eventGuestEmails(e).length>0;
+      const isNew=!c&&hasGuest&&!dealEvIds.has(e.id);
+      const pm=isNew?possibleEventMatch(e):null;
+      const title=e.htmlLink?'<a href="'+esc(e.htmlLink)+'" target="_blank" onclick="event.stopPropagation()">'+esc(e.summary||'(no title)')+'</a>':esc(e.summary||'(no title)');
+      const who=c?'<div class="tsub">👤 '+esc(cname(c))+'</div>':(pm?'<div class="tsub">⚠ maybe: '+esc(pm.type==='account'?pm.rec.name:cname(pm.rec))+'</div>':(isNew?'<div class="tsub">🆕 not in CRM</div>':(e.location?'<div class="tsub">'+esc(e.location)+'</div>':'')));
+      const rowClick=c?' style="cursor:pointer" onclick="openContact(\''+c.id+'\')"':(pm?' style="cursor:pointer" onclick="'+(pm.type==='account'?'openAccount':'openContact')+'(\''+pm.rec.id+'\')"':'');
+      const add=isNew&&!pm?'<button class="addlead" onclick="event.stopPropagation();leadFromEvent(\''+esc(e.id)+'\')">＋ Add to CRM</button>':'';
+      return '<tr'+rowClick+'><td class="tname">'+title+who+'</td><td class="tsub" style="text-align:right;white-space:nowrap">'+add+' '+esc(fmtDT(e.start))+'</td></tr>'; }
     const d=m.d, a=acct(d.accountId);
     return '<tr onclick="openDeal(\''+d.id+'\')" style="cursor:pointer"><td class="tname">🎬 '+esc(d.name||aname(a))+'<div class="tsub">demo · '+esc(d.stage)+'</div></td><td class="tsub" style="text-align:right;white-space:nowrap">'+esc(fmtDT(d.demoDate))+'</td></tr>';
   }).join('');
+  h+='</tbody></table></div>';
+  return h;
+}
+// 👥 Team Today scoreboard — compact per-rep calls/emails/demos for the Team view (reuses the
+// same log scan as teamActivityPanel via mergeRepRows).
+function teamTodayPanel(){
+  const d0=today0().getTime(), wk=Date.now()-7*864e5, rows={};
+  const bump=(who,k,ts)=>{ const r=rows[who]=rows[who]||{dialsT:0,dials7:0,emails7:0,notes7:0,demos7:0,last:0};
+    if(k==='dial'){ if(ts>=d0)r.dialsT++; r.dials7++; } else if(k==='email')r.emails7++;
+    else if(k==='demo')r.demos7++; else r.notes7++; if(ts>r.last)r.last=ts; };
+  contacts().forEach(c=>(c.log||[]).forEach(l=>{ const ts=+l.ts||0, tx=String(l.txt||''); if(ts<wk||ts>Date.now()+864e5) return;
+    if(/^(☎|📞|Call\b)/.test(tx)) bump(l.by||'Unattributed','dial',ts);
+    else if(/^(📧 Sent|✉|Email\b)/.test(tx)) bump(l.by||'Unattributed','email',ts);
+    else if(!l.sys||/^(LinkedIn|Text|Note)\b/.test(tx)) bump(l.by||'Unattributed','note',ts); }));
+  deals().forEach(d=>(d.log||[]).forEach(l=>{ const ts=+l.ts||0; if(ts<wk) return;
+    if(/^Demo booked/.test(String(l.txt||''))) bump(l.by||'Unattributed','demo',ts); }));
+  const rowsM=mergeRepRows(rows); const names=Object.keys(rowsM).filter(n=>n!=='Unattributed');
+  names.sort((a,b)=>rowsM[b].dialsT-rowsM[a].dialsT);
+  let h='<div class="panel"><div class="ph"><h3>👥 Team Today</h3><span class="sub" style="margin-left:auto">dials today · 7-day totals</span></div>'+
+    '<table><thead><tr><th>Rep</th><th style="text-align:right">Dials today</th><th style="text-align:right">Calls 7d</th><th style="text-align:right">Emails 7d</th><th style="text-align:right">Demos 7d</th></tr></thead><tbody>';
+  if(!names.length) h+='<tr><td class="empty" colspan="5">No activity logged yet this week.</td></tr>';
+  else h+=names.map(n=>{ const r=rowsM[n];
+    return '<tr><td class="tname">👤 '+esc(n)+'</td><td style="text-align:right"><b>'+r.dialsT+'</b></td>'+
+      '<td style="text-align:right">'+r.dials7+'</td><td style="text-align:right">'+r.emails7+'</td>'+
+      '<td style="text-align:right">'+(r.demos7?'<b style="color:var(--acc)">'+r.demos7+'</b>':'0')+'</td></tr>'; }).join('');
   h+='</tbody></table></div>';
   return h;
 }
@@ -1564,24 +1659,31 @@ function renderToday(){
   // Counts for the header chips.
   const nowMs=now.getTime(), endToday=nowMs+864e5;
   const dueCount=tasks().filter(taskMine).filter(t=>!t.done && +t.due<endToday).length;
+  const overdueCount=tasks().filter(taskMine).filter(t=>!t.done && +t.due<nowMs).length;
   const meetingsToday=(cal.events||[]).filter(e=>{ const t=new Date(e.start).getTime(); return t>=nowMs&&t<endToday; }).length
     + deals().filter(d=>d.demoDate&&!CLOSED.includes(d.stage)&&(()=>{ const t=new Date(d.demoDate).getTime(); return t>=nowMs&&t<endToday; })()).length;
 
-  // 1) Slim header strip — greeting + date + clickable number chips that jump to each section.
+  // 1) Compact header — greeting + date + My | Team toggle.
   const hr=new Date().getHours(); const greet=hr<12?'Good morning':hr<18?'Good afternoon':'Good evening';
   const rep=myRep()||'there';
   const dstr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
-  let h='<div class="today-head"><h2>'+esc(greet)+', '+esc(rep)+'</h2><span class="sub">'+esc(dstr)+'</span></div>';
-  h+='<div class="grid">';
-  h+=stat(dueCount,'Tasks due',true,"todayScroll('today-queue')");
-  h+=stat(replies.length,'Replies',false,"todayScroll('today-replies')");
-  h+=stat(meetingsToday,'Meetings today',false,"todayScroll('today-meetings')");
-  h+=stat(money(mrr)+' / '+money(q),'MRR vs quota',true);
+  let h='<div class="today-head"><h2>'+esc(greet)+', '+esc(rep)+'</h2><span class="dt">'+esc(dstr)+'</span>'+
+    '<span class="vseg"><button class="'+(todayView==='my'?'on':'')+'" onclick="setTodayView(\'my\')">My day</button>'+
+    '<button class="'+(todayView==='team'?'on':'')+'" onclick="setTodayView(\'team\')">Team</button></span></div>';
+
+  // 2) Slim glance strip — small clickable stats, not giant cards.
+  const gl=(cls,n,lbl,onclick)=>'<div class="gl'+(cls?' '+cls:'')+'"'+(onclick?' onclick="'+onclick+'"':'')+'><b>'+n+'</b> '+esc(lbl)+'</div>';
+  h+='<div class="glance">';
+  h+=gl(overdueCount?'od':'',dueCount,'tasks due'+(overdueCount?' ('+overdueCount+' overdue)':''),"todayScroll('today-queue')");
+  h+=gl('',meetingsToday,'meetings today',"todayScroll('today-meetings')");
+  h+=gl('',replies.length,'replies',"todayScroll('today-replies')");
+  h+=gl('',money(mrr)+' / '+money(q),'MRR vs quota');
   h+='</div>';
 
-  // 2) HERO — the task queue. 3) meetings. 4) replies. 5) signals.
+  // 3) Team scoreboard first when Team view is on, then HERO queue → schedule → replies → signals.
+  if(todayView==='team') h+=teamTodayPanel();
   h+=todayQueuePanel();
-  h+=todayMeetingsPanel();
+  h+=todayMeetingsPanel(todayView==='team'?7:1);
   h+=needsReplyPanel(replies,newInbound);
   h+=signalsPanel();
 
@@ -2179,6 +2281,12 @@ function hotQueue(){ const now=Date.now();
   const haveDue=new Set(due.map(c=>c.id));
   const seqExtra=prefilter(contacts().filter(c=>!haveDue.has(c.id)&&elig(c)&&inSeq(c)&&isDue(c))).sort(byHeat);
   if(seqExtra.length) due=due.concat(seqExtra);
+  // Personal "fired to my Hot List" contacts pin to the very top of MY queue (most-recent first),
+  // even if heat/cap wouldn't otherwise surface them. Never affects another rep's view.
+  const me=(typeof myRep==='function'&&myRep())||'';
+  if(me){ const mine=prefilter(contacts().filter(c=>hotForMe(c)&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)))
+      .sort((a,b)=>((b.hotFor&&b.hotFor[me])||0)-((a.hotFor&&a.hotFor[me])||0));
+    if(mine.length){ const pin=new Set(mine.map(c=>c.id)); due=mine.concat(due.filter(c=>!pin.has(c.id))); } }
   return {due,snoozed};
 }
 // Bulk re-tier every non-customer, non-pipeline contact — INTENT-AWARE:
