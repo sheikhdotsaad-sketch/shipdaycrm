@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul21·z83';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul21·z84';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -659,6 +659,13 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
     out.__cal=Object.assign({},m.__cal||{},{reviewed:Object.assign({},rA,rB)}); }
   // __inboundIgnore = hidden inbound suggestions. UNION so an Ignore is never clobbered by a newer sync.
   out.__inboundIgnore=Object.assign({},base.__inboundIgnore||{},over.__inboundIgnore||{});
+  // __dnc = Do-Not-Call registry keyed by 10-digit number → {by,at,reason,off?}. COMPLIANCE: must never be
+  // clobbered by a stale sync. Union by key, keep the entry with the newer .at (so an "off" removal with a
+  // newer timestamp wins over an older mark, and vice-versa) — never last-writer-wins the whole map.
+  { const dA=base.__dnc||{}, dB=over.__dnc||{}, dd={};
+    Object.keys(dA).concat(Object.keys(dB)).forEach(k=>{ const a=dA[k], b=dB[k];
+      dd[k]=(!b)?a:(!a)?b:(((+b.at||0)>=(+a.at||0))?b:a); });
+    out.__dnc=dd; }
   out.__seq=Math.max(+base.__seq||1,+over.__seq||1);
   out.__updatedAt=Math.max(+base.__updatedAt||0,+over.__updatedAt||0);
   return out; }
@@ -2047,8 +2054,35 @@ function prefilter(list){ return list.filter(c=>{
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
 const telNum=c=>{ const p=(c.phone||c.mobile||'').replace(/[^\d+]/g,''); return p; };
+// ===== Do Not Call (DNC) — number-based compliance registry. Keyed by the last 10 digits of a phone
+// number so ANY contact carrying a flagged number is blocked (business lines are shared across contacts).
+// store.__dnc[key] = {by, at, reason, off?}. off:true = removed (kept as a tombstone for clean merges). =====
+function _dnckey(num){ const d=String(num||'').replace(/\D/g,''); return d.length>10?d.slice(-10):d; }
+function dncNums(c){ const out=[]; [c&&c.phone,c&&c.mobile].forEach(p=>{ const k=_dnckey(p); if(k.length>=10&&out.indexOf(k)<0) out.push(k); }); return out; }
+function isDNC(c){ const m=c&&store.__dnc; if(!m) return false; return dncNums(c).some(k=>m[k]&&!m[k].off); }
+function dncEntry(c){ const m=c&&store.__dnc; if(!m) return null; for(const k of dncNums(c)){ if(m[k]&&!m[k].off) return m[k]; } return null; }
+function markDNC(cid){ const c=contact(cid); if(!c) return;
+  const nums=dncNums(c); if(!nums.length){ toast('No valid phone number on this contact to add to Do Not Call'); return; }
+  const shown=[c.phone,c.mobile].filter(Boolean).join(', ');
+  const reason=prompt('🚫 Add to Do Not Call (compliance) — this number will NOT appear in any call list:\n\n'+shown+'\n\nReason (optional):','requested / DNC');
+  if(reason===null) return;
+  const by=(typeof senderName==='function'&&senderName())||'', at=Date.now(); store.__dnc=store.__dnc||{};
+  nums.forEach(k=>{ store.__dnc[k]={by,at,reason:(reason||'').trim(),cid:c.id}; });
+  logAuto(c,'🚫 Added to Do Not Call'+(reason?(' — '+reason):'')+' (by '+by+')'); stampU(c);
+  store.__updatedAt=Date.now(); save(); refreshDrawer();
+  if(el('callModal')&&el('callModal').style.display!=='none') renderCallModal(); renderActive();
+  toast('🚫 Marked Do Not Call — removed from the call list'); }
+function unmarkDNC(cid){ const c=contact(cid); if(!c) return;
+  if(!confirm('Remove '+cname(c)+'’s number(s) from Do Not Call?\n\nThey can be called again after this.')) return;
+  const by=(typeof senderName==='function'&&senderName())||'', at=Date.now(); store.__dnc=store.__dnc||{};
+  dncNums(c).forEach(k=>{ if(store.__dnc[k]) store.__dnc[k]={off:true,by,at}; });
+  logAuto(c,'✅ Removed from Do Not Call (by '+by+')'); stampU(c);
+  store.__updatedAt=Date.now(); save(); refreshDrawer();
+  if(el('callModal')&&el('callModal').style.display!=='none') renderCallModal(); renderActive();
+  toast('Removed from Do Not Call'); }
 const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;align-items:center">'+
-  (telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>')+
+  (isDNC(r)?'<span class="tag" style="background:#3a1414;color:#f2a3a3" title="Do Not Call — compliance flag. Click Log to view/remove.">🚫 DNC</span>'
+    :(telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>'))+
   '<button class="btn sm gh" title="Log call outcome" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')">Log ▾</button></div>';
 // ===== Call & disposition modal =====
 // Opening the modal does NOT log anything — dialing (the tel: link) just rings the phone.
@@ -2067,10 +2101,14 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
   const prior=+c.callCount?('<span class="cm-sub">'+c.callCount+' prior call'+(c.callCount>1?'s':'')+(c.dispo?' · last: '+esc(c.dispo):'')+'</span>'):'';
   const cl=claimOf(c), other=(cl&&cl.rep!==myRep())?cl:null;
   const clWarn=other?'<div style="margin:10px 0 2px;padding:8px 11px;border:1px solid var(--warm);border-radius:8px;font-size:12.5px;color:var(--warm)">⚠️ <b>'+esc(other.rep)+'</b> is working this lead right now (locked '+fmtAgo(other.at)+') — check with them before dialing.</div>':'';
+  const dnc=isDNC(c), de=dnc?dncEntry(c):null;
+  const dncBanner=dnc?('<div style="margin:10px 0 2px;padding:9px 12px;border:1px solid #a33;background:#3a1414;border-radius:8px;font-size:12.5px;color:#f2a3a3">🚫 <b>Do Not Call</b> — this number is on the compliance DNC list'+(de&&de.reason?(': '+esc(de.reason)):'')+(de&&de.by?(' · flagged by '+esc(de.by)):'')+(de&&de.at?(' '+esc(fmtAgo(de.at))):'')+'. Dialing is blocked.</div>'):'';
   m.innerHTML='<div class="cmodal">'+
     '<div class="cm-head"><div><div class="cm-name">'+esc(cname(c))+'</div><div class="cm-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>'+prior+'</div>'+
-      '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+clWarn+
-    (p?'<a class="cm-dial" href="tel:'+esc(p)+'">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')+
+      '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+clWarn+dncBanner+
+    (dnc?'<div style="margin:8px 0"><button class="btn sm" style="background:var(--won);color:#04210f" onclick="unmarkDNC(\''+c.id+'\')" title="Remove this number from the Do Not Call list">✅ Remove from Do Not Call</button></div>'
+      :(p?'<a class="cm-dial" href="tel:'+esc(p)+'">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')
+        +(p?'<div style="margin:6px 0 2px"><button class="btn sm gh" style="color:var(--lost)" onclick="markDNC(\''+c.id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Mark Do Not Call</button></div>':''))+
     // quick research right where the dial button is — Google the business while it rings
     (function(){ const g=a||{name:cname(c)}; return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 2px">'+
       '<a class="btn sm gh" href="'+esc(gsearch(g))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔎 Google</a>'+
@@ -2292,7 +2330,7 @@ function hotQueue(){ const now=Date.now();
   // In-pipe contacts (booked demo / follow-up / no-show deals on them or their account) live in
   // the Pipeline tab — the Hot List is strictly the cold/warm-call playlist.
   // Phone is required to be callable — UNLESS the contact is in a sequence (then they show anyway).
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&(hasRealPhone(c)||inSeq(c))&&!hasOpenDeal(c);
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||inSeq(c))&&!hasOpenDeal(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
@@ -2313,7 +2351,7 @@ function hotQueue(){ const now=Date.now();
   // Personal "fired to my Hot List" contacts pin to the very top of MY queue (most-recent first),
   // even if heat/cap wouldn't otherwise surface them. Never affects another rep's view.
   const me=(typeof myRep==='function'&&myRep())||'';
-  if(me){ const mine=prefilter(contacts().filter(c=>hotForMe(c)&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)))
+  if(me){ const mine=prefilter(contacts().filter(c=>hotForMe(c)&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)))
       .sort((a,b)=>((b.hotFor&&b.hotFor[me])||0)-((a.hotFor&&a.hotFor[me])||0));
     if(mine.length){ const pin=new Set(mine.map(c=>c.id)); due=mine.concat(due.filter(c=>!pin.has(c.id))); } }
   return {due,snoozed};
@@ -3978,13 +4016,15 @@ function openContact(id){
   // Inline call button beside a number: dials that specific line, opens the ONE dispo modal.
   // If a contact has both phone + mobile the SDR can call either; a single outcome (set after
   // the call) logs it and drives the requeue.
-  const callBtn=(num)=> num? '<a class="callbtn sm" href="tel:'+esc(num)+'" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Call &amp; log outcome">📞</a>' : '';
+  const callBtn=(num)=> num? (isDNC(c)?'<span class="callbtn sm" style="opacity:.55;cursor:not-allowed;color:var(--lost)" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Do Not Call — dialing blocked">🚫</span>':'<a class="callbtn sm" href="tel:'+esc(num)+'" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Call &amp; log outcome">📞</a>') : '';
   const phoneFld=(lab,field,val)=> fld(lab,'<div style="display:flex;gap:6px;align-items:center"><div style="flex:1">'+inp("setC('"+id+"','"+field+"',this.value)",val)+'</div>'+callBtn(val)+'</div>');
   b+='<div class="f2">'+fld('First',inp("setC('"+id+"','first',this.value)",c.first))+fld('Last',inp("setC('"+id+"','last',this.value)",c.last))+'</div>';
   const sp=splitParts(c); if(sp) b+='<div class="tsub" style="margin:-4px 0 10px">Looks like two people — <a style="cursor:pointer;color:var(--sig)" onclick="splitContact(\''+id+'\')">✂️ split into '+esc(sp.a.first)+' + '+esc(sp.b.first)+'</a></div>';
   b+=fld('Role / title',inp("setC('"+id+"','title',this.value)",c.title));
   b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+fld('Alt email',inp("setC('"+id+"','email2',this.value)",c.email2))+'</div>';
   b+='<div class="f2">'+phoneFld('Direct number','phone',c.phone)+phoneFld('Mobile / other','mobile',c.mobile)+'</div>';
+  b+=(isDNC(c)?('<div class="tsub" style="margin:-4px 0 10px;color:#f2a3a3">🚫 <b>Do Not Call</b>'+(function(){const e=dncEntry(c);return e?((e.reason?(' — '+esc(e.reason)):'')+(e.by?(' · by '+esc(e.by)):'')+(e.at?(' '+esc(fmtAgo(e.at))):'')):'';})()+' · <a style="cursor:pointer;color:var(--won)" onclick="unmarkDNC(\''+id+'\')">remove</a></div>')
+    :(dncNums(c).length?('<div class="tsub" style="margin:-4px 0 10px"><a style="cursor:pointer;color:var(--lost)" onclick="markDNC(\''+id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Mark Do Not Call</a></div>'):''));
   b+=fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin));
   b+='<div class="f3">'+fld('Warmth',sel("setC('"+id+"','warmth',this.value)",WARMTHS,c.warmth||'Cold'))+
      fld('Status',sel("setC('"+id+"','status',this.value)",C_STATUS,c.status||'New'))+
