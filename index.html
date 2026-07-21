@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul21·z82';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul21·z83';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1863,7 +1863,15 @@ function lastTouchLabel(c){ const t=lastTouchTs(c); return t?fmtAgo(t):'never'; 
 /* ---- derived intent signals (drive Hot List heat + columns) ---- */
 function logTsBy(c,rx){ if(!c||!c.log||!c.log.length) return 0; let t=0; for(const l of c.log){ if(rx.test(l.txt||'')){ const ts=+l.ts||0; if(ts>t) t=ts; } } return t; }
 function lastCallTs(c){ let t=logTsBy(c,/📞|☎/); if(!t && c.callCount && c.lastContactedTs) t=+c.lastContactedTs; return t; }
-function lastSentTs(c){ return logTsBy(c,/📧/); }
+function lastSentTs(c){ return logTsBy(c,/📧|📤/); }
+// Last time WE reached out by any channel (call or email sent) — powers the "just-worked, step aside"
+// cooldown so a lead you already touched doesn't reclaim the top of the queue for a while.
+function lastOutreachTs(c){ return Math.max(lastCallTs(c)||0,lastSentTs(c)||0); }
+// How many times WE'VE worked this lead (calls + emails sent). Drives fairness: never-worked leads get
+// a boost so they surface; heavily-worked ones cool so the same names don't monopolize the Hot List.
+function touchCount(c){ if(!c) return 0; let n=0;
+  if(c.log) for(const l of c.log){ if(/📞|☎|📧|📤/.test(l.txt||'')) n++; }
+  return n||(+c.callCount||0); }
 function lastOpenTs(c){ let t=+c.lastEmailOpenTs||0; const l=logTsBy(c,/👀|opened/i); if(l>t) t=l; return t; }
 function openCount(c){ if(!c||!c.log||!c.log.length) return 0; let n=0; for(const l of c.log){ const tx=l.txt||''; if(/👀|opened/i.test(tx)){ const m=tx.match(/\((\d+)x\)/); n+=m?(+m[1]):1; } } return n; }
 const OWNER_RX=/\b(owner|co-?founder|founder|ceo|president|proprietor|principal|partner|managing|gm|general manager)\b/i;
@@ -1887,13 +1895,17 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   if(telNum(c)) p+=15;                                       // reachable by phone
   const staleD=touch?(now-touch)/_DAY:45;
   p+=Math.min(staleD,30)*2;                                  // staleness, capped so ancients don't hog
-  // Just-worked dampener: a lead you already dialed shouldn't reclaim the TOP of the
-  // queue the instant its snooze expires. It re-enters ranked as if it just fell in
-  // fresh, then climbs back up naturally over ~7d. A NEW signal (email open = +300)
-  // still overrides this instantly, so re-engaged leads jump back to the front.
-  const lc=lastCallTs(c);
-  if(lc) p-=Math.max(0,150-((now-lc)/_DAY)*22);              // recent-call penalty, ~7d decay
-  p-=Math.min(+c.callCount||0,6)*12;                         // repeated no-connect calls cool it off
+  // FAIRNESS — spread the work so the same names don't monopolize the queue and under-worked leads
+  // surface. Never-worked leads get a boost that fades as you work them; heavily-worked leads cool.
+  const tc=touchCount(c);
+  p+=Math.max(0,90-tc*30);                                   // neglect boost: never-touched +90 → 0 by 3 touches
+  p-=Math.min(tc,10)*14;                                     // over-worked cooldown, up to -140
+  // Just-worked dampener: a lead you already reached out to (call OR email) shouldn't reclaim the TOP
+  // of the queue the instant its snooze expires. It re-enters ranked as if it just fell in fresh, then
+  // climbs back up naturally over ~9d. A NEW signal (email open = +300) still overrides this instantly,
+  // so a re-engaged lead jumps back to the front regardless.
+  const lo=lastOutreachTs(c);
+  if(lo) p-=Math.max(0,180-((now-lo)/_DAY)*20);              // recent-outreach penalty, ~9d decay
   return Math.round(p);
 }
 // Contact-level INTENT — engagement only: are THEY heating up (reading emails, replying,
@@ -2265,6 +2277,14 @@ const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').lengt
 // In a live sequence = a running manual cadence OR still enrolled in Apollo. These are your active
 // working set, so they belong in the Hot List even without a phone number on file (Saad's rule).
 const inSeq=c=>!!(c&&((c.emailSeq&&!c.emailSeq.done)||c.apolloSeq));
+// Account diversity: keeps a single account from stacking many contacts near the top. Input is already
+// heat-sorted; this greedily takes the hottest contact whose account hasn't appeared in the last GAP
+// slots, so priority is preserved but the same business can't monopolize the queue. In-sequence contacts
+// are exempt (they must always surface) — pass onlyIf to skip them.
+function spreadByAccount(list,gap){ gap=gap||4; const pool=list.slice(), out=[], recent=[];
+  while(pool.length){ let i=pool.findIndex(c=>!recent.includes(c.accountId||('_'+c.id))); if(i<0) i=0;
+    const c=pool.splice(i,1)[0]; out.push(c); recent.push(c.accountId||('_'+c.id)); if(recent.length>gap) recent.shift(); }
+  return out; }
 function hotQueue(){ const now=Date.now();
   // In-pipe contacts (booked demo / follow-up / no-show deals on them or their account) live in
   // the Pipeline tab — the Hot List is strictly the cold/warm-call playlist.
@@ -2280,6 +2300,7 @@ function hotQueue(){ const now=Date.now();
     const extra=prefilter(contacts().filter(c=>!have.has(c.id)&&elig(c)&&isDue(c))).sort(byHeat);
     due=due.concat(extra.slice(0,HOT_CAP-due.length));
   }
+  due=spreadByAccount(due);                                 // fan out accounts so one business can't hog the top
   if(due.length>HOT_CAP) due=due.slice(0,HOT_CAP);          // top 150 highest-heat calls
   // GUARANTEE every in-sequence contact appears, even past the 150 cap — sequences are the working
   // list and must never be dropped just because the cap filled with cold-call heat.
