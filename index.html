@@ -290,6 +290,12 @@ tr.tdone td{opacity:.5}
 .twchip{font-size:12px;padding:5px 11px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);color:var(--mut);font-weight:600;cursor:pointer}
 .twchip.on{background:var(--sig);border-color:var(--sig);color:#fff}
 .twchip b{font-weight:800}
+.panel.hero{border:2px solid var(--acc)}
+.today-head{display:flex;align-items:baseline;gap:10px;margin:2px 0 14px;flex-wrap:wrap}
+.today-head h2{margin:0;font-size:21px}
+.today-od{color:var(--hot);font-weight:700}
+.more-btn{width:100%;text-align:left;font-weight:700;background:transparent;border:0;color:var(--ink);padding:13px 16px;cursor:pointer;font-size:14px}
+.more-btn:hover{background:var(--panel2)}
 #taskwidget .tw-ap{display:flex;align-items:center;gap:8px;padding:11px 16px;border-top:1px solid var(--line);font-size:12px}
 @media(max-width:640px){#taskwidget{left:3vw;right:3vw;width:auto;bottom:82px}}
 
@@ -534,7 +540,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul20·z78';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul20·z79';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1048,6 +1054,21 @@ function signalsPanel(){
   return '<div class="panel"><div class="ph"><h3>🔥 Recent Signals</h3><span class="sub">'+groups.length+' contact'+(groups.length!==1?'s':'')+' engaging this week · '+nOpen+' opens · '+nRep+' repl'+(nRep===1?'y':'ies')+'</span>'+
     '<button class="btn sm gh" style="margin-left:auto" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table></div>';
 }
+// Roll rep-name variants ("Embert" / "Embert Sy" / "Embert Rein Sy") into ONE row so Team
+// Activity shows one line per person. Same first name = same rep; canonical display is a matching
+// team() member if there is one, else the longest variant seen. Display-only — never rewrites stamps.
+function mergeRepRows(rows){
+  const t=team(); const groups={};
+  Object.keys(rows).forEach(raw=>{ if(raw==='Unattributed'){ groups['\u0000']=['Unattributed']; return; }
+    const f=String(raw).trim().toLowerCase().split(/\s+/)[0]; (groups[f]=groups[f]||[]).push(raw); });
+  const out={};
+  Object.keys(groups).forEach(f=>{ const variants=groups[f];
+    const canon = f==='\u0000' ? 'Unattributed'
+      : (t.find(c=>String(c).trim().toLowerCase().split(/\s+/)[0]===f) || variants.slice().sort((a,b)=>b.length-a.length)[0]);
+    const d=out[canon]=out[canon]||{dialsT:0,dials7:0,emails7:0,notes7:0,demos7:0,last:0};
+    variants.forEach(v=>{ const s=rows[v]; d.dialsT+=s.dialsT; d.dials7+=s.dials7; d.emails7+=s.emails7; d.notes7+=s.notes7; d.demos7+=s.demos7; if(s.last>d.last)d.last=s.last; }); });
+  return out;
+}
 /* ---- Team Activity: who actually did the work, from log-entry `by` stamps (dispo calls,
    quick-logs, OpenPhone imports with a User column). Entries logged before names were set
    have no stamp and roll up as "Unattributed" — they age out of the 7-day window. ---- */
@@ -1063,9 +1084,10 @@ function teamActivityPanel(){
     else if(!l.sys||/^(LinkedIn|Text|Note)\b/.test(tx)) bump(l.by||'Unattributed','note',ts); }));
   deals().forEach(d=>(d.log||[]).forEach(l=>{ const ts=+l.ts||0; if(ts<wk) return;
     if(/^Demo booked/.test(String(l.txt||''))) bump(l.by||'Unattributed','demo',ts); }));
-  const names=Object.keys(rows); if(!names.length) return '';
-  names.sort((a,b)=>{ if(a==='Unattributed')return 1; if(b==='Unattributed')return -1; return rows[b].dials7-rows[a].dials7; });
-  const tr=names.map(n=>{ const r=rows[n]; const un=n==='Unattributed';
+  const rowsM=mergeRepRows(rows);
+  const names=Object.keys(rowsM); if(!names.length) return '';
+  names.sort((a,b)=>{ if(a==='Unattributed')return 1; if(b==='Unattributed')return -1; return rowsM[b].dials7-rowsM[a].dials7; });
+  const tr=names.map(n=>{ const r=rowsM[n]; const un=n==='Unattributed';
     return '<tr'+(un?' style="opacity:.55"':'')+'><td class="tname">'+(un?'<span class="tsub">Unattributed <span title="Logged before a name was set in that browser — hit the 👤 button in the header">ⓘ</span></span>':'👤 '+esc(n))+'</td>'+
       '<td style="text-align:right"><b>'+r.dialsT+'</b></td><td style="text-align:right">'+r.dials7+'</td>'+
       '<td style="text-align:right">'+r.emails7+'</td><td style="text-align:right">'+r.notes7+'</td>'+
@@ -1398,7 +1420,7 @@ function openTaskCount(){ return tasks().filter(t=>!t.done&&taskMine(t)).length;
 let twFilter='all';
 function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
 let twSort='due';  // 'due' = soonest first · 'step' = batch by email step (1,2,3…)
-function setTwSort(s){ twSort=s; renderTaskWidget(); }
+function setTwSort(s){ twSort=s; renderTaskWidget(); if(UI.tab==='today'&&typeof renderToday==='function') renderToday(); }
 // step# for batching: emailSeq cadStep first, else parse "Email 2/5" from the title
 function taskStep(t){ let s=+t.cadStep||0; if(!s){ const m=/(\d+)\s*\/\s*\d+/.exec(t.title||''); if(m)s=+m[1]; } return s||99; }
 function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864e5; const list=tasks().filter(taskMine);   // only my tasks + unassigned
@@ -1462,6 +1484,65 @@ function recordTasks(pred){ const list=tasks().filter(pred).sort((a,b)=>(a.done-
 function contactTasks(id){ return recordTasks(t=>t.contactId===id); }
 function acctTasks(id){ return recordTasks(t=>t.accountId===id); }
 
+// ── Today cockpit: "More" section collapse state (persisted like the active tab) ──
+let todayMoreOpen=false; try{ todayMoreOpen=localStorage.getItem('shipday_crm_todaymore')==='1'; }catch(e){}
+function toggleTodayMore(){ todayMoreOpen=!todayMoreOpen; try{ localStorage.setItem('shipday_crm_todaymore',todayMoreOpen?'1':'0'); }catch(e){} renderToday(); }
+function todayScroll(id){ const e=el(id); if(e) e.scrollIntoView({behavior:'smooth',block:'start'}); }
+
+// ▶ Do Now — my queue: overdue + due-today tasks (mine + unassigned), same Due/Batch sort as
+// the fab widget. This is the HERO — the one thing the Today page is built around.
+function todayQueuePanel(){
+  const now=today0().getTime(), endToday=now+864e5;
+  const list=tasks().filter(taskMine).filter(t=>!t.done && +t.due<endToday);
+  const overdue=list.filter(t=>+t.due<now).length;
+  const typeRank=t=>t.type==='email'?0:t.type==='call'?1:2;
+  const rows=list.slice();
+  if(twSort==='step') rows.sort((a,b)=>(typeRank(a)-typeRank(b))||(taskStep(a)-taskStep(b))||((+a.due)-(+b.due)));
+  else rows.sort((a,b)=>(+a.due)-(+b.due));
+  const sub=list.length+' to clear'+(overdue?' · <span class="today-od">'+overdue+' overdue</span>':'');
+  let h='<div class="panel hero" id="today-queue"><div class="ph"><h3>▶ Do Now — my queue</h3><span class="sub">'+sub+'</span>'+
+    '<span style="margin-left:auto;display:inline-flex;gap:4px">'+
+    '<button class="twchip'+(twSort==='due'?' on':'')+'" title="Soonest due first" onclick="setTwSort(\'due\')">🕒 Due</button>'+
+    '<button class="twchip'+(twSort==='step'?' on':'')+'" title="Batch by type then step: all emails (1,2,3…) then all calls" onclick="setTwSort(\'step\')">↕ Batch</button></span></div>';
+  h+='<table><tbody>';
+  h+= rows.length? rows.map(taskRow).join('') : '<tr><td class="empty" colspan="4" style="padding:26px;text-align:center;font-size:15px">All caught up 🎉</td></tr>';
+  h+='</tbody></table></div>';
+  return h;
+}
+
+// 📅 Today's Meetings — Google Calendar events today + demos dated today, merged & time-ordered.
+function todayMeetingsPanel(){
+  const now=today0().getTime(), end=now+864e5, cal=store.__cal||{};
+  const evs=(cal.events||[]).filter(e=>{ const t=new Date(e.start).getTime(); return t>=now&&t<end; }).map(e=>({ts:new Date(e.start).getTime(),kind:'cal',e}));
+  const demos=deals().filter(d=>d.demoDate&&!CLOSED.includes(d.stage)).filter(d=>{ const t=new Date(d.demoDate).getTime(); return t>=now&&t<end; }).map(d=>({ts:new Date(d.demoDate).getTime(),kind:'demo',d}));
+  const all=evs.concat(demos).sort((a,b)=>a.ts-b.ts);
+  let h='<div class="panel" id="today-meetings"><div class="ph"><h3>📅 Today\'s Meetings</h3><span class="sub" style="margin-left:auto">'+all.length+' today · synced '+fmtAgo(cal.syncedAt)+'</span></div><table><tbody>';
+  if(!all.length) h+='<tr><td class="empty" colspan="2">Nothing on the calendar today.</td></tr>';
+  else h+=all.map(m=>{
+    if(m.kind==='cal'){ const e=m.e; return '<tr><td class="tname">'+(e.htmlLink?'<a href="'+esc(e.htmlLink)+'" target="_blank">'+esc(e.summary||'(no title)')+'</a>':esc(e.summary||'(no title)'))+(e.location?'<div class="tsub">'+esc(e.location)+'</div>':'')+'</td><td class="tsub" style="text-align:right;white-space:nowrap">'+esc(fmtDT(e.start))+'</td></tr>'; }
+    const d=m.d, a=acct(d.accountId);
+    return '<tr onclick="openDeal(\''+d.id+'\')" style="cursor:pointer"><td class="tname">🎬 '+esc(d.name||aname(a))+'<div class="tsub">demo · '+esc(d.stage)+'</div></td><td class="tsub" style="text-align:right;white-space:nowrap">'+esc(fmtDT(d.demoDate))+'</td></tr>';
+  }).join('');
+  h+='</tbody></table></div>';
+  return h;
+}
+
+// ✉️ Needs a Reply — known-contact replies (click → their timeline) + unknown inbound (Add/Ignore).
+function needsReplyPanel(replies,newInbound){
+  const cmap=byEmail(); const emailOf=s=>{ const m=String(s||'').match(/<([^>]+)>/); return (m?m[1]:s).trim().toLowerCase(); };
+  const gm=store.__gmail||{};
+  let h='<div class="panel" id="today-replies"><div class="ph"><h3>✉️ Needs a Reply</h3><span class="sub" style="margin-left:auto">'+replies.length+' from your book'+(newInbound.length?' · '+newInbound.length+' new inbound':'')+' · synced '+fmtAgo(gm.syncedAt)+'</span></div><table><tbody>';
+  if(!replies.length && !newInbound.length){ h+='<tr><td class="empty" colspan="3">No replies waiting — connect Gmail in the header sync.</td></tr>'; }
+  else {
+    h+=replies.map(r=>{ const c=cmap[emailOf(r.from)]; const nm=c?cname(c):(r.from||'');
+      return '<tr'+(c?' onclick="openContact(\''+c.id+'\')" style="cursor:pointer"':'')+'><td class="tname">↩️ '+esc(nm)+'<div class="tsub">'+esc(r.subject||'')+'</div></td><td class="tsub" style="text-align:right;white-space:nowrap">'+esc(r.date||'')+'</td><td></td></tr>'; }).join('');
+    h+=newInbound.map(r=>{ const e=emailOf(r.from); const nm=(r.from||'').replace(/<[^>]*>/,'').replace(/["']/g,'').trim()||e;
+      return '<tr><td class="tname">🆕 '+esc(nm)+'<div class="tsub">'+esc(e)+' · '+esc(r.subject||'')+'</div></td><td></td><td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="addInboundLead(\''+esc(e)+'\',\''+esc(nm.replace(/'/g,""))+'\')">＋ Add</button> <button class="btn sm gh" title="Hide — not a lead" onclick="ignoreInbound(\''+esc(e)+'\')">Ignore</button></td></tr>'; }).join('');
+  }
+  h+='</tbody></table></div>';
+  return h;
+}
+
 function renderToday(){
   const now=today0();
   const ap=store.__apollo||{}; const gm=store.__gmail||{}; const cal=store.__cal||{};
@@ -1471,7 +1552,6 @@ function renderToday(){
   const NOISE=/(no-?reply|do-?not-?reply|notification|notifications|mailer|bounce|postmaster|@shipday\.com|google\.com|otter\.ai|calendar-|docusign|calendly|zoom\.us|linkedin\.com|slack\.com)/i;
   const ignInb=store.__inboundIgnore||{};
   const newInbound=allReplies.filter(r=>{ const e=emailOf(r.from); return e&&!cmap[e]&&!ignInb[e]&&!NOISE.test(e)&&!NOISE.test(r.from||''); }).slice(0,10);
-  const calEvents=(cal.events||[]).filter(e=>new Date(e.start).getTime()>=Date.now()-6*36e5).slice(0,10);
   const upcoming=deals().filter(d=>d.demoDate&&new Date(d.demoDate)>=now&&!CLOSED.includes(d.stage))
     .sort((a,b)=>new Date(a.demoDate)-new Date(b.demoDate));
   const past=deals().filter(d=>d.demoDate&&new Date(d.demoDate)<now&&d.stage==='Booked Demo');
@@ -1480,69 +1560,65 @@ function renderToday(){
   const follow=deals().filter(d=>d.stage==='Follow Up');
   const mrr=deals().filter(d=>d.stage===WON&&inMonth(d.closedAt,new Date())).reduce((a,d)=>a+(+d.mrr||0),0);
   const q=qTarget(new Date());
-  let h='<div class="grid">';
-  h+=stat(ap.totalDue||0,'Apollo tasks due',true);
-  h+=stat(replies.length,'New replies');
-  h+=stat(newInbound.length,'🆕 New inbound',newInbound.length>0);
-  h+=stat(upcoming.length,'Upcoming demos');
+
+  // Counts for the header chips.
+  const nowMs=now.getTime(), endToday=nowMs+864e5;
+  const dueCount=tasks().filter(taskMine).filter(t=>!t.done && +t.due<endToday).length;
+  const meetingsToday=(cal.events||[]).filter(e=>{ const t=new Date(e.start).getTime(); return t>=nowMs&&t<endToday; }).length
+    + deals().filter(d=>d.demoDate&&!CLOSED.includes(d.stage)&&(()=>{ const t=new Date(d.demoDate).getTime(); return t>=nowMs&&t<endToday; })()).length;
+
+  // 1) Slim header strip — greeting + date + clickable number chips that jump to each section.
+  const hr=new Date().getHours(); const greet=hr<12?'Good morning':hr<18?'Good afternoon':'Good evening';
+  const rep=myRep()||'there';
+  const dstr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+  let h='<div class="today-head"><h2>'+esc(greet)+', '+esc(rep)+'</h2><span class="sub">'+esc(dstr)+'</span></div>';
+  h+='<div class="grid">';
+  h+=stat(dueCount,'Tasks due',true,"todayScroll('today-queue')");
+  h+=stat(replies.length,'Replies',false,"todayScroll('today-replies')");
+  h+=stat(meetingsToday,'Meetings today',false,"todayScroll('today-meetings')");
   h+=stat(money(mrr)+' / '+money(q),'MRR vs quota',true);
   h+='</div>';
 
-  // 👥 Who did what this week — AE + SDR side by side
-  h+=teamActivityPanel();
-
-  // 🔥 Recent signals — new opens/replies worth a call (why the Hot List re-ranked)
+  // 2) HERO — the task queue. 3) meetings. 4) replies. 5) signals.
+  h+=todayQueuePanel();
+  h+=todayMeetingsPanel();
+  h+=needsReplyPanel(replies,newInbound);
   h+=signalsPanel();
 
-  // Apollo tasks — its own panel with a ↻ Sync (mirrors Gmail/Calendar)
-  const apSeqsT=ap.sequences||[];
-  h+='<div class="panel"><div class="ph"><h3>📋 Apollo Tasks</h3><span class="sub" style="margin-left:auto">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span></div><table><tbody>';
-  h+= apSeqsT.length? apSeqsT.map(sq=>'<tr><td class="tname">'+esc(sq.name)+'</td><td class="tsub" style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>').join('')
-      : '<tr><td class="empty" colspan="2">No Apollo tasks synced yet — hit ↻ Sync in the header.</td></tr>';
-  h+='</tbody></table>'+(ap.syncedAt?'<div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>':'')+'</div>';
+  // 6) ▾ More — status panels folded away by default (persisted).
+  h+='<div class="panel"><button class="more-btn" onclick="toggleTodayMore()">'+(todayMoreOpen?'▾':'▸')+' More — team activity, Apollo, demos, next steps &amp; follow-ups</button></div>';
+  if(todayMoreOpen){
+    h+=teamActivityPanel();
 
-  // Gmail replies
-  h+='<div class="panel"><div class="ph"><h3>✉️ New Replies</h3><span class="sub" style="margin-left:auto">'+replies.length+' · synced '+fmtAgo(gm.syncedAt)+'</span></div><table><tbody>';
-  h+= replies.length? replies.map(r=>'<tr><td class="tname">'+esc(r.from||'')+'</td><td class="tsub">'+esc(r.subject||'')+'</td><td class="tsub" style="text-align:right">'+esc(r.date||'')+'</td></tr>').join('')
-      : '<tr><td class="empty" colspan="3">No replies synced yet — connect Gmail in the backend sync.</td></tr>';
-  h+='</tbody></table></div>';
+    const apSeqsT=ap.sequences||[];
+    h+='<div class="panel"><div class="ph"><h3>📋 Apollo Tasks</h3><span class="sub" style="margin-left:auto">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span></div><table><tbody>';
+    h+= apSeqsT.length? apSeqsT.map(sq=>'<tr><td class="tname">'+esc(sq.name)+'</td><td class="tsub" style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>').join('')
+        : '<tr><td class="empty" colspan="2">No Apollo tasks synced yet — hit ↻ Sync in the header.</td></tr>';
+    h+='</tbody></table>'+(ap.syncedAt?'<div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>':'')+'</div>';
 
-  // Potential new inbound (external repliers not yet in your book)
-  if(newInbound.length){
-    h+='<div class="panel"><div class="ph"><h3>🆕 Potential New Inbound</h3><span class="sub">'+newInbound.length+' external '+(newInbound.length===1?'reply':'replies')+' not in your book</span></div><table><tbody>';
-    h+=newInbound.map(r=>{ const e=emailOf(r.from); const nm=(r.from||'').replace(/<[^>]*>/,'').replace(/["']/g,'').trim()||e;
-      return '<tr><td class="tname">'+esc(nm)+'<div class="tsub">'+esc(e)+'</div></td><td class="tsub">'+esc(r.subject||'')+'</td><td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="addInboundLead(\''+esc(e)+'\',\''+esc(nm.replace(/'/g,""))+'\')">＋ Add lead</button> <button class="btn sm gh" title="Hide — not a lead" onclick="ignoreInbound(\''+esc(e)+'\')">Ignore</button></td></tr>'; }).join('');
+    h+=calDemoPanel();
+    h+=meetingReviewPanel();
+
+    h+=panelStart('Upcoming Demos','deals on the calendar');
+    h+=upcoming.length?rowsDeals(upcoming):emptyRow(6,'No demos booked.');
+    h+=panelEnd();
+
+    if(past.length){ h+=panelStart('Demos Past Due','mark outcome (no-show / follow-up / won)');
+      h+=rowsDeals(past); h+=panelEnd(); }
+
+    h+='<div class="panel"><div class="ph"><h3>Next Steps</h3></div><table><tbody>';
+    h+= steps.length? steps.map(s=>{
+        const o=s.o;
+        const name=s.t==='deal'? esc(o.name||aname(acct(o.accountId))) : esc(cname(o));
+        const oc=s.t==='deal'?"openDeal('"+o.id+"')":"openContact('"+o.id+"')";
+        return '<tr onclick="'+oc+'"><td class="tname">'+name+'</td><td>'+esc(s.txt)+'</td><td style="text-align:right"><span class="tag">'+(s.t)+'</span></td></tr>';
+      }).join('') : '<tr><td class="empty" colspan="3">Nothing queued.</td></tr>';
     h+='</tbody></table></div>';
+
+    h+=panelStart('Follow-ups to Push','');
+    h+=follow.length?rowsDeals(follow):emptyRow(6,'None.');
+    h+=panelEnd();
   }
-
-  // Google Calendar
-  h+='<div class="panel"><div class="ph"><h3>📅 Google Calendar</h3><span class="sub" style="margin-left:auto">'+calEvents.length+' upcoming · synced '+fmtAgo(cal.syncedAt)+'</span></div><table><tbody>';
-  h+= calEvents.length? calEvents.map(e=>'<tr><td class="tname">'+(e.htmlLink?'<a href="'+esc(e.htmlLink)+'" target="_blank">'+esc(e.summary)+'</a>':esc(e.summary))+'</td><td class="tsub" style="text-align:right">'+esc(fmtDT(e.start))+'</td></tr>').join('')
-      : '<tr><td class="empty" colspan="2">No events synced yet — connect Google in the backend sync.</td></tr>';
-  h+='</tbody></table></div>';
-
-  h+=calDemoPanel();
-  h+=meetingReviewPanel();
-
-  h+=panelStart('Upcoming Demos','deals on the calendar');
-  h+=upcoming.length?rowsDeals(upcoming):emptyRow(6,'No demos booked.');
-  h+=panelEnd();
-
-  if(past.length){ h+=panelStart('Demos Past Due','mark outcome (no-show / follow-up / won)');
-    h+=rowsDeals(past); h+=panelEnd(); }
-
-  h+='<div class="panel"><div class="ph"><h3>Next Steps</h3></div><table><tbody>';
-  h+= steps.length? steps.map(s=>{
-      const o=s.o;
-      const name=s.t==='deal'? esc(o.name||aname(acct(o.accountId))) : esc(cname(o));
-      const oc=s.t==='deal'?"openDeal('"+o.id+"')":"openContact('"+o.id+"')";
-      return '<tr onclick="'+oc+'"><td class="tname">'+name+'</td><td>'+esc(s.txt)+'</td><td style="text-align:right"><span class="tag">'+(s.t)+'</span></td></tr>';
-    }).join('') : '<tr><td class="empty" colspan="3">Nothing queued.</td></tr>';
-  h+='</tbody></table></div>';
-
-  h+=panelStart('Follow-ups to Push','');
-  h+=follow.length?rowsDeals(follow):emptyRow(6,'None.');
-  h+=panelEnd();
   el('view-today').innerHTML=h;
 }
 function stat(n,l,accent,onclick,active){ const clk=onclick?' onclick="'+onclick+'"':''; const st=onclick?(' style="cursor:pointer'+(active?';outline:2px solid var(--acc);outline-offset:-2px':'')+'"'):''; return '<div class="stat'+(accent?' accent':'')+(active?' sel':'')+'"'+st+clk+'><div class="n">'+n+'</div><div class="l">'+esc(l)+'</div></div>'; }
