@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul21·z85';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul22·z86';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -957,7 +957,7 @@ function renderCounts(){
   el('p-accts').textContent=activeAccts().length; el('p-cts').textContent=activeContacts().length;
   el('p-closed').textContent=closed; el('p-live').textContent=live;
   const pi=el('p-intent'); if(pi){ try{ pi.textContent=intentRows().filter(r=>r.trending).length; }catch(e){ pi.textContent=0; } }
-  const ps=el('p-seq'); if(ps){ try{ ps.textContent=contacts().filter(c=>c.emailSeq&&!c.emailSeq.done).length; }catch(e){ ps.textContent=0; } }
+  const ps=el('p-seq'); if(ps){ try{ ps.textContent=contacts().filter(seqActive).length; }catch(e){ ps.textContent=0; } }
   const td=el('p-today'); if(td) td.textContent=todayCountReady?((store.__apollo&&store.__apollo.totalDue)||0):'…';
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
@@ -1895,7 +1895,7 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   p+=(+c.score||0)*4;                                        // intent score
   if(c.replied) p+=220;                                      // replied to an email
   if(c.apolloSeq) p+=50;                                     // active Apollo sequence
-  else if(c.emailSeq && !c.emailSeq.done) p+=45;             // active manual email cadence — same weight
+  else if(seqActive(c)) p+=45;                               // active manual email cadence — same weight (paused doesn't count)
   if(hasOpenCallCad(c)) p+=45;                               // active call cadence keeps it in the dialer rotation
   { const ls=lastSentTs(c); if(ls) p+=Math.max(0,60-((now-ls)/_DAY)*8); }  // fresh email touch keeps it warm
   if(isOwner(c)) p+=110;                                     // decision-maker
@@ -1925,7 +1925,7 @@ function intentC(c){ if(!c) return 0; const now=Date.now();
   p+=Math.min(opens,25)*14;                                  // open volume
   if(c.replied) p+=220;                                      // replied
   if(logTsBy(c,/🔗|clicked/i)) p+=80;                        // clicked a link
-  if(c.apolloSeq) p+=50; else if(c.emailSeq&&!c.emailSeq.done) p+=45;  // in an active sequence
+  if(c.apolloSeq) p+=50; else if(seqActive(c)) p+=45;  // in an active sequence (paused doesn't count)
   return Math.round(p);
 }
 // Tier = the two scores as one word. 🔥 engaged + reachable → call FIRST; ☎️ reachable but
@@ -2314,7 +2314,7 @@ function callPriority(c){ return heat(c); }
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
 // In a live sequence = a running manual cadence OR still enrolled in Apollo. These are your active
 // working set, so they belong in the Hot List even without a phone number on file (Saad's rule).
-const inSeq=c=>!!(c&&((c.emailSeq&&!c.emailSeq.done)||c.apolloSeq));
+const inSeq=c=>!!(c&&(seqActive(c)||c.apolloSeq));
 // Account diversity: keeps a single account from stacking many contacts near the top. Input is already
 // heat-sorted; at each slot it takes the hottest contact belonging to the account placed longest ago
 // (or never seen), so the #1 hottest lead still leads but the same business can't monopolize the queue —
@@ -2329,8 +2329,10 @@ function spreadByAccount(list){ const pool=list.slice(), out=[], lastPos={}; let
 function hotQueue(){ const now=Date.now();
   // In-pipe contacts (booked demo / follow-up / no-show deals on them or their account) live in
   // the Pipeline tab — the Hot List is strictly the cold/warm-call playlist.
-  // Phone is required to be callable — UNLESS the contact is in a sequence (then they show anyway).
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||inSeq(c))&&!hasOpenDeal(c);
+  // Phone is required to be callable — UNLESS the contact is in a sequence (then they show anyway,
+  // even with no phone/email). A sequence is an individual list, so that bypass only applies in the
+  // assignee's OWN Hot List (seqMine); it never floods another rep's queue with your sequence.
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
@@ -2346,7 +2348,7 @@ function hotQueue(){ const now=Date.now();
   // GUARANTEE every in-sequence contact appears, even past the 150 cap — sequences are the working
   // list and must never be dropped just because the cap filled with cold-call heat.
   const haveDue=new Set(due.map(c=>c.id));
-  const seqExtra=prefilter(contacts().filter(c=>!haveDue.has(c.id)&&elig(c)&&inSeq(c)&&isDue(c))).sort(byHeat);
+  const seqExtra=prefilter(contacts().filter(c=>!haveDue.has(c.id)&&elig(c)&&inSeq(c)&&seqMine(c)&&isDue(c))).sort(byHeat);
   if(seqExtra.length) due=due.concat(seqExtra);
   // Personal "fired to my Hot List" contacts pin to the very top of MY queue (most-recent first),
   // even if heat/cap wouldn't otherwise surface them. Never affects another rep's view.
@@ -2417,6 +2419,48 @@ const EMAIL_CADENCE=[
    runs in Apollo) and sends from his own inbox. Tokens {{first_name}} {{company}} fill per contact.
    type:'reply' = reply on the SAME Gmail thread as the prior step (Apollo reply_to_thread). ===== */
 const SEQ_LIB=[
+ // Email-only play — noAutoCall keeps calls from being interleaved (for inboxes with no phone on file).
+ {id:'email-only', name:'Email only (no calls)', match:'no phone / email-first', noAutoCall:true, steps:[
+  {d:0,type:'new',label:'Intro',subj:"Quick idea for {{company}} deliveries",body:`Hi {{first_name}},
+
+I'm {{rep}} with Shipday. We help restaurants like {{company}} run delivery on their own drivers — live dispatch, order tracking, and none of the 15-30% third-party commissions.
+
+Worth a quick 15-minute look this week?
+
+Best,
+{{rep}}`},
+  {d:3,type:'reply',label:'Bump',subj:"Re: Quick idea for {{company}} deliveries",body:`Hi {{first_name}},
+
+Following up. You keep taking orders exactly how you do today, but dispatch to your own drivers (or our on-demand network) with live tracking your customers actually see — so you stop renting your delivery to {{apps}}.
+
+Open to a short walkthrough?
+
+Best,
+{{rep}}`},
+  {d:4,type:'reply',label:'Value',subj:"The math on {{company}} delivery fees",body:`Hi {{first_name}},
+
+Quick ROI angle: even 50 delivery orders a week at a $30 ticket can mean $500-$1,000+/month in third-party commissions. Shipday is a flat platform fee — that difference goes back in your pocket.
+
+Want me to run the numbers for your volume?
+
+Best,
+{{rep}}`},
+  {d:5,type:'reply',label:'Break-up',subj:"Should I close your file, {{first_name}}?",body:`Hi {{first_name}},
+
+I don't want to keep crowding your inbox. If running delivery in-house isn't a priority for {{company}} right now, just say the word and I'll close things out.
+
+If it's worth 15 minutes, I'll make it easy.
+
+Best,
+{{rep}}`}
+ ]},
+ // Call-only play — pure phone cadence for warm/known numbers. Already all calls, so no email is added.
+ {id:'call-only', name:'Call only (phone blitz)', match:'have phone / no email', steps:[
+  {d:0,type:'call',label:'Call 1 — intro',body:`Cold intro call to {{first_name}} at {{company}}. Lead with: running delivery in-house with Shipday — own drivers, live tracking, no 15-30% third-party fees. Goal: book a 15-minute demo. No answer → short voicemail + try later.`},
+  {d:2,type:'call',label:'Call 2 — value',body:`Follow-up call to {{first_name}}. Angle: even 50 delivery orders/week at a $30 ticket = $500-$1,000+/month in third-party commissions saved on a flat Shipday fee. Ask for 15 minutes.`},
+  {d:4,type:'call',label:'Call 3 — proof',body:`Call {{first_name}}. Reference nearby Ohio brands (Romeo's, Zeppe's) already moving delivery in-house with Shipday. Offer to show exactly what it looks like for {{company}}.`},
+  {d:6,type:'call',label:'Call 4 — break-up',body:`Final call to {{first_name}}. If delivery isn't a priority right now, ask permission to close the file — leaves the door open and often prompts a callback.`}
+ ]},
  {id:'toast-pickup', name:'Toast Pickup-Only (no delivery)', match:'toast', steps:[
   {d:0,type:'new',label:'Intro',subj:"Adding delivery to {{company}}'s Toast site",body:`Hey {{first_name}},
 
@@ -2841,14 +2885,37 @@ Saad`},
 // 'task' (any manual to-do). 'new'/'reply' are email subtypes; reply threads onto the prior email.
 function stepKind(s){ const t=((s&&s.type)||'').toLowerCase(); return (t==='call'||t==='task')?t:'email'; }
 function isEmailStep(s){ return stepKind(s)==='email'; }
+// Every play should dial as well as email: interleave a CALL step right after each email so the
+// cadence is Email 1 → Call → Email 2 → Call → …  Idempotent — if a play already carries a call
+// step (a hand-built or already-interleaved play) it's left untouched, so this never double-inserts.
+function withCallSteps(steps){ if(!Array.isArray(steps)||!steps.length) return steps;
+  if(steps.some(s=>stepKind(s)==='call')) return steps;              // already has calls — leave as-is
+  const out=[]; let en=0;
+  steps.forEach(s=>{ out.push(s);
+    if(stepKind(s)==='email'){ en++;
+      out.push({d:1,type:'call',label:'Call — follow up on Email '+en,
+        body:'Quick call to {{first_name}} at {{company}} — reference Email '+en+' and go for a 15-minute demo of running delivery in-house with Shipday (own drivers, live tracking, no 15-30% third-party fees). No answer? Leave a short voicemail and try again.'}); }
+  });
+  return out; }
+// seqActive: in a sequence that's actively sending (enrolled, not completed, not paused). seqPaused:
+// pulled out but remembering where they were, waiting for a rep to re-enroll. Kept separate so paused
+// contacts drop out of the task queue / hot-list boosts but still show in the Sequences cockpit.
+function seqActive(c){ const s=c&&c.emailSeq; return !!(s&&!s.done&&!s.paused); }
+function seqPaused(c){ const s=c&&c.emailSeq; return !!(s&&s.paused&&!s.done); }
+// A sequence is an INDIVIDUAL working list: a contact in a sequence belongs to whoever owns it
+// (its assignee). seqMine gates the Hot List so a sequenced contact only surfaces in the assignee's
+// own Hot List — not everyone's. Unassigned = shared pool (shows for whoever's logged in).
+function seqMine(c){ const me=(typeof myRep==='function'&&myRep())||''; return !me||!c||!c.assignee||c.assignee===me; }
 // seqLib(): the live play library = built-in SEQ_LIB, with the team's edits/additions from
 // store.__seqLib layered on top (replace-by-id, else append). Everything that used to read SEQ_LIB
 // directly now reads seqLib() so custom + edited sequences flow everywhere (drawer, tab, editor).
 function seqLib(){ const ov=store&&store.__seqLib;
-  if(!Array.isArray(ov)||!ov.length) return SEQ_LIB;
-  const out=SEQ_LIB.slice(); const idx={}; out.forEach((q,i)=>{ idx[q.id]=i; });
-  ov.forEach(q=>{ if(!q||!q.id) return; if(idx[q.id]!=null) out[idx[q.id]]=q; else { idx[q.id]=out.length; out.push(q); } });
-  return out; }
+  let out;
+  if(!Array.isArray(ov)||!ov.length) out=SEQ_LIB.slice();
+  else { out=SEQ_LIB.slice(); const idx={}; out.forEach((q,i)=>{ idx[q.id]=i; });
+    ov.forEach(q=>{ if(!q||!q.id) return; if(idx[q.id]!=null) out[idx[q.id]]=q; else { idx[q.id]=out.length; out.push(q); } }); }
+  return out.map(q=>q.noAutoCall?Object.assign({},q,{steps:(q.steps||[]).slice()})   // email-only plays stay email-only
+    :Object.assign({},q,{steps:withCallSteps(q.steps)})); }                          // every other play gets calls interleaved
 function seqById(id){ if(id==='custom'){ const cu=store&&store.__cadence; return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return seqLib().find(q=>q.id===id)||null; }
 // Suggest the play that matches the account's stack; rep can always override in the picker.
 function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'').toLowerCase(), dl=((a&&a.delivery)||'').toLowerCase();
@@ -2892,7 +2959,7 @@ function editSig(){ const me=senderName();
   toast('Signature saved for '+me); }
 function inApolloSeq(c){ return !!(c&&c.apolloSeq); }
 function cadState(c){ if(!c) return 'none'; if(inApolloSeq(c)) return 'apollo';
-  const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&(+s.step||1)<=cadNFor(c)) return 'manual'; return 'none'; }
+  const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&s.paused) return 'paused'; if(s&&(+s.step||1)<=cadNFor(c)) return 'manual'; return 'none'; }
 // emailStep returns the copy for step n. Per-contact edits (c.emailSeq.override[n]) win over the
 // template, so a rep can tweak the subject/body for THIS contact in the drawer before sending.
 function emailStep(c,n){
@@ -2951,7 +3018,7 @@ function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def
 // puts the whole migrated Apollo book into your task queue and keeps it there. Caller must save().
 function syncSeqTasks(){ let made=0; const openMap={};
   tasks().forEach(t=>{ if(t.emailCad&&!t.done) openMap[t.contactId+'|'+(+t.cadStep||0)]=1; });
-  contacts().forEach(c=>{ const s=c.emailSeq; if(!s||s.done) return;
+  contacts().forEach(c=>{ const s=c.emailSeq; if(!s||s.done||s.paused) return;   // paused = pulled out, no task
     const def=cadDefFor(c), N=def.length; if(!N) return;
     const step=Math.min(Math.max(+s.step||1,1),N);
     if(openMap[c.id+'|'+step]) return;                                   // already queued for this step
@@ -3090,6 +3157,33 @@ function saveCadence(){ cadSync();
   if(!steps.length){ store.__cadence=null; toast('No copy entered — using default templates'); }
   else { store.__cadence=steps; toast('Saved '+steps.length+'-step sequence — the team now sends your copy'); }
   store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); }
+// Paused re-enroll: build the "resume at step" <option>s for a given play, defaulting to the step
+// RIGHT AFTER the email they were last on (find the pausedEmail-th email, suggest the next step —
+// the follow-up call — clamped to the last step). Rep can still pick ANY step.
+function resumeStepOpts(seqId,wasEmail){ const q=seqById(seqId); const steps=(q&&q.steps)||cadDef(); const N=steps.length;
+  let ec=0, suggest=N; for(let i=0;i<N;i++){ if(stepKind(steps[i])==='email'){ ec++; if(ec===(+wasEmail||1)){ suggest=Math.min(i+2,N); break; } } }
+  let o=''; for(let i=0;i<N;i++){ const sd=steps[i], kk=stepKind(sd), noun=kk==='call'?'📞 Call':kk==='task'?'✅ Task':'✉ Email';
+    o+='<option value="'+(i+1)+'"'+((i+1)===suggest?' selected':'')+'>Step '+(i+1)+': '+noun+(sd.label?' — '+esc(sd.label):'')+'</option>'; } return o; }
+function renderResumeSteps(id){ const c=contact(id); const s=(c&&c.emailSeq)||{}; const sel=el('resSeq_'+id); const seqId=(sel&&sel.value)||s.seqId;
+  const w=el('resStep_'+id); if(w) w.innerHTML=resumeStepOpts(seqId,+s.pausedEmail||1); }
+function pausedCadBlock(id){ const c=contact(id); const s=(c&&c.emailSeq)||{}; const q=seqById(s.seqId);
+  const seqName=(q&&q.name)||'a sequence'; const wasEmail=+s.pausedEmail||1;
+  let opts=seqLib().map(q2=>'<option value="'+q2.id+'"'+(q2.id===s.seqId?' selected':'')+'>'+esc(q2.name)+' · '+q2.steps.length+' steps</option>').join('');
+  if(isCustomCad()) opts+='<option value="custom">Custom (your pasted copy) · '+cadN()+' steps</option>';
+  return '<div class="cadbox"><div><b>⏸ Paused.</b> Was in <b>'+esc(seqName)+'</b> — last on <b>Email '+wasEmail+'</b>.</div>'+
+    '<div class="tsub" style="margin-top:3px">Put this contact back in. Pick the sequence + the step to resume at (defaults to the step right after where they left off).</div>'+
+    '<div style="margin-top:8px"><div class="tsub">Sequence</div><select id="resSeq_'+id+'" class="cflt" style="width:100%;box-sizing:border-box;margin-top:2px" onchange="renderResumeSteps(\''+id+'\')">'+opts+'</select></div>'+
+    '<div style="margin-top:8px"><div class="tsub">Resume at step</div><select id="resStep_'+id+'" class="cflt" style="width:100%;box-sizing:border-box;margin-top:2px">'+resumeStepOpts(s.seqId,wasEmail)+'</select></div>'+
+    '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="resumeSeq(\''+id+'\')">▶ Resume here</button>'+
+    '<button class="btn sm gh" style="color:var(--lost)" onclick="removeFromSeq(\''+id+'\')" title="Take this contact out of the sequence entirely">✕ Remove</button></div></div>'; }
+function resumeSeq(id){ const c=contact(id); if(!c||!c.emailSeq) return;
+  const sel=el('resSeq_'+id), ssel=el('resStep_'+id);
+  const seqId=(sel&&sel.value)||c.emailSeq.seqId; const q=seqById(seqId); const N=(q&&q.steps&&q.steps.length)||cadNFor(c);
+  const step=Math.min(Math.max(parseInt(ssel&&ssel.value,10)||1,1),N);
+  c.emailSeq={seqId:seqId,step:step,startedAt:c.emailSeq.startedAt||Date.now(),paused:false};
+  stampU(c); logAuto(c,'▶ Resumed sequence "'+((q&&q.name)||seqId)+'" at step '+step);
+  clearEmailTasks(id); ensureEmailTask(id,step); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+  toast('Resumed — '+((q&&q.name)||'sequence')+' · step '+step+' is in your task list'); }
 function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadState(c);
   if(st==='apollo') return '<div class="cadbox in"><b>● In Apollo sequence:</b> '+esc(c.apolloSeq)+'<div class="tsub" style="margin-top:3px">Managed in Apollo — no manual sends needed here.</div></div>';
   if(st==='none'||switchSeqFor===id){ const switching=switchSeqFor===id; const sug=(switching&&c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c);
@@ -3100,6 +3194,7 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
     '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">'+(switching?'⇄ Switch to this sequence':'✉️ Start sequence')+'</button>'+
     (switching?'<button class="btn sm gh" onclick="cancelSwitchSeq()">Cancel</button>':'')+
     '<button class="btn sm gh" onclick="openCadenceEditor()" title="Paste/tweak a fully custom sequence — used when you pick Custom">✎ Edit custom copy</button></div></div>'; }
+  if(st==='paused') return pausedCadBlock(id);
   const N=cadNFor(c), n=Math.min((+c.emailSeq.step||1),N), done=!!c.emailSeq.done;
   const def=cadDefFor(c)[n-1]||{}, k=stepKind(def);
   const lastBy=c.emailSeq.lastBy, lastAt=c.emailSeq.lastSentAt;
@@ -3320,7 +3415,7 @@ function acctIntent(a){
     if(lo){ if(now-lo<=7*_DAY) opens7+=oc||1; if(now-lo<=30*_DAY) opens30+=oc||1; }
     if(c.replied) replies++;
     if(lc) calls++;
-    if(c.apolloSeq || (c.emailSeq && !c.emailSeq.done) || hasOpenCallCad(c)) inSeq++;   // Apollo seq, active manual email cadence, OR call cadence all count
+    if(c.apolloSeq || seqActive(c) || hasOpenCallCad(c)) inSeq++;   // Apollo seq, active manual email cadence, OR call cadence all count (paused excluded)
     if(isOwner(c)) owners++;
     const act=Math.max(lo||0,lc||0,ls||0,+c.lastContactedTs||0); if(act>lastAct) lastAct=act;
     const hot7=(lo&&now-lo<=7*_DAY)||c.replied||(lc&&now-lc<=7*_DAY)||(ls&&now-ls<=7*_DAY); if(hot7) engaged7.add(c.id);
@@ -3410,11 +3505,12 @@ let seqFocus=null; let seqStepFocus=null; const seqStepsOpen={};
 // Roll up every contact's emailSeq into per-sequence buckets: active enrollees + completed +
 // a step histogram so we can show where people are stuck in each play.
 function seqStats(){
-  const map={}; seqLib().forEach(q=>{ map[q.id]={q,active:[],done:[],hist:{}}; });
-  map.__custom={q:{id:'__custom',name:'Default / pasted cadence',steps:cadDef()},active:[],done:[],hist:{}};
+  const map={}; seqLib().forEach(q=>{ map[q.id]={q,active:[],paused:[],done:[],hist:{}}; });
+  map.__custom={q:{id:'__custom',name:'Default / pasted cadence',steps:cadDef()},active:[],paused:[],done:[],hist:{}};
   contacts().forEach(c=>{ const s=c.emailSeq; if(!s) return;
     const key=(s.seqId&&map[s.seqId])?s.seqId:'__custom'; const m=map[key];
     if(s.done){ m.done.push(c); return; }
+    if(s.paused){ m.paused.push(c); return; }
     m.active.push(c); const N=(m.q.steps||[]).length||cadNFor(c); const st=Math.min(Math.max(+s.step||1,1),N||1); m.hist[st]=(m.hist[st]||0)+1;
   });
   return map;
@@ -3429,15 +3525,25 @@ function seqRowHtml(c){
   const s=c.emailSeq||{}; const q=seqById(s.seqId); const N=cadNFor(c); const step=Math.min(Math.max(+s.step||1,1),N);
   const done=!!s.done; const pct=Math.round((done?N:(step-1))/Math.max(N,1)*100);
   const a=acct(c.accountId); const stepDef=cadDefFor(c)[step-1]||{}; const lbl=stepDef.label||'';
+  const kk=stepKind(stepDef), noun=kk==='call'?'📞 Call':kk==='task'?'✅ Task':'✉ Email';
   const last=s.lastSentAt?('sent '+fmtAgo(s.lastSentAt)+(s.lastBy?(' · '+esc(s.lastBy)):'')):'not sent yet';
   return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
     '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
     '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
-    '<td>'+(done?'<span class="tag cust">✓ complete</span>':('Email '+step+'/'+N+(lbl?' · '+esc(lbl):'')))+'</td>'+
+    '<td>'+(done?'<span class="tag cust">✓ complete</span>':(noun+' '+step+'/'+N+(lbl?' · '+esc(lbl):'')))+'</td>'+
     '<td style="min-width:90px">'+bar(pct, done?'var(--won)':'var(--acc)')+'</td>'+
     '<td class="tsub">'+last+'</td></tr>';
 }
+function pausedRowHtml(c){ const s=c.emailSeq||{}; const q=seqById(s.seqId); const a=acct(c.accountId);
+  const wasEmail=+s.pausedEmail||1;
+  return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
+    '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
+    '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
+    '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
+    '<td><span class="tag" style="background:#3a2f14;color:#e9c46a">⏸ Email '+wasEmail+'</span></td>'+
+    '<td class="tsub">'+esc(c.assignee||'—')+'</td>'+
+    '<td><span class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">▶ resume</span></td></tr>'; }
 // Map an Apollo sequence NAME to the matching CRM play id (keyword match, order matters —
 // "toast delivery"/TDS is checked before "toast pickup"). Returns '' when there's no CRM twin
 // (those contacts stay in Apollo). Keeps Apollo campaign IDs out of the CRM entirely.
@@ -3512,16 +3618,19 @@ function resyncApolloSteps(){
 }
 function renderSequences(){
   const stats=seqStats();
-  const active=contacts().filter(c=>c.emailSeq&&!c.emailSeq.done);
+  const active=contacts().filter(seqActive);
+  const paused=contacts().filter(seqPaused);
   const done=contacts().filter(c=>c.emailSeq&&c.emailSeq.done);
   const apollo=contacts().filter(c=>c.apolloSeq);
   const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo');
   let h='<div class="panel"><div class="ph"><h3>✉️ Sequences</h3><span class="sub">your Apollo plays, run from inside the CRM — enroll from any contact drawer · click a play to see who\'s in it</span></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
       stat(active.length,'In a sequence',true,"setSeqFocus(null)",seqFocus===null)+
+      stat(paused.length,'Paused — re-enroll',false,"setSeqFocus('__paused')",seqFocus==='__paused')+
       stat(done.length,'Completed cadences',false)+
       stat(apollo.length,'Still in Apollo',false,"setSeqFocus('__apollo')",seqFocus==='__apollo')+
       stat(seqLib().length,'Plays available',false)+'</div>'+
+      (paused.length?'<div class="sub" style="margin-top:10px">⏸ '+paused.length+' contact'+(paused.length===1?' was':'s were')+' pulled out of their sequence. Open one and hit <b>▶ Resume</b> to put it back in at the step you choose.</div>':'')+
       (apollo.length?'<div class="sub" style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">⚠️ '+apollo.length+' contact'+(apollo.length===1?' is':'s are')+' still enrolled in Apollo. <button class="btn sm pri" onclick="migrateFromApollo()">⇄ Migrate all into CRM sequences</button>'+((__apolloUndo&&__apolloUndo.length)?'<button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button>':'')+'<span class="tsub">resumes each at their current Apollo step</span></div>':((__apolloUndo&&__apolloUndo.length)?'<div class="sub" style="margin-top:10px">✅ Migrated off Apollo. <button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button></div>':''))+
       (migd.length?'<div class="sub" style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">🔄 '+migd.length+' migrated from Apollo. <button class="btn sm" onclick="resyncApolloSteps()">⇄ Re-sync steps</button><span class="tsub">↻ Sync first, then click to fix anyone stuck on the wrong step</span></div>':'')+
     '</div></div>';
@@ -3537,7 +3646,7 @@ function renderSequences(){
         '<span style="font-size:9px;font-weight:'+(on?'800':'400')+';color:'+(on?'var(--ink)':'var(--mut)')+'">'+n+'</span></div>'; }).join('');
     h+='<div class="stat" style="cursor:pointer;text-align:left;padding:12px'+(sel?';outline:2px solid var(--acc);outline-offset:-2px':'')+'" onclick="setSeqFocus(\''+q.id+'\')">'+
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px"><b style="font-size:13px">'+esc(q.name)+'</b><span class="tsub">'+N+' steps</span></div>'+
-      '<div class="sub" style="margin:4px 0 8px">'+m.active.length+' active · '+m.done.length+' done'+(q.match?' · matches: '+esc(q.match):'')+'</div>'+
+      '<div class="sub" style="margin:4px 0 8px">'+m.active.length+' active'+(m.paused.length?' · '+m.paused.length+' paused':'')+' · '+m.done.length+' done'+(q.match?' · matches: '+esc(q.match):'')+'</div>'+
       '<div style="display:flex;align-items:flex-end;gap:3px;height:34px">'+histBars+'</div>'+
       '<div class="logbar" style="margin-top:8px" onclick="event.stopPropagation()"><button class="btn sm gh" onclick="toggleSeqSteps(\''+q.id+'\')">'+(seqStepsOpen[q.id]?'▾ hide steps':'▸ steps')+'</button><button class="btn sm gh" onclick="openSeqEditor(\''+q.id+'\')" title="Edit this sequence — add calls, tasks, emails">✎ edit</button><button class="btn sm gh" onclick="deleteSeqPlay(\''+q.id+'\')" title="'+(isBuiltinSeq(q.id)?'Reset to the built-in copy':'Delete this sequence')+'" style="color:var(--lost)">🗑</button></div>'+
       (seqStepsOpen[q.id]?('<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">'+q.steps.map((s,i)=>{ const kk=stepKind(s); const tlbl=kk==='call'?'📞 call':kk==='task'?'✅ task':(s.type==='reply'?'↩ reply':'✉ new'); return '<div style="margin-bottom:7px"><div style="font-size:11px;color:var(--mut)">Day '+(+s.d||0)+' · '+tlbl+(s.label?' · '+esc(s.label):'')+'</div>'+((s.subj||s.body)?'<div style="font-size:12px;font-weight:600">'+esc(s.subj||s.label||'')+'</div>':'')+'</div>'; }).join('')+'</div>'):'')+
@@ -3546,7 +3655,8 @@ function renderSequences(){
   h+='</div></div>';
   // Enrolled list, filtered by the focused play (or Apollo, or all).
   let list=active, title='Everyone in a sequence';
-  if(seqFocus==='__apollo'){ list=apollo.map(c=>c); title='Still in Apollo — migrate these'; }
+  if(seqFocus==='__paused'){ list=paused; title='Paused — pick these back up'; }
+  else if(seqFocus==='__apollo'){ list=apollo.map(c=>c); title='Still in Apollo — migrate these'; }
   else if(seqFocus){ const q=seqById(seqFocus); title='In "'+((q&&q.name)||seqFocus)+'"'; list=active.filter(c=>c.emailSeq&&c.emailSeq.seqId===seqFocus);
     if(seqStepFocus!=null){ const sd=(q&&q.steps&&q.steps[seqStepFocus-1])||{}, kk=stepKind(sd), noun=kk==='call'?'Call':kk==='task'?'Task':'Email';
       list=list.filter(c=>{ const N=cadNFor(c); return Math.min(Math.max(+((c.emailSeq&&c.emailSeq.step))||1,1),N)===seqStepFocus; });
@@ -3556,6 +3666,7 @@ function renderSequences(){
   let body;
   if(!list.length) body='<div class="qempty">No contacts here yet — open a contact and hit “Start sequence” in the drawer.</div>';
   else if(seqFocus==='__apollo') body='<table><tbody>'+apollo.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(c=>'<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer"><td><span class="tname">'+esc(cname(c))+'</span></td><td class="tsub">'+esc((acct(c.accountId)&&aname(acct(c.accountId)))||'')+'</td><td>'+esc(c.apolloSeq)+'</td><td class="tsub">Apollo</td></tr>').join('')+'</tbody></table>';
+  else if(seqFocus==='__paused') body='<table><thead><tr><th>Contact</th><th>Account</th><th>Was in</th><th>Last on</th><th>Assignee</th><th></th></tr></thead><tbody>'+list.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(pausedRowHtml).join('')+'</tbody></table>';
   else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Sequence</th><th>Step</th><th>Progress</th><th>Last email</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
   h+='<div class="panel"><div class="ph"><h3>👥 '+esc(title)+'</h3><span class="sub">'+list.length+' contact'+(list.length===1?'':'s')+clr+'</span></div>'+body+'</div>';
   el('view-sequences').innerHTML=h;
@@ -3568,7 +3679,7 @@ const SEQ_TYPES=[['new','✉ Email (new thread)'],['reply','↩ Email (reply on 
 function isBuiltinSeq(id){ return SEQ_LIB.some(q=>q.id===id); }
 function openSeqEditor(id){
   const q=id?seqById(id):null;
-  seqEdit=q?{ id:q.id, name:q.name||'', builtin:isBuiltinSeq(q.id),
+  seqEdit=q?{ id:q.id, name:q.name||'', builtin:isBuiltinSeq(q.id), noAutoCall:!!q.noAutoCall,
       steps:(q.steps||[]).map(s=>({type:(s.type||'new'),d:+s.d||0,label:s.label||'',subj:s.subj||'',body:s.body||''})) }
     :{ id:uid('seq'), name:'', builtin:false, steps:[{type:'new',d:0,label:'',subj:'',body:''}] };
   if(!seqEdit.steps.length) seqEdit.steps=[{type:'new',d:0,label:'',subj:'',body:''}];
@@ -3617,6 +3728,7 @@ function saveSeqEditor(){ seqEditSync(); if(!seqEdit) return;
     .filter(s=>{ const k=stepKind(s); return k==='email'?(s.subj||s.body||s.label):(s.label||s.body); });
   if(!steps.length){ toast('Add at least one step with content'); return; }
   const entry={id:seqEdit.id,name:name,match:'',steps:steps};
+  if(seqEdit.noAutoCall) entry.noAutoCall=true;   // keep email-only plays email-only through edits
   const lib=(store.__seqLib||[]).slice(); const i=lib.findIndex(q=>q.id===entry.id);
   if(i>=0) lib[i]=entry; else lib.push(entry); store.__seqLib=lib;
   store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer();
