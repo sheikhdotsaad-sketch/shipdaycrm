@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul23·z88';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul23·z89';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4211,6 +4211,7 @@ function openAccount(id){
   // URL fields render with an ↗ open button beside them (input stays editable)
   const linkFld=(lab,setter,val)=>fld(lab,'<div style="display:flex;gap:6px;align-items:center"><div style="flex:1">'+inp(setter,val)+'</div>'+(val?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(val))+'" title="Open in new tab">↗</a>':'')+'</div>');
   b+='<div class="f2">'+linkFld('Website',"setA('"+id+"','website',this.value)",a.website)+linkFld('Online ordering link',"setA('"+id+"','ordering',this.value)",a.ordering)+'</div>';
+  b+=linkFld('Google link (Business Profile / Maps)',"setA('"+id+"','googleUrl',this.value)",a.googleUrl);
   b+='<div class="f2">'+fld('POS',inp("setA('"+id+"','pos',this.value)",a.pos))+fld('3rd-party delivery (DoorDash / UberEats…)',inp("setA('"+id+"','delivery',this.value)",a.delivery))+'</div>';
   b+=fld('Hours (e.g. Mon-Fri 11am-9pm; Sat 12pm-8pm)',inp("setA('"+id+"','hours',this.value)",a.hours));
   b+=fld('Assigned to',assignPicker("setAssignee('a','"+id+"',this.value)",a.assignee));  // source kept in data, not shown (Saad's ask)
@@ -4228,7 +4229,7 @@ function openAccount(id){
     }
   }
   b+='<div class="sec">Quick links</div><div class="logbar">'+
-     '<a class="btn sm gh" target="_blank" href="'+gsearch(a)+'">🔎 Google</a>'+
+     '<a class="btn sm gh" target="_blank" href="'+(a.googleUrl?esc(_extUrl(a.googleUrl)):gsearch(a))+'">🔎 Google'+(a.googleUrl?' ★':'')+'</a>'+
      '<a class="btn sm gh" target="_blank" href="'+gmaps(a)+'">📍 Maps</a>'+
      (a.website?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.website))+'">🌐 Website</a>':'')+
      (a.ordering?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.ordering))+'">🛒 Ordering</a>':'')+
