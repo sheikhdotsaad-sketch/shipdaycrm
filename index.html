@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul22·z86';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul23·z87';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3017,6 +3017,9 @@ function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def
 // (dedups by contact+step), doesn't touch future-dated next-steps that already exist. This is what
 // puts the whole migrated Apollo book into your task queue and keeps it there. Caller must save().
 function syncSeqTasks(){ let made=0; const openMap={};
+  // self-heal: drop any open cadence task whose contact is no longer actively sequenced
+  // (paused / done / unenrolled). Guards against a stale build re-spawning paused tasks.
+  store.__tasks=tasks().filter(t=>{ if(!t.emailCad||t.done) return true; const c=contact(t.contactId); return !!(c&&seqActive(c)); });
   tasks().forEach(t=>{ if(t.emailCad&&!t.done) openMap[t.contactId+'|'+(+t.cadStep||0)]=1; });
   contacts().forEach(c=>{ const s=c.emailSeq; if(!s||s.done||s.paused) return;   // paused = pulled out, no task
     const def=cadDefFor(c), N=def.length; if(!N) return;
