@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul23·z90';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul23·z94';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1457,7 +1457,11 @@ function fireToMyHot(cid){ const c=contact(cid); if(!c) return; const me=myRep()
   toast('🔥 Pinned to your Hot List', ()=>{ delete c.hotFor[me]; stampU(c); save(); renderActive(); renderTaskWidget(); }); }
 // Per-rep task view: each rep sees their OWN tasks + anything unassigned (shared pool). Assigned
 // tasks stay private to that rep, so Saad's book doesn't clutter Embert's queue and vice-versa.
-function taskMine(t){ const mr=(typeof myRep==='function'&&myRep())||''; return !mr || !t.assignee || t.assignee===mr; }
+// Reps are typed freeform, so the SAME person appears as both "Saad" and "Saad Sheikh". Canonicalize
+// on the first name (small team, first names are unique) so ownership matches however it was entered.
+function repCanon(n){ return String(n||'').trim().toLowerCase().split(/\s+/)[0]; }
+function repSame(a,b){ const x=repCanon(a); return !!x && x===repCanon(b); }
+function taskMine(t){ const mr=repCanon((typeof myRep==='function'&&myRep())||''); return !mr || !t.assignee || repCanon(t.assignee)===mr; }
 function openTaskCount(){ return tasks().filter(t=>!t.done&&taskMine(t)).length; }
 let twFilter='all';
 function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
@@ -1897,6 +1901,7 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   if(c.apolloSeq) p+=50;                                     // active Apollo sequence
   else if(seqActive(c)) p+=45;                               // active manual email cadence — same weight (paused doesn't count)
   if(hasOpenCallCad(c)) p+=45;                               // active call cadence keeps it in the dialer rotation
+  if(onCallStep(c)) p+=120;                                  // current cadence step IS a call — surface it so the rep dials it and the sequence doesn't stall
   { const ls=lastSentTs(c); if(ls) p+=Math.max(0,60-((now-ls)/_DAY)*8); }  // fresh email touch keeps it warm
   if(isOwner(c)) p+=110;                                     // decision-maker
   if(telNum(c)) p+=15;                                       // reachable by phone
@@ -2344,7 +2349,10 @@ function hotQueue(){ const now=Date.now();
   const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
-  const base=prefilter(contacts().filter(c=>c.warmth==='Hot'&&elig(c)));   // contacts you tagged Hot
+  // Body of the list = contacts you tagged Hot PLUS anyone sitting on a sequence CALL step (a planned,
+  // meaningful dial). Call-steps join the ranked body so they compete by heat in the top 150 and get
+  // dialed — not stranded in the appended tail behind every Hot-tagged lead.
+  const base=prefilter(contacts().filter(c=>(c.warmth==='Hot'||(onCallStep(c)&&seqMine(c)))&&elig(c)));
   let due=base.filter(isDue).sort(byHeat);
   const snoozed=base.filter(c=>+c.nextCallAt>now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
   if(due.length<HOT_CAP){                                    // auto-fill to 150 with next-best heat
@@ -2911,10 +2919,15 @@ function withCallSteps(steps){ if(!Array.isArray(steps)||!steps.length) return s
 // contacts drop out of the task queue / hot-list boosts but still show in the Sequences cockpit.
 function seqActive(c){ const s=c&&c.emailSeq; return !!(s&&!s.done&&!s.paused); }
 function seqPaused(c){ const s=c&&c.emailSeq; return !!(s&&s.paused&&!s.done); }
+// onCallStep: the contact's CURRENT sequence step is a call — a planned, meaningful dial. The Hot List
+// is a dialer playlist, so these should ride near the top and get cleared before the cadence stalls.
+function onCallStep(c){ const s=c&&c.emailSeq; if(!s||s.done||s.paused) return false;
+  const def=cadDefFor(c); if(!def||!def.length) return false;
+  const st=def[Math.min(Math.max(+s.step||1,1),def.length)-1]; return stepKind(st)==='call'; }
 // A sequence is an INDIVIDUAL working list: a contact in a sequence belongs to whoever owns it
 // (its assignee). seqMine gates the Hot List so a sequenced contact only surfaces in the assignee's
 // own Hot List — not everyone's. Unassigned = shared pool (shows for whoever's logged in).
-function seqMine(c){ const me=(typeof myRep==='function'&&myRep())||''; return !me||!c||!c.assignee||c.assignee===me; }
+function seqMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); return !me||!c||!c.assignee||repCanon(c.assignee)===me; }
 // seqLib(): the live play library = built-in SEQ_LIB, with the team's edits/additions from
 // store.__seqLib layered on top (replace-by-id, else append). Everything that used to read SEQ_LIB
 // directly now reads seqLib() so custom + edited sequences flow everywhere (drawer, tab, editor).
@@ -3014,11 +3027,18 @@ function resetSeqEdit(id){ const c=contact(id); if(!c||!c.emailSeq||!c.emailSeq.
 // (from the drawer OR by checking the task) advances the cadence and spawns the NEXT step's task.
 // emailSeq stays the source of truth; the task mirrors the current step. Steps are reversible.
 function clearEmailTasks(id){ store.__tasks=tasks().filter(t=>!(t.emailCad&&t.contactId===id)); }
+// seqStarter: WHO is running this contact's cadence, so the step TASKS route to THEM (not whoever
+// is currently logged in). Stamped on emailSeq.owner when the sequence is started; older sequences
+// fall back to the "Started/Switched sequence" audit line's author, then the contact's assignee.
+function seqStarter(c){ const s=c&&c.emailSeq; if(s&&s.owner) return s.owner;
+  const lg=(c&&c.log)||[];
+  for(let i=lg.length-1;i>=0;i--){ const l=lg[i]; if(l&&l.by&&/Started sequence|Switched to sequence/i.test(l.txt||'')) return l.by; }
+  return (c&&c.assignee)||''; }
 function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def=cadDefFor(c), N=def.length; if(step<1||step>N) return;
   if(tasks().some(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===step&&!t.done)) return;   // already an open task for this step
   const s=def[step-1], lbl=s&&s.label?(' — '+s.label):''; const wait=(+ (s&&s.d)||0);            // days after the prior step
   const k=stepKind(s); const noun=k==='call'?'Call':k==='task'?'Task':'Email'; const tt=k==='call'?'call':k==='task'?'other':'email';
-  addTask({title:noun+' '+step+'/'+N+lbl,type:tt,contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:c.assignee||''}); }
+  addTask({title:noun+' '+step+'/'+N+lbl,type:tt,contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:seqStarter(c)}); }
 // syncSeqTasks: the task dashboard is DERIVED from emailSeq (the real source of truth, which merges
 // safely per-contact) instead of relying on __tasks alone — __tasks syncs last-writer-wins and can
 // be clobbered by another tab, silently emptying the queue. On every load + sync we regenerate a
@@ -3032,16 +3052,22 @@ function syncSeqTasks(){ let made=0; const openMap={};
   const before=tasks().length;
   store.__tasks=tasks().filter(t=>{ if(!t.emailCad||t.done) return true; const c=contact(t.contactId); return !!(c&&seqActive(c)); });
   const pruned=before-tasks().length;
-  tasks().forEach(t=>{ if(t.emailCad&&!t.done) openMap[t.contactId+'|'+(+t.cadStep||0)]=1; });
+  // self-heal ownership: an open cadence task should belong to whoever RUNS the sequence, so it lands
+  // in that rep's dashboard (not the shared pool). Re-stamp any that drifted; count as a change so it
+  // persists + pushes. Fixes sequences started before owner-tracking (routes them via the audit line).
+  let reassigned=0;
+  tasks().forEach(t=>{ if(!t.emailCad||t.done) return; const c=contact(t.contactId);
+    if(c){ const want=seqStarter(c); if(want&&t.assignee!==want){ t.assignee=want; reassigned++; } }
+    openMap[t.contactId+'|'+(+t.cadStep||0)]=1; });
   contacts().forEach(c=>{ const s=c.emailSeq; if(!s||s.done||s.paused) return;   // paused = pulled out, no task
     const def=cadDefFor(c), N=def.length; if(!N) return;
     const step=Math.min(Math.max(+s.step||1,1),N);
     if(openMap[c.id+'|'+step]) return;                                   // already queued for this step
     const st=def[step-1], lbl=(st&&st.label)?(' — '+st.label):'';
     const k=stepKind(st), noun=k==='call'?'Call':k==='task'?'Task':'Email', tt=k==='call'?'call':k==='task'?'other':'email';
-    tasks().push({id:uid('t'),type:tt,title:noun+' '+step+'/'+N+lbl,due:today0().getTime(),done:false,createdAt:Date.now(),contactId:c.id,accountId:'',emailCad:true,cadStep:step,assignee:c.assignee||''});
+    tasks().push({id:uid('t'),type:tt,title:noun+' '+step+'/'+N+lbl,due:today0().getTime(),done:false,createdAt:Date.now(),contactId:c.id,accountId:'',emailCad:true,cadStep:step,assignee:seqStarter(c)});
     openMap[c.id+'|'+step]=1; made++; });
-  return made+pruned; }
+  return made+pruned+reassigned; }
 // advanceStep: the shared engine behind every "step done" — logs the touch, moves emailSeq.step
 // forward, closes THIS step's task, and spawns the next. Works for any step kind; the caller
 // supplies the log line so the icon/wording matches (📧 email / 📞 call / ✅ task).
@@ -3075,9 +3101,9 @@ function startEmailCadence(id){ const c=contact(id); if(!c)return;
   if(was){ const curName=(seqById(c.emailSeq.seqId)||{}).name||'the current sequence';
     if(!confirm('Replace "'+curName+'" with "'+((q&&q.name)||'this sequence')+'"?\n\nProgress on the current sequence will be cleared and the new one starts at Email 1.')) return; }
   switchSeqFor=null;
-  c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId}; stampU(c);
+  c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId,owner:myRep()||''}; if(!c.assignee&&myRep())c.assignee=myRep(); stampU(c);
   logAuto(c,(was?'⇄ Switched to sequence "':'✉️ Started sequence "')+((q&&q.name)||'Email')+'" ('+cadNFor(c)+' steps)'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast((was?'Switched to ':'Sequence started — ')+((q&&q.name)||'sequence')+' · Email 1 is in your task list'); }
-function restartCadence(id){ const c=contact(id); if(!c)return; const seqId=(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c); c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId}; stampU(c); logAuto(c,'↻ Restarted email cadence'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Cadence restarted'); }
+function restartCadence(id){ const c=contact(id); if(!c)return; const seqId=(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c); const own=(c.emailSeq&&c.emailSeq.owner)||myRep()||''; c.emailSeq={step:1,startedAt:Date.now(),seqId:seqId,owner:own}; stampU(c); logAuto(c,'↻ Restarted email cadence'); clearEmailTasks(id); ensureEmailTask(id,1); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Cadence restarted'); }
 let switchSeqFor=null;  // contact id currently showing the "pick a new sequence" inline picker
 function switchSequence(id){ switchSeqFor=id; refreshDrawer(); }   // reveal picker inline; nothing cleared until they Start
 function cancelSwitchSeq(){ switchSeqFor=null; refreshDrawer(); }
@@ -3195,7 +3221,7 @@ function resumeSeq(id){ const c=contact(id); if(!c||!c.emailSeq) return;
   const sel=el('resSeq_'+id), ssel=el('resStep_'+id);
   const seqId=(sel&&sel.value)||c.emailSeq.seqId; const q=seqById(seqId); const N=(q&&q.steps&&q.steps.length)||cadNFor(c);
   const step=Math.min(Math.max(parseInt(ssel&&ssel.value,10)||1,1),N);
-  c.emailSeq={seqId:seqId,step:step,startedAt:c.emailSeq.startedAt||Date.now(),paused:false};
+  c.emailSeq={seqId:seqId,step:step,startedAt:c.emailSeq.startedAt||Date.now(),paused:false,owner:c.emailSeq.owner||myRep()||''};
   stampU(c); logAuto(c,'▶ Resumed sequence "'+((q&&q.name)||seqId)+'" at step '+step);
   clearEmailTasks(id); ensureEmailTask(id,step); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   toast('Resumed — '+((q&&q.name)||'sequence')+' · step '+step+' is in your task list'); }
