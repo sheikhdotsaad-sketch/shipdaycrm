@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul23·z89';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul23·z90';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1900,6 +1900,15 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   { const ls=lastSentTs(c); if(ls) p+=Math.max(0,60-((now-ls)/_DAY)*8); }  // fresh email touch keeps it warm
   if(isOwner(c)) p+=110;                                     // decision-maker
   if(telNum(c)) p+=15;                                       // reachable by phone
+  // HUMAN-QUALIFIED SIGNAL — an SDR/AE already worked this lead. A booked demo (held OR a
+  // no-show: they committed time then ghosted) is a far warmer re-engagement target than a cold
+  // name with zero email opens, so it should outrank one. "Not interested" cools it right down.
+  const disp=String(c.dispo||c.status||'').toLowerCase();
+  if(/demo held/.test(disp)) p+=160;                         // sat through a full demo — close it
+  else if(/no show/.test(disp)) p+=150;                      // booked but ghosted — chase to re-book
+  else if(/reschedul/.test(disp)) p+=140;                    // actively rescheduling — still engaged
+  else if(/not interested|dnc/.test(disp)) p-=140;           // told us no — sink it
+  if(c.warmth==='Hot') p+=60; else if(c.warmth==='Warm') p+=25;  // manual/inherited warmth tag
   const staleD=touch?(now-touch)/_DAY:45;
   p+=Math.min(staleD,30)*2;                                  // staleness, capped so ancients don't hog
   // FAIRNESS — spread the work so the same names don't monopolize the queue and under-worked leads
