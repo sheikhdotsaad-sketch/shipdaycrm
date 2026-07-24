@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul23·z94';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul24·z95';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2956,7 +2956,8 @@ function cadNFor(c){ return cadDefFor(c).length; }
 function isCustomCad(){ const c=store&&store.__cadence; return !!(Array.isArray(c)&&c.length); }
 function cadN(){ return cadDef().length; }
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
-  const fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a);
+  const _nm=String(cname(c)||'').trim();
+  const fn=(c.first||'').trim() || ((_nm && _nm!=='(no name)') ? _nm.split(' ')[0] : '') || 'there', an=aname(a);
   const map={ first:fn, first_name:fn, account:an, company:an, rep:senderName(),
     apps:(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats',
     locs:String(a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0) };
