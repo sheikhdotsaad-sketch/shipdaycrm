@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul24·z95';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul24·z96';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -825,6 +825,15 @@ function outreachBar(c){
           x+='<button class="btn sm gh" onclick="copyText(\''+esc(ph).replace(/'/g,"")+'\')">Copy #</button>'; }
   x+='<a class="btn sm gh" target="_blank" href="'+(c.apolloUrl||apolloSearch(c))+'">🚀 Apollo</a>';
   if(c.linkedin){ x+='<a class="btn sm gh" target="_blank" href="'+esc(c.linkedin)+'">in</a>'; }
+  // Business quick-links (same as the call modal / account drawer) so you can research the
+  // restaurant without leaving the contact drawer. Honors the account's editable Google link.
+  if(a){
+    const gUrl=a.googleUrl?esc(_extUrl(a.googleUrl)):esc(gsearch(a));
+    x+='<a class="btn sm gh" target="_blank" rel="noopener" href="'+gUrl+'">🔎 Google'+(a.googleUrl?' ★':'')+'</a>';
+    x+='<a class="btn sm gh" target="_blank" rel="noopener" href="'+esc(gmaps(a))+'">📍 Maps</a>';
+    if(a.website)  x+='<a class="btn sm gh" target="_blank" rel="noopener" href="'+esc(_extUrl(a.website))+'">🌐 Site</a>';
+    if(a.ordering) x+='<a class="btn sm gh" target="_blank" rel="noopener" href="'+esc(_extUrl(a.ordering))+'">🛒 Ordering</a>';
+  }
   x+='</div>';
   return x;
 }
@@ -3009,21 +3018,87 @@ function emailStep(c,n){
     }
   }
   const ov=c.emailSeq&&c.emailSeq.override&&c.emailSeq.override[n];
-  if(ov){ if(ov.subj!=null&&ov.subj!=='') base.subj=ov.subj; if(ov.body!=null&&ov.body!=='') base.body=ov.body; base.edited=true; }
+  if(ov){ if(ov.subj!=null&&ov.subj!=='') base.subj=ov.subj; if(ov.body!=null&&ov.body!=='') base.body=ov.body; base.edited=true;
+    if(ov.html){ base.html=true; } }   // rich-text override: body is HTML, sent verbatim (no applySig)
   return base;
 }
 // Persist the rep's inline edits to THIS contact's current step (read straight from the drawer
 // fields). Called on Send/Copy/Log so unsaved tweaks are never lost, and by "Save edits".
 function saveSeqEdit(id,silent){ const c=contact(id); if(!c||!c.emailSeq) return; const N=cadNFor(c); const n=Math.min(+c.emailSeq.step||1,N);
   const sb=el('seqSubj_'+id), bd=el('seqBody_'+id); if(!sb&&!bd) return;
+  const isHtml=!!(bd&&bd.getAttribute&&bd.getAttribute('contenteditable')==='true');
   const base=(function(){ const o=c.emailSeq.override; c.emailSeq.override=null; const b=emailStep(c,n); c.emailSeq.override=o; return b; })();
-  const subj=sb?sb.value:base.subj, body=bd?bd.value:base.body;
+  const subj=sb?sb.value:base.subj;
+  let body=bd?(isHtml?sanitizeRich(bd.innerHTML):bd.value):base.body;
+  // a rich editor emptied to nothing but <br>/&nbsp;/whitespace = treat as "back to template"
+  if(isHtml && body.replace(/<br\s*\/?>|&nbsp;|\s|<div>|<\/div>|<p>|<\/p>/gi,'')==='') body=base.body;
   const changed=(subj!==base.subj)||(body!==base.body);
   c.emailSeq.override=c.emailSeq.override||{};
-  if(changed) c.emailSeq.override[n]={subj:subj,body:body}; else delete c.emailSeq.override[n];
+  if(changed){ const ov={subj:subj,body:body}; if(isHtml && body!==base.body) ov.html=true; c.emailSeq.override[n]=ov; }
+  else delete c.emailSeq.override[n];
   stampU(c); save(); if(!silent){ refreshDrawer(); toast(changed?'Edits saved for '+cname(c):'Reset to template'); } }
 function resetSeqEdit(id){ const c=contact(id); if(!c||!c.emailSeq||!c.emailSeq.override) return; const N=cadNFor(c); const n=Math.min(+c.emailSeq.step||1,N);
   if(c.emailSeq.override[n]){ delete c.emailSeq.override[n]; stampU(c); save(); refreshDrawer(); toast('Reset to the template copy'); } }
+// ===== Rich-text email editor (contenteditable). Only the CURRENT step goes HTML — plain steps are
+// untouched. Images are pasted/dropped/picked, downscaled to a bounded JPEG data-URI client-side,
+// and the gmail-send edge fn re-hosts them as inline CID attachments so they render in every inbox.
+const RT_MAX_DIM=1000, RT_JPEG_Q=0.8, RT_MAX_BYTES=700*1024;
+// keep only email-safe tags; strip inline style/class (Word/Docs paste bloat) EXCEPT on our own <img>.
+function sanitizeRich(html){ try{
+  const box=document.createElement('div'); box.innerHTML=String(html||'');
+  const OK={B:1,I:1,U:1,STRONG:1,EM:1,A:1,UL:1,OL:1,LI:1,BR:1,DIV:1,P:1,IMG:1,SPAN:1};
+  box.querySelectorAll('*').forEach(node=>{
+    if(!OK[node.tagName]){ node.replaceWith(...node.childNodes); return; }
+    if(node.tagName==='IMG'){ const src=node.getAttribute('src')||''; const st=node.getAttribute('style')||'';
+      [...node.attributes].forEach(a=>node.removeAttribute(a.name)); node.setAttribute('src',src);
+      node.setAttribute('style', /max-width/.test(st)?st:'max-width:600px;height:auto;display:block;margin:6px 0'); return; }
+    if(node.tagName==='A'){ const href=node.getAttribute('href')||''; [...node.attributes].forEach(a=>node.removeAttribute(a.name));
+      if(href) node.setAttribute('href',href); node.setAttribute('target','_blank'); return; }
+    [...node.attributes].forEach(a=>{ if(a.name==='style'||a.name==='class'||/^on/i.test(a.name)) node.removeAttribute(a.name); });
+  });
+  return box.innerHTML;
+}catch(e){ return String(html||''); } }
+function rtBtn(id,cmd,label){ return '<button type="button" class="btn sm gh" onmousedown="event.preventDefault()" onclick="rtCmd(\''+id+'\',\''+cmd+'\')">'+label+'</button>'; }
+function rtCmd(id,cmd){ const ed=el('seqBody_'+id); if(!ed)return; ed.focus(); try{document.execCommand(cmd,false,null);}catch(_){ } saveSeqEdit(id,true); }
+function rtLink(id){ const ed=el('seqBody_'+id); if(!ed)return; ed.focus(); const u=prompt('Link URL:','https://'); if(!u)return; try{document.execCommand('createLink',false,_extUrl(u));}catch(_){ } saveSeqEdit(id,true); }
+function plainToRich(id){ const c=contact(id); if(!c||!c.emailSeq)return; const N=cadNFor(c),n=Math.min(+c.emailSeq.step||1,N);
+  const cur=emailStep(c,n); const html=esc(cur.body).replace(/\r?\n/g,'<br>');
+  c.emailSeq.override=c.emailSeq.override||{}; c.emailSeq.override[n]={subj:cur.subj,body:html,html:true};
+  stampU(c); save(); refreshDrawer(); }
+function richToPlain(id){ const c=contact(id); if(!c||!c.emailSeq)return; const N=cadNFor(c),n=Math.min(+c.emailSeq.step||1,N);
+  const ed=el('seqBody_'+id); const plain=(ed?ed.innerHTML:'').replace(/<\/(div|p|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\n{3,}/g,'\n\n').trim();
+  const base=(function(){const o=c.emailSeq.override;c.emailSeq.override=null;const b=emailStep(c,n);c.emailSeq.override=o;return b;})();
+  c.emailSeq.override=c.emailSeq.override||{}; const subj=(el('seqSubj_'+id)||{}).value||base.subj;
+  if(plain!==base.body||subj!==base.subj) c.emailSeq.override[n]={subj:subj,body:plain}; else delete c.emailSeq.override[n];
+  stampU(c); save(); refreshDrawer(); toast('Switched to plain text — inline images dropped'); }
+function rtPaste(ev,id){ const items=(ev.clipboardData&&ev.clipboardData.items)||[];
+  for(const it of items){ if(it.kind==='file'&&/^image\//.test(it.type)){ ev.preventDefault(); rtImageFile(id,[it.getAsFile()]); return; } } }
+function rtDrop(ev,id){ const fs=(ev.dataTransfer&&ev.dataTransfer.files)||[]; const imgs=[...fs].filter(f=>/^image\//.test(f.type));
+  if(imgs.length){ ev.preventDefault(); rtImageFile(id,imgs); } }
+function rtImageFile(id,files){ files=[...(files||[])].filter(f=>f&&/^image\//.test(f.type));
+  if(!files.length){ toast('Not an image'); return; }
+  files.forEach(f=>{ if(f.size>15*1024*1024){ toast('Image too big (>15MB) — skipped'); return; }
+    const url=URL.createObjectURL(f), img=new Image();
+    img.onload=function(){ URL.revokeObjectURL(url);
+      let w=img.width,h=img.height,s=Math.min(1,RT_MAX_DIM/Math.max(w,h)); w=Math.max(1,Math.round(w*s)); h=Math.max(1,Math.round(h*s));
+      const cv=document.createElement('canvas'); cv.width=w; cv.height=h; const ctx=cv.getContext('2d');
+      ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+      let q=RT_JPEG_Q, d=cv.toDataURL('image/jpeg',q);
+      while(d.length*0.75>RT_MAX_BYTES&&q>0.4){ q-=0.1; d=cv.toDataURL('image/jpeg',q); }
+      try{ if(JSON.stringify(store).length+d.length>4*1024*1024){ toast('Store near storage limit — image not added'); return; } }catch(_){ }
+      rtInsertImg(id,d,w); };
+    img.onerror=function(){ URL.revokeObjectURL(url); toast('Could not read image'); };
+    img.src=url; }); }
+function rtInsertImg(id,dataUrl,w){ const ed=el('seqBody_'+id); if(!ed)return; ed.focus();
+  const cap=Math.min(w||600,600);
+  const html='<img src="'+dataUrl+'" style="max-width:'+cap+'px;height:auto;display:block;margin:6px 0" alt="">';
+  // Insert at the caret when the editor holds a live selection; otherwise (e.g. focus was stolen by
+  // the file picker) execCommand('insertHTML') returns false without throwing → append to the end.
+  let ok=false; const sel=window.getSelection();
+  const inEd=sel&&sel.rangeCount&&ed.contains(sel.getRangeAt(0).commonAncestorContainer);
+  if(inEd){ try{ ok=document.execCommand('insertHTML',false,html); }catch(_){ ok=false; } }
+  if(!ok){ ed.insertAdjacentHTML('beforeend',html); }
+  saveSeqEdit(id,true); }
 // Email cadence surfaces ONE checkable task at a time — the step that's due now. Sending a step
 // (from the drawer OR by checking the task) advances the cadence and spawns the NEXT step's task.
 // emailSeq stays the source of truth; the task mirrors the current step. Steps are reversible.
@@ -3119,7 +3194,17 @@ function removeFromSeq(id){ const c=contact(id); if(!c||!c.emailSeq){ toast('Not
   toast('Removed from sequence', ()=>{ c.emailSeq=prevSeq; prevTasks.forEach(t=>tasks().push(t)); stampU(c);
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); }); }
 function copyEmailStep(id){ const c=contact(id); if(!c)return; saveSeqEdit(id,true); const n=Math.min((c.emailSeq&&+c.emailSeq.step)||1,cadNFor(c)); const e=emailStep(c,n);
-  const txt='Subject: '+e.subj+'\n\n'+e.body;
+  // Rich step: copy BOTH html + plain so pasting into Gmail keeps formatting/images; else plain.
+  if(e.html && navigator.clipboard && window.ClipboardItem){
+    const html=fillTokens(e.body,c);
+    const plain=html.replace(/<\/(div|p|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ');
+    try{ const item=new ClipboardItem({
+        'text/html':new Blob(['Subject: '+esc(e.subj)+'<br><br>'+html],{type:'text/html'}),
+        'text/plain':new Blob(['Subject: '+e.subj+'\n\n'+plain],{type:'text/plain'}) });
+      navigator.clipboard.write([item]).then(()=>toast('Email '+n+' copied (rich)')).catch(()=>copyPlainStep(e,n)); return;
+    }catch(_){ } }
+  copyPlainStep(e,n); }
+function copyPlainStep(e,n){ const txt='Subject: '+e.subj+'\n\n'+e.body;
   const ta=document.createElement('textarea'); ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
   try{ document.execCommand('copy'); }catch(_){} document.body.removeChild(ta); toast('Email '+n+' copied — paste into your inbox'); }
 function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
@@ -3155,8 +3240,9 @@ async function sendSeqEmail(id){
   const by=senderName();
   setSync&&setSync('busy','Sending Email '+n+'…');
   try{
+    const bodyOut=e.html?fillTokens(e.body,c):e.body;
     const r=await fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
-      body:JSON.stringify({to:c.email,subject:e.subj,body:e.body,cid:c.id,rep:by,
+      body:JSON.stringify({to:c.email,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
         threadId:isReply?(s.threadId||''):'', inReplyTo:isReply?(s.lastMsgId||''):''})});
     const d=await r.json();
     if(!r.ok||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
@@ -3248,12 +3334,23 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
   h+='<div class="tsub" style="margin-top:4px">Working as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="connectGmail()" style="cursor:pointer;color:var(--sig)" title="Connect your Gmail so sends leave your own inbox">🔗 connect Gmail</span> · <span onclick="editSig()" style="cursor:pointer;color:var(--sig)" title="Set your own sign-off — replaces the template signature on emails you send">✎ signature</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span> · <span onclick="removeFromSeq(\''+id+'\')" style="cursor:pointer;color:var(--lost)" title="Take this contact out of the sequence and clear its cadence tasks">✕ remove</span>'+(lastBy?' · last step by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
   if(!done){
     if(k==='email'){
-      const e=emailStep(c,n);
+      const e=emailStep(c,n); const rich=!!e.html;
       const replyHint=(e.type==='reply')?' <span class="tag" style="background:#3a2f14;color:#e9c46a">↳ reply on the same thread</span>':'';
       const editedBadge=e.edited?' <span class="tag" style="background:#14361f;color:#7fd6a0" title="You customised this step — the template no longer applies to this contact">✎ edited</span>':'';
       h+='<div style="margin-top:8px;font-size:12.5px;display:flex;align-items:center;gap:6px"><b>Subject</b>'+replyHint+editedBadge+'</div>';
       h+='<input id="seqSubj_'+id+'" class="cflt" style="width:100%;box-sizing:border-box;margin-top:3px;font-size:12.5px" value="'+esc(e.subj)+'" onchange="saveSeqEdit(\''+id+'\')">';
-      h+='<textarea id="seqBody_'+id+'" class="cadbody" style="width:100%;box-sizing:border-box;margin-top:6px;resize:vertical;min-height:150px" onchange="saveSeqEdit(\''+id+'\')">'+esc(e.body)+'</textarea>';
+      // Rich-text toolbar + editor (contenteditable) when this step is HTML; plain textarea otherwise.
+      h+='<div class="rt-tools" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:6px">';
+      if(rich){ h+=rtBtn(id,'bold','<b>B</b>')+rtBtn(id,'italic','<i>i</i>')+rtBtn(id,'underline','<u>U</u>')+
+          rtBtn(id,'insertUnorderedList','• List')+rtBtn(id,'insertOrderedList','1. List')+
+          '<button type="button" class="btn sm gh" onmousedown="event.preventDefault()" onclick="rtLink(\''+id+'\')">🔗 Link</button>'+
+          '<button type="button" class="btn sm gh" onmousedown="event.preventDefault()" onclick="el(\'seqImg_'+id+'\').click()" title="Insert an image — it embeds inline in the email">🖼 Image</button>'+
+          '<input type="file" id="seqImg_'+id+'" accept="image/*" style="display:none" onchange="rtImageFile(\''+id+'\',this.files)">'+
+          '<button type="button" class="btn sm gh" style="margin-left:auto" onclick="richToPlain(\''+id+'\')" title="Back to plain text (drops inline images)">↩ Plain text</button>';
+      } else { h+='<button type="button" class="btn sm gh" style="margin-left:auto" onclick="plainToRich(\''+id+'\')" title="Rich text — bold, links, inline images">✎ Rich text</button>'; }
+      h+='</div>';
+      if(rich){ h+='<div id="seqBody_'+id+'" class="cadbody rt-editor" contenteditable="true" style="width:100%;box-sizing:border-box;margin-top:6px;min-height:150px;overflow:auto;resize:vertical" onblur="saveSeqEdit(\''+id+'\')" onpaste="rtPaste(event,\''+id+'\')" ondragover="event.preventDefault()" ondrop="rtDrop(event,\''+id+'\')">'+fillTokens(e.body,c)+'</div>'; }
+      else { h+='<textarea id="seqBody_'+id+'" class="cadbody" style="width:100%;box-sizing:border-box;margin-top:6px;resize:vertical;min-height:150px" onchange="saveSeqEdit(\''+id+'\')">'+esc(e.body)+'</textarea>'; }
       h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="sendSeqEmail(\''+id+'\')" title="Send this step from your Gmail right now — tracked for opens, then advances the cadence">📤 Send Email '+n+'</button>'+
          '<button class="btn sm gh" onclick="copyEmailStep(\''+id+'\')" title="Copy the copy to paste manually instead">⧉ Copy</button><button class="btn sm gh" onclick="logEmailSent(\''+id+'\')" title="Mark sent without sending from here (e.g. you sent it elsewhere)">✓ Log sent</button>'+
          (e.edited?'<button class="btn sm gh" onclick="resetSeqEdit(\''+id+'\')" title="Discard your edits and go back to the template copy">↺ Reset to template</button>':'')+
