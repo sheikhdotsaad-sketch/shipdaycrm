@@ -2933,13 +2933,10 @@ function seqPaused(c){ const s=c&&c.emailSeq; return !!(s&&s.paused&&!s.done); }
 function onCallStep(c){ const s=c&&c.emailSeq; if(!s||s.done||s.paused) return false;
   const def=cadDefFor(c); if(!def||!def.length) return false;
   const st=def[Math.min(Math.max(+s.step||1,1),def.length)-1]; return stepKind(st)==='call'; }
-// A sequence is an INDIVIDUAL working list: a contact in a sequence belongs to whoever RUNS its
-// cadence — the sequence OWNER (seqStarter: emailSeq.owner → start-log author → assignee), NOT just
-// whoever the contact record is assigned to. This is what keeps another rep's cadence (e.g. one whose
-// Gmail thread they started) out of YOUR Hot List even when the contact's assignee is blank.
-// Unowned = shared pool (shows for whoever's logged in).
-function seqOwner(c){ return (c&&c.emailSeq)?seqStarter(c):((c&&c.assignee)||''); }
-function seqMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); if(!me||!c) return true; const o=seqOwner(c); return !o||repCanon(o)===me; }
+// A sequence is an INDIVIDUAL working list: a contact in a sequence belongs to whoever owns it
+// (its assignee). seqMine gates the Hot List so a sequenced contact only surfaces in the assignee's
+// own Hot List — not everyone's. Unassigned = shared pool (shows for whoever's logged in).
+function seqMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); return !me||!c||!c.assignee||repCanon(c.assignee)===me; }
 // seqLib(): the live play library = built-in SEQ_LIB, with the team's edits/additions from
 // store.__seqLib layered on top (replace-by-id, else append). Everything that used to read SEQ_LIB
 // directly now reads seqLib() so custom + edited sequences flow everywhere (drawer, tab, editor).
@@ -3248,17 +3245,10 @@ async function sendSeqEmail(id){
   setSync&&setSync('busy','Sending Email '+n+'…');
   try{
     const bodyOut=e.html?fillTokens(e.body,c):e.body;
-    // POST to gmail-send. On a reply step we thread onto the stored conversation; but if that
-    // thread lives in a DIFFERENT rep's mailbox (or was deleted) Gmail 404s "Requested entity was
-    // not found". In that case drop the dead thread and resend as a fresh email so the step still goes out.
-    const post=(withThread)=>fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
+    const r=await fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
       body:JSON.stringify({to:c.email,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
-        threadId:(isReply&&withThread)?(s.threadId||''):'', inReplyTo:(isReply&&withThread)?(s.lastMsgId||''):''})});
-    let r=await post(true); let d=await r.json();
-    if((!r.ok||!d.ok) && isReply && (s.threadId||s.lastMsgId) && /not\s*found|404/i.test(JSON.stringify(d||''))){
-      s.threadId=''; s.lastMsgId='';           // dead thread (wrong mailbox / deleted) — forget it and retry unthreaded
-      r=await post(false); d=await r.json();
-    }
+        threadId:isReply?(s.threadId||''):'', inReplyTo:isReply?(s.lastMsgId||''):''})});
+    const d=await r.json();
     if(!r.ok||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
     if(d.threadId) s.threadId=d.threadId;      // remember the thread for the next reply step
     if(d.messageId) s.lastMsgId=d.messageId;
@@ -3704,12 +3694,6 @@ function renderIntent(){
    enrolled person. Enrollment/step state is the same c.emailSeq the drawer already drives, so
    this tab is a read/nav cockpit — no new data model. */
 let seqFocus=null; let seqStepFocus=null; const seqStepsOpen={}; let seqKindFilter=null;
-// Sequences is a SHARED cockpit (everyone can see every rep's cadences) but defaults to just YOURS,
-// so day-to-day it reads as an individual working list. '__mine' = you own it (or it's unowned),
-// '__all' = everyone, else a specific rep name. Owner = seqStarter (who runs the cadence), not the
-// raw contact.assignee — matches how the Hot List / tasks route.
-let seqRepFilter='__mine';
-function setSeqRepFilter(v){ seqRepFilter=v; renderSequences(); }
 // A contact's current position in ITS play, as kind+ordinal (e.g. "email:2" = the 2nd email step),
 // so we can filter the whole Sequences list by "✉ Email 2" / "📞 Call 1" across mixed plays. For a
 // paused contact we use the step it was paused on (pausedEmail), else its live step.
@@ -3745,11 +3729,9 @@ function seqRowHtml(c){
   const a=acct(c.accountId); const stepDef=cadDefFor(c)[step-1]||{}; const lbl=stepDef.label||'';
   const kk=stepKind(stepDef), noun=kk==='call'?'📞 Call':kk==='task'?'✅ Task':'✉ Email';
   const last=s.lastSentAt?('sent '+fmtAgo(s.lastSentAt)+(s.lastBy?(' · '+esc(s.lastBy)):'')):'not sent yet';
-  const owner=seqStarter(c);
   return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
     '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
     '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
-    '<td>'+(owner?('<span class="tag">'+esc(owner)+'</span>'):'<span class="tsub">—</span>')+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
     '<td>'+(done?'<span class="tag cust">✓ complete</span>':(noun+' '+step+'/'+N+(lbl?' · '+esc(lbl):'')))+'</td>'+
     '<td style="min-width:90px">'+bar(pct, done?'var(--won)':'var(--acc)')+'</td>'+
@@ -3762,7 +3744,7 @@ function pausedRowHtml(c){ const s=c.emailSeq||{}; const q=seqById(s.seqId); con
     '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
     '<td><span class="tag" style="background:#3a2f14;color:#e9c46a">⏸ '+esc(meta.label)+'</span></td>'+
-    '<td class="tsub">'+esc(seqStarter(c)||'—')+'</td>'+
+    '<td class="tsub">'+esc(c.assignee||'—')+'</td>'+
     '<td><span class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">▶ resume</span></td></tr>'; }
 // Map an Apollo sequence NAME to the matching CRM play id (keyword match, order matters —
 // "toast delivery"/TDS is checked before "toast pickup"). Returns '' when there's no CRM twin
@@ -3838,23 +3820,11 @@ function resyncApolloSteps(){
 }
 function renderSequences(){
   const stats=seqStats();
-  const repMatch=c=>{ if(seqRepFilter==='__all') return true; if(seqRepFilter==='__mine') return seqMine(c); return repCanon(seqOwner(c))===repCanon(seqRepFilter); };
-  const active=contacts().filter(seqActive).filter(repMatch);
-  const paused=contacts().filter(seqPaused).filter(repMatch);
-  const done=contacts().filter(c=>c.emailSeq&&c.emailSeq.done).filter(repMatch);
-  const apollo=contacts().filter(c=>c.apolloSeq).filter(repMatch);
+  const active=contacts().filter(seqActive);
+  const paused=contacts().filter(seqPaused);
+  const done=contacts().filter(c=>c.emailSeq&&c.emailSeq.done);
+  const apollo=contacts().filter(c=>c.apolloSeq);
   const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo');
-  // Owner filter bar — counts come from the SAME bucket the list is showing (active by default,
-  // paused/apollo when focused) so each chip's number matches what you'll actually see.
-  const focusBase = seqFocus==='__paused'?contacts().filter(seqPaused)
-    : seqFocus==='__apollo'?contacts().filter(c=>c.apolloSeq)
-    : contacts().filter(seqActive);
-  const ownerCount={}; focusBase.forEach(c=>{ const o=repCanon(seqOwner(c)); if(o) ownerCount[o]=(ownerCount[o]||0)+1; });
-  const mineCount=focusBase.filter(seqMine).length;
-  const repChip=(v,label,cnt)=>'<button class="btn sm '+(seqRepFilter===v?'pri':'gh')+'" onclick="setSeqRepFilter('+JSON.stringify(v).replace(/"/g,'&quot;')+')">'+esc(label)+(cnt!=null?' <span style="opacity:.7">'+cnt+'</span>':'')+'</button>';
-  const repBar='<div style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 0;align-items:center"><span class="tsub" style="margin-right:2px">Assigned to</span>'+
-    repChip('__mine','👤 Mine',mineCount)+repChip('__all','Everyone',focusBase.length)+
-    team().filter(Boolean).map(n=>repChip(n,n,ownerCount[repCanon(n)]||0)).join('')+'</div>';
   let h='<div class="panel"><div class="ph"><h3>✉️ Sequences</h3><span class="sub">your Apollo plays, run from inside the CRM — enroll from any contact drawer · click a play to see who\'s in it</span></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
       stat(active.length,'In a sequence',true,"setSeqFocus(null)",seqFocus===null)+
@@ -3908,14 +3878,13 @@ function renderSequences(){
   }
   if(seqKindFilter) list=list.filter(c=>seqStepMeta(c).key===seqKindFilter);
   const kindLbl=seqKindFilter?(' · '+(seqKindFilter.split(':')[0]==='call'?'📞 Call ':seqKindFilter.split(':')[0]==='task'?'✅ Task ':'✉ Email ')+seqKindFilter.split(':')[1]):'';
-  const repLbl=seqRepFilter==='__all'?'':(seqRepFilter==='__mine'?' · Mine':' · '+seqRepFilter);
   const clr=(seqFocus||seqStepFocus!=null||seqKindFilter)?' · <a href="javascript:void(0)" onclick="setSeqFocus(null)" style="color:var(--acc)">clear ✕</a>':'';
   let body;
   if(!list.length) body='<div class="qempty">No contacts on this step'+(seqKindFilter?' — try another chip above':'')+'.</div>';
   else if(seqFocus==='__apollo') body='<table><tbody>'+apollo.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(c=>'<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer"><td><span class="tname">'+esc(cname(c))+'</span></td><td class="tsub">'+esc((acct(c.accountId)&&aname(acct(c.accountId)))||'')+'</td><td>'+esc(c.apolloSeq)+'</td><td class="tsub">Apollo</td></tr>').join('')+'</tbody></table>';
-  else if(seqFocus==='__paused') body='<table><thead><tr><th>Contact</th><th>Account</th><th>Was in</th><th>Last on</th><th>Owner</th><th></th></tr></thead><tbody>'+list.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(pausedRowHtml).join('')+'</tbody></table>';
-  else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Owner</th><th>Sequence</th><th>Step</th><th>Progress</th><th>Last email</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
-  h+='<div class="panel"><div class="ph"><h3>👥 '+esc(title)+esc(kindLbl)+esc(repLbl)+'</h3><span class="sub">'+list.length+' contact'+(list.length===1?'':'s')+clr+'</span></div>'+repBar+chipBar+body+'</div>';
+  else if(seqFocus==='__paused') body='<table><thead><tr><th>Contact</th><th>Account</th><th>Was in</th><th>Last on</th><th>Assignee</th><th></th></tr></thead><tbody>'+list.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(pausedRowHtml).join('')+'</tbody></table>';
+  else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Sequence</th><th>Step</th><th>Progress</th><th>Last email</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
+  h+='<div class="panel"><div class="ph"><h3>👥 '+esc(title)+esc(kindLbl)+'</h3><span class="sub">'+list.length+' contact'+(list.length===1?'':'s')+clr+'</span></div>'+chipBar+body+'</div>';
   el('view-sequences').innerHTML=h;
 }
 /* ===== Sequence builder: create/edit a play with mixed steps (email / call / task). Edits to a
