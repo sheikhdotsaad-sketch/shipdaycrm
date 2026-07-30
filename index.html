@@ -420,7 +420,7 @@ small.hint{color:var(--dim);font-size:11px}
   </div>
   <div class="hspace"></div>
   <button class="hbtn" id="rep-chip" onclick="setMyRep()" title="Who's working in this browser — every call, email &amp; note you log is stamped with this name so Team Activity can tell reps apart">👤 …</button>
-  <button class="hbtn" onclick="syncAll()" title="Universal sync — pulls Apollo, Gmail &amp; Google Calendar, then refreshes every tab">↻ Sync</button>
+  <button class="hbtn" onclick="syncAll()" title="Universal sync — pulls Gmail &amp; Google Calendar, then refreshes every tab">↻ Sync</button>
   <button class="hbtn" onclick="exportCurrentTab()">Export CSV</button>
   <button class="hbtn" onclick="importBackupPrompt()">Import CSV</button>
   <button class="hbtn pri" onclick="quickAdd()">+ New</button>
@@ -477,13 +477,9 @@ small.hint{color:var(--dim);font-size:11px}
     </div>
     <div class="card">
       <h4>Integrations</h4>
-      <label>Apollo API key</label><input id="apkey" type="password" placeholder="Apollo key">
-      <div class="row" style="margin-top:8px">
-        <button class="btn sm" style="flex:1" onclick="saveKeys()">Save keys</button>
-      </div>
-      <button class="btn sm gh" style="width:100%;margin-top:6px" onclick="connectGoogle()"><span id="gstat">Connect Google</span></button>
+      <button class="btn sm gh" style="width:100%" onclick="connectGoogle()"><span id="gstat">Connect Google</span></button>
       <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;cursor:pointer"><input type="checkbox" id="autosync" onchange="setAutoSync(this.checked)"> Auto-refresh opens every 15 min &amp; re-rank Hot List</label>
-      <div class="tsub" style="margin-top:6px;font-size:10px;line-height:1.4">Your own Apollo + Gmail + Calendar. Live sync activates once the app is hosted.</div>
+      <div class="tsub" style="margin-top:6px;font-size:10px;line-height:1.4">Your own Gmail + Calendar. Live sync activates once the app is hosted.</div>
     </div>
     <div class="card">
       <h4>Data</h4>
@@ -559,7 +555,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul24·z99';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul29·z103';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -581,7 +577,7 @@ let store = load();
 let canSave = true, applyingRemote = false;
 
 function blank(){ return { accounts:{}, contacts:{}, deals:{}, __tasks:[], __del:{},
-  __quota:{monthly:1800, targets:{}, history:{}}, __keys:{apollo:'', google:false}, __probs:{},
+  __quota:{monthly:1800, targets:{}, history:{}}, __keys:{google:false}, __probs:{},
   __rep:'Saad Sheikh', __email:'saad.sheikh@shipday.com', __team:['Saad Sheikh'],
   __updatedAt:0, __seq:1 }; }
 
@@ -649,9 +645,9 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   out.deals   =mergeRecs(base.deals||{},   over.deals||{},   del);
   const overNewer=(+over.__updatedAt||0)>=(+base.__updatedAt||0); const m=overNewer?over:base;
   ['__quota','__keys','__probs','__cal','__cadence','__tasks','__signals','__team','__rep','__email','__cols','__autoSync','__sbUrl','__sbKey','__sbId','__seedV','__dedupeKeep','__splitKeep','__sigs','__seqLib'].forEach(k=>{ if(m[k]!==undefined) out[k]=m[k]; });
-  // __apollo/__gmail are live-fetched counts — keep whichever pull is NEWER (by syncedAt) regardless of which
+  // __gmail is a live-fetched count — keep whichever pull is NEWER (by syncedAt) regardless of which
   // store is base/over, so a stale cloud copy never reverts a fresh sync (was the 269-vs-241 flap on load/push).
-  ['__apollo','__gmail'].forEach(k=>{ const a=base[k], b=over[k];
+  ['__gmail'].forEach(k=>{ const a=base[k], b=over[k];
     out[k] = (!b)?a : (!a)?b : ((+((b.syncedAt)||0))>=(+((a.syncedAt)||0)) ? b : a); });
   // __cal.reviewed = meeting-review classifications. UNION across reps/pulls so an Ignore/Won/Lost
   // is never clobbered by a newer full-store sync (reviewed is monotonic — only ever added to).
@@ -733,12 +729,11 @@ async function initSync(){
         // (seed records carry different ids than the imported book → union would duplicate everything).
         const localRev=(store.__cal&&store.__cal.reviewed)||{};   // keep meeting classifications made offline
         const localIgn=store.__inboundIgnore||{};                 // keep inbound-ignore made offline
-        const localAp=store.__apollo, localGm=store.__gmail;      // Apollo/Gmail counts are live-fetched (below)
+        const localGm=store.__gmail;      // Gmail counts are live-fetched (below)
         applyingRemote=true; store=norm(inc);
         store.__cal=store.__cal||{}; store.__cal.reviewed=Object.assign({},store.__cal.reviewed||{},localRev);
         store.__inboundIgnore=Object.assign({},store.__inboundIgnore||{},localIgn);
-        // Never let an OLDER cloud copy of the live Apollo/Gmail sync revert a fresher local one (fixes 269→241 flap).
-        if(localAp && (+(localAp.syncedAt||0))>(+((store.__apollo&&store.__apollo.syncedAt)||0))) store.__apollo=localAp;
+        // Never let an OLDER cloud copy of the live Gmail sync revert a fresher local one (fixes 269→241 flap).
         if(localGm && (+(localGm.syncedAt||0))>(+((store.__gmail&&store.__gmail.syncedAt)||0))) store.__gmail=localGm;
         try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
       }
@@ -798,11 +793,10 @@ function syncRail(){
   if(u)u.value=store.__sbUrl||''; if(k)k.value=store.__sbKey||''; if(i)i.value=store.__sbId||'shipday-team';
   keysRail();
 }
-/* per-rep integration keys (Apollo + Google) */
-function saveKeys(){ store.__keys=store.__keys||{}; const a=document.getElementById('apkey'); if(a) store.__keys.apollo=a.value.trim(); save(); keysRail(); toast('Integration keys saved'); }
+/* per-rep integration keys (Google) */
 function connectGoogle(){ toast('Gmail + Calendar connect finalizes once the app is hosted.'); }
 function toggleCfg(){ const c=document.getElementById('cfg'); if(!c)return; const open=c.style.display==='none'; c.style.display=open?'block':'none'; const car=document.getElementById('cfg-caret'); if(car) car.textContent=open?'▾':'▸'; }
-function keysRail(){ const k=store.__keys||{}; const a=document.getElementById('apkey'); if(a&&document.activeElement!==a) a.value=k.apollo||''; const g=document.getElementById('gstat'); if(g) g.textContent=k.google?'Google connected ✓':'Connect Google'; const as=document.getElementById('autosync'); if(as) as.checked=!!store.__autoSync; }
+function keysRail(){ const k=store.__keys||{}; const g=document.getElementById('gstat'); if(g) g.textContent=k.google?'Google connected ✓':'Connect Google'; const as=document.getElementById('autosync'); if(as) as.checked=!!store.__autoSync; }
 /* ====================== UI UTILS ====================== */
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function money(n){ n=+n||0; return '$'+n.toLocaleString('en-US',{maximumFractionDigits:0}); }
@@ -812,9 +806,8 @@ function dateInputVal(ts){ if(!ts) return ''; const x=new Date(ts); if(isNaN(x))
 const _extUrl=u=>/^https?:/i.test(u||'')?u:'https://'+String(u||'').replace(/^\/+/,'');
 function gsearch(a){ return 'https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||'')+' '+(a.state||'')+' restaurant'); }
 function gmaps(a){ return 'https://www.google.com/maps/search/'+encodeURIComponent((a.name||'')+' '+(a.address||a.city||'')+' '+(a.state||'')); }
-/* outreach links: Gmail compose, Apollo people search, dialer */
+/* outreach links: Gmail compose, dialer */
 function gmailLink(to,su,body){ return 'https://mail.google.com/mail/?view=cm&fs=1'+(to?'&to='+encodeURIComponent(to):'')+(su?'&su='+encodeURIComponent(su):'')+(body?'&body='+encodeURIComponent(body):''); }
-function apolloSearch(c){ const a=acct(c.accountId); return c.email?'https://app.apollo.io/#/people?finderViewId=&contactEmails[]='+encodeURIComponent(c.email):'https://app.apollo.io/#/people?qKeywords='+encodeURIComponent(cname(c)+' '+(a?a.name:'')); }
 function telHref(num){ return 'tel:'+String(num||'').replace(/[^0-9+]/g,''); }
 function outreachBar(c){
   const a=acct(c.accountId), ph=c.phone||c.mobile||'';
@@ -823,7 +816,6 @@ function outreachBar(c){
   if(c.email){ x+='<a class="btn sm pri" target="_blank" href="'+gmailLink(c.email,su,'')+'" onclick="quickLog(\'c\',\''+c.id+'\',\'Email\')">✉ Gmail</a>'; }
   if(ph){ x+='<a class="btn sm" href="'+telHref(ph)+'" onclick="quickLog(\'c\',\''+c.id+'\',\'Call\')">📞 Call</a>';
           x+='<button class="btn sm gh" onclick="copyText(\''+esc(ph).replace(/'/g,"")+'\')">Copy #</button>'; }
-  x+='<a class="btn sm gh" target="_blank" href="'+(c.apolloUrl||apolloSearch(c))+'">🚀 Apollo</a>';
   if(c.linkedin){ x+='<a class="btn sm gh" target="_blank" href="'+esc(c.linkedin)+'">in</a>'; }
   // Business quick-links (same as the call modal / account drawer) so you can research the
   // restaurant without leaving the contact drawer. Honors the account's editable Google link.
@@ -918,16 +910,16 @@ function switchTab(v){
   renderActive();
   if(v==='today') maybeFreshenToday();
 }
-// Landing on Today pulls Apollo live (via the edge fn) if the cached count is stale, so the
-// task number always mirrors Apollo without a manual Sync. Throttled so re-renders don't hammer it.
+// Landing on Today pulls Gmail live (via the edge fn) if the cached count is stale, so new opens/
+// replies surface without a manual Sync. Throttled so re-renders don't hammer it.
 let _todayFresh=0;
 function maybeFreshenToday(){
   if(!SYNC_FN) return;
-  const last=(store.__apollo&&+store.__apollo.syncedAt)||0;
+  const last=(store.__gmail&&+store.__gmail.syncedAt)||0;
   if(Date.now()-last < 60000) return;        // already fresh (<1 min)
   if(Date.now()-_todayFresh < 15000) return; // don't re-fire on rapid tab switches
   _todayFresh=Date.now();
-  syncApollo(true).then(()=>{ if(UI.tab==='today') renderToday(); }).catch(()=>{});
+  syncGmail(true).then(()=>{ if(UI.tab==='today') renderToday(); }).catch(()=>{});
 }
 // Show only the filter sections that make sense for the current tab (data-tabs allowlist).
 function applyFilterTabs(){ document.querySelectorAll('#filter-card .fsec').forEach(sec=>{
@@ -967,7 +959,7 @@ function renderCounts(){
   el('p-closed').textContent=closed; el('p-live').textContent=live;
   const pi=el('p-intent'); if(pi){ try{ pi.textContent=intentRows().filter(r=>r.trending).length; }catch(e){ pi.textContent=0; } }
   const ps=el('p-seq'); if(ps){ try{ ps.textContent=contacts().filter(seqActive).length; }catch(e){ ps.textContent=0; } }
-  const td=el('p-today'); if(td) td.textContent=todayCountReady?((store.__apollo&&store.__apollo.totalDue)||0):'…';
+  const td=el('p-today'); if(td){ try{ const endToday=today0().getTime()+864e5; td.textContent=todayCountReady?(tasks().filter(taskMine).filter(t=>!t.done && +t.due<endToday).length):'…'; }catch(e){ td.textContent=todayCountReady?0:'…'; } }
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
 function closedAccts(){ const s=new Set(deals().filter(d=>d.stage===WON).map(d=>d.accountId)); return accounts().filter(a=>a.isCustomer||s.has(a.id)); }
@@ -986,7 +978,7 @@ function refreshDrawer(){ if(drawerOpen()&&curDrawer) reopenDrawer(curDrawer.ent
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
 /* ====================== TODAY (live dashboard) ====================== */
 function fmtAgo(ts){ if(!ts) return 'never'; const m=Math.round((Date.now()-ts)/60000); if(m<1)return'just now'; if(m<60)return m+'m ago'; const hr=Math.round(m/60); if(hr<24)return hr+'h ago'; return Math.round(hr/24)+'d ago'; }
-const SYNC_FN='https://muidkwqinwcfnfvnducj.functions.supabase.co'; /* Supabase Edge Function base URL — apollo-tasks deployed */
+const SYNC_FN='https://muidkwqinwcfnfvnducj.functions.supabase.co'; /* Supabase Edge Function base URL — gmail-replies / gmail-send / calendar */
 // Every address a contact is known by: primary (email) + alternates (email2 + altEmails[]).
 // A reply/open that arrives on ANY of these must attach to the SAME person — otherwise
 // engagement under a personal gmail (Trent replied from trentiacono@gmail.com, not his
@@ -1012,10 +1004,7 @@ function pushSignal(c,kind,ts,src){ store.__signals=Array.isArray(store.__signal
 function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=byEmail(); let n=0; const RECENT=7*864e5;
   list.forEach(u=>{ const c=u.email&&m[String(u.email).trim().toLowerCase()]; if(!c)return; n++;
     if(u.lastContactedTs){ c.lastContactedTs=u.lastContactedTs; c.lastContacted=fmtD(new Date(u.lastContactedTs)); }
-    if(u.lastEmailOpenTs){ const prev=+c.lastEmailOpenTs||0; if(u.lastEmailOpenTs>prev && Date.now()-u.lastEmailOpenTs<RECENT) pushSignal(c,'open',u.lastEmailOpenTs,u.apolloSeq||''); c.lastEmailOpenTs=u.lastEmailOpenTs; }
-    if(u.apolloSeq && !c.apolloDone) c.apolloSeq=u.apolloSeq;   // apolloDone = migrated to a CRM play; don't re-flag as "still in Apollo"
-    if(u.apolloStep!=null) c.apolloStep=+u.apolloStep||0;   // ALWAYS refresh the true Apollo step (even post-migration) so Re-sync steps can heal a wrong resume point
-    if(u.apolloStatus) c.apolloStatus=u.apolloStatus;
+    if(u.lastEmailOpenTs){ const prev=+c.lastEmailOpenTs||0; if(u.lastEmailOpenTs>prev && Date.now()-u.lastEmailOpenTs<RECENT) pushSignal(c,'open',u.lastEmailOpenTs,''); c.lastEmailOpenTs=u.lastEmailOpenTs; }
     if(u.replied){ const prev=+c.lastReplyTs||0; const ts=u.lastReplyTs||Date.now(); if(ts>prev && Date.now()-ts<RECENT) pushSignal(c,'reply',ts,''); c.lastReplyTs=ts; }
   }); return n; }
 // Gmail replies used to be shown once on Today and then lost — never written to the record, so
@@ -1034,14 +1023,6 @@ function persistReplies(replies){ if(!Array.isArray(replies)||!replies.length)re
     stampU(c); n++; });
   return n; }
 const RECENT_REPLY=7*864e5;
-async function syncApollo(bg){
-  const key=(store.__keys&&store.__keys.apollo)||'';
-  if(!SYNC_FN){ if(!bg)toast(key?'Apollo key saved — live sync activates once hosted':'Add your Apollo key in Integrations first'); return 0; }
-  try{ if(!bg)setSync('busy','Syncing Apollo…'); const r=await fetch(SYNC_FN+'/apollo-tasks',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
-    if(d.summary) store.__apollo=d.summary; else store.__apollo=d;
-    const n=applyContactUpdates(d.contacts); syncSeqTasks(); save(); if(!bg){ renderActive(); renderTaskWidget(); setSync('ok','Synced'); toast('Apollo synced'+(n?' · '+n+' contacts stamped':'')); } return n; }
-  catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Apollo sync failed'); } return 0; }
-}
 async function syncGmail(bg){
   if(!SYNC_FN){ if(!bg)toast((store.__keys&&store.__keys.google)?'Gmail sync activates once hosted':'Connect Google in Integrations first'); return 0; }
   try{ if(!bg)setSync('busy','Syncing Gmail…'); const r=await fetch(SYNC_FN+'/gmail-replies',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
@@ -1050,12 +1031,12 @@ async function syncGmail(bg){
     if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')); } return n; }
   catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Gmail sync failed'); } return 0; }
 }
-// One-click header sync: pulls new opens/replies from Apollo + Gmail, then shows what changed.
+// One-click header sync: pulls new opens/replies from Gmail, then shows what changed.
 async function syncNow(){
   if(!SYNC_FN){ toast('Connect integrations first'); return; }
   const before=(store.__signals||[]).length;
   setSync('busy','Syncing opens…');
-  try{ await syncApollo(true); await syncGmail(true); _lastAuto=Date.now();
+  try{ await syncGmail(true); syncSeqTasks(); _lastAuto=Date.now();
     const added=(store.__signals||[]).length-before; save(); setSync('ok','Synced');
     if(UI.tab!=='today') switchTab('today'); else renderActive();
     toast(added?'🔥 '+added+' new open'+(added>1?'s':'')+' — see Recent Signals up top':'Synced · no new opens since last check'); }
@@ -1137,7 +1118,7 @@ let _autoBusy=false, _lastAuto=0;
 async function autoSyncTick(){
   if(!store.__autoSync||!SYNC_FN||_autoBusy) return;
   _autoBusy=true;
-  try{ const n=(await syncApollo(true))+(await syncGmail(true)); _lastAuto=Date.now();
+  try{ const n=(await syncGmail(true)); _lastAuto=Date.now();
     if(n){ if(UI.tab==='today'||UI.tab==='hotlist') renderActive(); toast('Auto-refresh · '+n+' opens/updates, Hot List re-ranked'); } }
   finally{ _autoBusy=false; }
 }
@@ -1533,14 +1514,6 @@ function taskWidgetInner(){ const now=today0().getTime(); const endToday=now+864
   }
   else h+=rows.map(taskRow).join('');
   h+='</tbody></table>';
-  // Apollo (synced, read-only)
-  const ap=store.__apollo||{}; const apSeqs=ap.sequences||[];
-  if(apSeqs.length||ap.syncedAt){
-    h+='<div class="tw-ap"><b>📋 From Apollo</b> <span class="tsub" style="margin-left:auto">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span></div><table><tbody>';
-    if(apSeqs.length) apSeqs.forEach(sq=>{ h+='<tr><td class="tname">'+esc(sq.name)+'</td><td style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>'; });
-    else h+='<tr><td class="empty" colspan="2">No Apollo tasks synced yet.</td></tr>';
-    h+='</tbody></table><div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>';
-  }
   return h; }
 function renderTaskWidget(){ const b=el('taskwidget-body'); if(b) b.innerHTML=taskWidgetInner();
   const o=openTaskCount(), bd=el('taskfab-badge'), fab=el('taskfab');
@@ -1665,7 +1638,7 @@ function needsReplyPanel(replies,newInbound){
 
 function renderToday(){
   const now=today0();
-  const ap=store.__apollo||{}; const gm=store.__gmail||{}; const cal=store.__cal||{};
+  const gm=store.__gmail||{}; const cal=store.__cal||{};
   const cmap=byEmail(); const emailOf=s=>{ const m=String(s||'').match(/<([^>]+)>/); return (m?m[1]:s).trim().toLowerCase(); };
   const allReplies=gm.replies||[];
   const replies=allReplies.filter(r=>cmap[emailOf(r.from)]).slice(0,20);
@@ -1713,15 +1686,9 @@ function renderToday(){
   h+=signalsPanel();
 
   // 6) ▾ More — status panels folded away by default (persisted).
-  h+='<div class="panel"><button class="more-btn" onclick="toggleTodayMore()">'+(todayMoreOpen?'▾':'▸')+' More — team activity, Apollo, demos, next steps &amp; follow-ups</button></div>';
+  h+='<div class="panel"><button class="more-btn" onclick="toggleTodayMore()">'+(todayMoreOpen?'▾':'▸')+' More — team activity, demos, next steps &amp; follow-ups</button></div>';
   if(todayMoreOpen){
     h+=teamActivityPanel();
-
-    const apSeqsT=ap.sequences||[];
-    h+='<div class="panel"><div class="ph"><h3>📋 Apollo Tasks</h3><span class="sub" style="margin-left:auto">'+(ap.totalDue||0)+' due · synced '+fmtAgo(ap.syncedAt)+'</span></div><table><tbody>';
-    h+= apSeqsT.length? apSeqsT.map(sq=>'<tr><td class="tname">'+esc(sq.name)+'</td><td class="tsub" style="text-align:right"><span class="tag">'+sq.due+' due</span></td></tr>').join('')
-        : '<tr><td class="empty" colspan="2">No Apollo tasks synced yet — hit ↻ Sync in the header.</td></tr>';
-    h+='</tbody></table>'+(ap.syncedAt?'<div class="sub" style="padding:8px 14px"><a href="https://app.apollo.io/#/tasks" target="_blank">Open all tasks in Apollo ↗</a></div>':'')+'</div>';
 
     h+=calDemoPanel();
     h+=meetingReviewPanel();
@@ -1784,7 +1751,7 @@ function setFlt(v,k,val){ TFILT[v]=TFILT[v]||{}; TFILT[v][k]=val; lastFlt='flt-'
 function restoreFlt(){ if(!lastFlt)return; const i=el(lastFlt); if(i){ i.focus(); const n=i.value.length; try{i.setSelectionRange(n,n);}catch(e){} } lastFlt=null; }
 /* ---- inline "scratch pad" editing ---- */
 function entOf(v){ return (v==='accounts'||v==='closed'||v==='live')?'a':(v==='pipeline'?'d':'c'); }
-const EDIT_C={title:'title',email:'email',phone:'phone',mobile:'mobile',score:'score',angle:'angle',next:'nextStep',apollo:'apolloSeq'};
+const EDIT_C={title:'title',email:'email',phone:'phone',mobile:'mobile',score:'score',angle:'angle',next:'nextStep'};
 const SEL_C={status:C_STATUS,warmth:WARMTHS};
 const EDIT_A={cuisine:'cuisine',address:'address',pos:'pos',delivery:'delivery',employees:'employees',website:'website',mrr:'mrr',source:'source'};
 const SEL_A={onboard:['Closed Won','Onboarding','Live','Paused','Churned'],type:['Prospect','Customer']};
@@ -1857,7 +1824,6 @@ const COL={
   status:{k:'status',t:'Status',val:c=>c.status||'New',cell:c=>'<span class="tag'+(c.status==='Customer'?' cust':'')+'">'+esc(c.status||'New')+'</span>'},
   score:{k:'score',t:'Score',num:true,val:c=>+c.score||0,cell:c=>c.score?esc(c.score):'—'},
   angle:{k:'angle',t:'Why it scores',val:c=>c.angle||'',cell:c=>'<span class="tsub">'+esc(c.angle||'')+'</span>'},
-  apollo:{k:'apollo',t:'Apollo',val:c=>c.apolloSeq||'',cell:c=>c.apolloSeq?'<span class="tag cust" title="'+esc(c.apolloSeq)+'">● '+esc(c.apolloSeq)+'</span>':''},
   last:{k:'last',t:'Last contacted',val:c=>lastTouchTs(c),cell:c=>'<span class="tsub">'+esc(lastTouchLabel(c))+'</span>'},
   lastcall:{k:'lastcall',t:'Last call',val:c=>lastCallTs(c),cell:c=>{const t=lastCallTs(c);return '<span class="tsub">'+(t?esc(fmtAgo(t)):'—')+'</span>';}},
   sent:{k:'sent',t:'Last email sent',val:c=>lastSentTs(c),cell:c=>{const t=lastSentTs(c);return '<span class="tsub">'+(t?esc(fmtAgo(t)):'—')+'</span>';}},
@@ -1907,7 +1873,6 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   p+=Math.min(opens,25)*14;                                  // opens volume (repeat opens = real interest)
   p+=(+c.score||0)*4;                                        // intent score
   if(c.replied) p+=220;                                      // replied to an email
-  if(c.apolloSeq) p+=50;                                     // active Apollo sequence
   else if(seqActive(c)) p+=45;                               // active manual email cadence — same weight (paused doesn't count)
   if(hasOpenCallCad(c)) p+=45;                               // active call cadence keeps it in the dialer rotation
   if(onCallStep(c)) p+=120;                                  // current cadence step IS a call — surface it so the rep dials it and the sequence doesn't stall
@@ -1948,7 +1913,7 @@ function intentC(c){ if(!c) return 0; const now=Date.now();
   p+=Math.min(opens,25)*14;                                  // open volume
   if(c.replied) p+=220;                                      // replied
   if(logTsBy(c,/🔗|clicked/i)) p+=80;                        // clicked a link
-  if(c.apolloSeq) p+=50; else if(seqActive(c)) p+=45;  // in an active sequence (paused doesn't count)
+  if(seqActive(c)) p+=45;  // in an active sequence (paused doesn't count)
   return Math.round(p);
 }
 // Tier = the two scores as one word. 🔥 engaged + reachable → call FIRST; ☎️ reachable but
@@ -2032,14 +1997,14 @@ const statChip=(l,v,color)=>'<div style="flex:1;min-width:86px;border:1px solid 
   '<div style="font-weight:800;font-size:13.5px'+(color?';color:'+color:'')+'">'+v+'</div></div>';
 const statStrip=chips=>'<div style="display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px">'+chips.join('')+'</div>';
 const aiLine=txt=>'<div style="border:1px solid var(--bd);border-left:3px solid var(--sig);border-radius:8px;padding:7px 10px;margin:0 0 12px;font-size:12.5px">'+txt+'</div>';
-const LEAD_COLS=[COL.warmth,COL.name,COL.acct,COL.phone,COL.status,COL.apollo,COL.next];
-const CONTACT_COLS=[COL.warmth,COL.name,COL.acct,COL.email,COL.phone,COL.status,COL.apollo];
+const LEAD_COLS=[COL.warmth,COL.name,COL.acct,COL.phone,COL.status,COL.next];
+const CONTACT_COLS=[COL.warmth,COL.name,COL.acct,COL.email,COL.phone,COL.status];
 /* ---- customizable columns ---- */
-const CONTACT_REG=[COL.warmth,COL.heat,COL.intent,COL.tier,COL.name,COL.owner,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.score,COL.angle,COL.apollo,COL.last,COL.lastcall,COL.sent,COL.open,COL.opens,COL.dispo,COL.callnote,COL.assigned,COL.next];
-const COLDEF={ leads:['warmth','name','acct','phone','status','apollo','next'],
+const CONTACT_REG=[COL.warmth,COL.heat,COL.intent,COL.tier,COL.name,COL.owner,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.score,COL.angle,COL.last,COL.lastcall,COL.sent,COL.open,COL.opens,COL.dispo,COL.callnote,COL.assigned,COL.next];
+const COLDEF={ leads:['warmth','name','acct','phone','status','next'],
   hotlist:['tier','heat','intent','name','owner','acct','phone','lastcall','open','opens','dispo'],
   hotlist2:['tier','heat','intent','name','owner','acct','phone','lastcall','open','opens','dispo'],
-  contacts:['warmth','tier','intent','name','owner','acct','email','phone','status','opens','apollo'] };
+  contacts:['warmth','tier','intent','name','owner','acct','email','phone','status','opens'] };
 function colReg(v){ return (v==='accounts'||v==='closed'||v==='live')?A_COLS:CONTACT_REG; }
 function chosenCols(v){
   const reg=colReg(v); const saved=(store.__cols&&store.__cols[v])||COLDEF[v]||reg.map(c=>c.k);
@@ -2335,9 +2300,9 @@ async function releaseClaim(c){ if(!c||!claimsReady()) return; const r=claimsMap
 function callPriority(c){ return heat(c); }
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
-// In a live sequence = a running manual cadence OR still enrolled in Apollo. These are your active
-// working set, so they belong in the Hot List even without a phone number on file (Saad's rule).
-const inSeq=c=>!!(c&&(seqActive(c)||c.apolloSeq));
+// In a live sequence = a running manual cadence. These are your active working set, so they belong
+// in the Hot List even without a phone number on file (Saad's rule).
+const inSeq=c=>!!(c&&seqActive(c));
 // Account diversity: keeps a single account from stacking many contacts near the top. Input is already
 // heat-sorted; at each slot it takes the hottest contact belonging to the account placed longest ago
 // (or never seen), so the #1 hottest lead still leads but the same business can't monopolize the queue —
@@ -2431,8 +2396,7 @@ function posAngle(a){ const p=((a&&a.pos)||'').toLowerCase();
   if(/olo|chownow|deliverect|ubereats|doordash/.test(p)) return 'Connects to their '+esc(a.pos)+' stack to run self-delivery and keep the margin.';
   return ''; }
 /* ===== Manual email cadence — SDR copies/pastes & sends from their own inbox, logged on the
-   contact as Email N sent (by whoever sent it). Works with no Apollo license. Real Apollo
-   enrollment (via Saad's master key) can be wired later behind startApolloCadence(). ===== */
+   contact as Email N sent (by whoever sent it). Runs entirely inside the CRM. ===== */
 const EMAIL_CADENCE=[
   {d:0, label:'Intro'},
   {d:2, label:'How it works'},
@@ -2440,10 +2404,9 @@ const EMAIL_CADENCE=[
   {d:9, label:'ROI / objection'},
   {d:14,label:'Breakup'},
 ];
-/* ===== SEQ_LIB: Saad's REAL Apollo sequences, pulled verbatim from his account. The SDR picks
-   the play that matches the prospect, then copies each step's exact subject+body (same copy that
-   runs in Apollo) and sends from his own inbox. Tokens {{first_name}} {{company}} fill per contact.
-   type:'reply' = reply on the SAME Gmail thread as the prior step (Apollo reply_to_thread). ===== */
+/* ===== SEQ_LIB: the team's outreach sequences. The SDR picks the play that matches the prospect,
+   then copies each step's exact subject+body and sends from his own inbox. Tokens {{first_name}}
+   {{company}} fill per contact. type:'reply' = reply on the SAME Gmail thread as the prior step. ===== */
 const SEQ_LIB=[
  // Email-only play — noAutoCall keeps calls from being interleaved (for inboxes with no phone on file).
  {id:'email-only', name:'Email only (no calls)', match:'no phone / email-first', noAutoCall:true, steps:[
@@ -2933,10 +2896,13 @@ function seqPaused(c){ const s=c&&c.emailSeq; return !!(s&&s.paused&&!s.done); }
 function onCallStep(c){ const s=c&&c.emailSeq; if(!s||s.done||s.paused) return false;
   const def=cadDefFor(c); if(!def||!def.length) return false;
   const st=def[Math.min(Math.max(+s.step||1,1),def.length)-1]; return stepKind(st)==='call'; }
-// A sequence is an INDIVIDUAL working list: a contact in a sequence belongs to whoever owns it
-// (its assignee). seqMine gates the Hot List so a sequenced contact only surfaces in the assignee's
-// own Hot List — not everyone's. Unassigned = shared pool (shows for whoever's logged in).
-function seqMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); return !me||!c||!c.assignee||repCanon(c.assignee)===me; }
+// A sequence is an INDIVIDUAL working list: a contact in a sequence belongs to whoever RUNS its
+// cadence — the sequence OWNER (seqStarter: emailSeq.owner → start-log author → assignee), NOT just
+// whoever the contact record is assigned to. This is what keeps another rep's cadence (e.g. one whose
+// Gmail thread they started) out of YOUR Hot List even when the contact's assignee is blank.
+// Unowned = shared pool (shows for whoever's logged in).
+function seqOwner(c){ return (c&&c.emailSeq)?seqStarter(c):((c&&c.assignee)||''); }
+function seqMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); if(!me||!c) return true; const o=seqOwner(c); return !o||repCanon(o)===me; }
 // seqLib(): the live play library = built-in SEQ_LIB, with the team's edits/additions from
 // store.__seqLib layered on top (replace-by-id, else append). Everything that used to read SEQ_LIB
 // directly now reads seqLib() so custom + edited sequences flow everywhere (drawer, tab, editor).
@@ -2955,9 +2921,9 @@ function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'')
   if(/doordash|uber|grubhub/.test(dl)) return 'dd-ue';
   if(/toast/.test(pos)) return 'toast-pickup';
   return 'dd-ue'; }
-// The rep can paste their OWN Apollo sequence copy into store.__cadence (synced to the team),
-// so Embert sends Saad's exact steps. Apollo's public API can't read step bodies, so this is a
-// one-time paste. When custom copy exists it fully replaces the built-in templates below.
+// The rep can paste their OWN sequence copy into store.__cadence (synced to the team),
+// so Embert sends Saad's exact steps. This is a one-time paste. When custom copy exists it
+// fully replaces the built-in templates below.
 function cadDef(){ const c=store&&store.__cadence; return (Array.isArray(c)&&c.length)?c:EMAIL_CADENCE; }
 // Per-contact step set: the sequence the contact was enrolled in (SEQ_LIB), else custom paste, else default.
 function cadDefFor(c){ const s=c&&c.emailSeq; if(s&&s.seqId){ const q=seqById(s.seqId); if(q&&q.steps&&q.steps.length) return q.steps; } return cadDef(); }
@@ -2976,7 +2942,7 @@ function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
     locs:String(a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0) };
   return String(str).replace(/\{\{\s*(first_name|first|account|company|rep|apps|locs)\s*\}\}/gi,(m,k)=>map[k.toLowerCase()]||''); }
 function senderName(){ return myRep()||store.__rep||'Saad'; }
-// Per-rep email signature: every play's copy was pasted from Saad's Apollo and ends "Best,\nSaad",
+// Per-rep email signature: every play's copy was pasted from Saad's sequences and ends "Best,\nSaad",
 // which is wrong when Embert (or anyone else) sends. repSig() returns the CURRENT rep's own sign-off
 // (editable, stored per rep in store.__sigs), defaulting to their first name. applySig() swaps a
 // template's trailing sign-off block for the sender's, so no email ever goes out signed as someone else.
@@ -2993,8 +2959,7 @@ function editSig(){ const me=senderName();
   const v=prompt('Your email signature — used on every sequence email you send as "'+me+'":', cur);
   if(v==null) return; store.__sigs[me]=v; store.__updatedAt=Date.now(); save(); refreshDrawer();
   toast('Signature saved for '+me); }
-function inApolloSeq(c){ return !!(c&&c.apolloSeq); }
-function cadState(c){ if(!c) return 'none'; if(inApolloSeq(c)) return 'apollo';
+function cadState(c){ if(!c) return 'none';
   const s=c.emailSeq; if(s&&s.done) return 'done'; if(s&&s.paused) return 'paused'; if(s&&(+s.step||1)<=cadNFor(c)) return 'manual'; return 'none'; }
 // emailStep returns the copy for step n. Per-contact edits (c.emailSeq.override[n]) win over the
 // template, so a rep can tweak the subject/body for THIS contact in the drawer before sending.
@@ -3124,7 +3089,7 @@ function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def
 // be clobbered by another tab, silently emptying the queue. On every load + sync we regenerate a
 // due-TODAY task for each active-sequence contact's CURRENT step if one is missing. Idempotent
 // (dedups by contact+step), doesn't touch future-dated next-steps that already exist. This is what
-// puts the whole migrated Apollo book into your task queue and keeps it there. Caller must save().
+// puts the whole active-sequence book into your task queue and keeps it there. Caller must save().
 function syncSeqTasks(){ let made=0; const openMap={};
   // self-heal: drop any open cadence task whose contact is no longer actively sequenced
   // (paused / done / unenrolled). Guards against a stale build re-spawning paused tasks.
@@ -3231,7 +3196,7 @@ function connectGmail(){
 // ===== Native send: fire the current sequence step from YOUR Gmail (gmail-send edge fn) with a
 // tracking pixel, then advance the cadence exactly like a manual "Log sent". Reply-type steps
 // thread onto the prior message via the stored threadId + Message-ID so the conversation stays
-// intact. This is what lets the whole cadence run without ever opening Apollo or Gmail. =====
+// intact. This is what lets the whole cadence run without ever opening Gmail. =====
 async function sendSeqEmail(id){
   const c=contact(id); if(!c) return;
   if(!c.email){ toast('No email address on this contact'); return; }
@@ -3245,10 +3210,17 @@ async function sendSeqEmail(id){
   setSync&&setSync('busy','Sending Email '+n+'…');
   try{
     const bodyOut=e.html?fillTokens(e.body,c):e.body;
-    const r=await fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
+    // POST to gmail-send. On a reply step we thread onto the stored conversation; but if that
+    // thread lives in a DIFFERENT rep's mailbox (or was deleted) Gmail 404s "Requested entity was
+    // not found". In that case drop the dead thread and resend as a fresh email so the step still goes out.
+    const post=(withThread)=>fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
       body:JSON.stringify({to:c.email,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
-        threadId:isReply?(s.threadId||''):'', inReplyTo:isReply?(s.lastMsgId||''):''})});
-    const d=await r.json();
+        threadId:(isReply&&withThread)?(s.threadId||''):'', inReplyTo:(isReply&&withThread)?(s.lastMsgId||''):''})});
+    let r=await post(true); let d=await r.json();
+    if((!r.ok||!d.ok) && isReply && (s.threadId||s.lastMsgId) && /not\s*found|404/i.test(JSON.stringify(d||''))){
+      s.threadId=''; s.lastMsgId='';           // dead thread (wrong mailbox / deleted) — forget it and retry unthreaded
+      r=await post(false); d=await r.json();
+    }
     if(!r.ok||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
     if(d.threadId) s.threadId=d.threadId;      // remember the thread for the next reply step
     if(d.messageId) s.lastMsgId=d.messageId;
@@ -3258,7 +3230,6 @@ async function sendSeqEmail(id){
     toast(c.emailSeq.done?('✅ Cadence complete — Email '+n+' sent to '+cname(c)):('✅ Email '+n+' sent to '+cname(c)+' · Email '+(n+1)+' queued'));
   }catch(err){ setSync&&setSync('err','Send failed'); toast('Send failed: '+((err&&err.message)||err)); }
 }
-function startApolloCadence(id){ toast('Apollo enrollment isn\'t wired yet — use the manual email cadence, or ask to connect your Apollo master key so any rep can enroll without a license.'); }
 // ===== Schedule send: queue the current step to go out at a future time. The row lands in the
 // Supabase `scheduled_sends` table; a cron edge fn (scheduled-send-cron) fires it via gmail-send at
 // send_at — so it goes out even if the CRM tab is closed. We advance the cadence optimistically at
@@ -3296,7 +3267,7 @@ async function confirmScheduleSend(id){ const c=contact(id); if(!c) return;
     toast('🕒 Email '+n+' scheduled for '+when.toLocaleString());
   }catch(err){ setSync&&setSync('err','Schedule failed'); toast('Schedule failed: '+((err&&err.message)||err)); }
 }
-// ===== Sequence copy editor: paste your real Apollo steps once, whole team sends them =====
+// ===== Sequence copy editor: paste your real sequence steps once, whole team sends them =====
 let cadEdit=null;
 function openCadenceEditor(){ cadEdit=cadDef().map(s=>({label:s.label||'',d:+s.d||0,subj:s.subj||'',body:s.body||''}));
   if(!cadEdit.length) cadEdit=[{label:'',d:0,subj:'',body:''}];
@@ -3311,7 +3282,7 @@ function renderCadenceEditor(){ const m=el('cadModal'); if(!m||!cadEdit) return;
     '<input id="cad_subj_'+i+'" placeholder="Subject line" value="'+esc(s.subj)+'" style="width:100%;box-sizing:border-box;margin-top:6px">'+
     '<textarea id="cad_body_'+i+'" class="cm-note" placeholder="Email body… tokens: {{first}} {{account}} {{apps}} {{locs}} {{rep}}">'+esc(s.body)+'</textarea></div>').join('');
   m.innerHTML='<div class="cmodal" style="max-width:640px">'+
-    '<div class="cm-head"><div><div class="cm-name">✉️ Email sequence copy</div><div class="cm-sub">Paste your Apollo steps once — the whole team sends this exact copy. Tokens: {{first}} {{account}} {{apps}} {{locs}} {{rep}}</div></div>'+
+    '<div class="cm-head"><div><div class="cm-name">✉️ Email sequence copy</div><div class="cm-sub">Paste your sequence steps once — the whole team sends this exact copy. Tokens: {{first}} {{account}} {{apps}} {{locs}} {{rep}}</div></div>'+
       '<button class="cm-x" onclick="closeCadenceEditor()">✕</button></div>'+
     '<div style="max-height:52vh;overflow:auto;margin-top:12px">'+rows+'</div>'+
     '<div class="logbar" style="margin-top:8px"><button class="btn sm gh" onclick="cadAddStep()">＋ Add step</button>'+
@@ -3354,11 +3325,10 @@ function resumeSeq(id){ const c=contact(id); if(!c||!c.emailSeq) return;
   clearEmailTasks(id); ensureEmailTask(id,step); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   toast('Resumed — '+((q&&q.name)||'sequence')+' · step '+step+' is in your task list'); }
 function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadState(c);
-  if(st==='apollo') return '<div class="cadbox in"><b>● In Apollo sequence:</b> '+esc(c.apolloSeq)+'<div class="tsub" style="margin-top:3px">Managed in Apollo — no manual sends needed here.</div></div>';
   if(st==='none'||switchSeqFor===id){ const switching=switchSeqFor===id; const sug=(switching&&c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c);
     let opts=seqLib().map(q=>'<option value="'+q.id+'"'+(q.id===sug?' selected':'')+'>'+esc(q.name)+' · '+q.steps.length+' steps</option>').join('');
     if(isCustomCad()) opts+='<option value="custom">Custom (your pasted copy) · '+cadN()+' steps</option>';
-    return '<div class="cadbox"><div><b>'+(switching?'⇄ Switch sequence.':'Not in a sequence.')+'</b> '+(switching?'Pick a new play — current progress clears when you start.':'Pick the play that matches this prospect — the SDR sends your exact Apollo copy, step by step.')+'</div>'+
+    return '<div class="cadbox"><div><b>'+(switching?'⇄ Switch sequence.':'Not in a sequence.')+'</b> '+(switching?'Pick a new play — current progress clears when you start.':'Pick the play that matches this prospect — the SDR sends your exact copy, step by step.')+'</div>'+
     '<select id="seqPick_'+id+'" class="cflt" style="width:100%;margin-top:8px;box-sizing:border-box">'+opts+'</select>'+
     '<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="startEmailCadence(\''+id+'\')">'+(switching?'⇄ Switch to this sequence':'✉️ Start sequence')+'</button>'+
     (switching?'<button class="btn sm gh" onclick="cancelSwitchSeq()">Cancel</button>':'')+
@@ -3437,7 +3407,7 @@ function callBrief(c){ if(!c) return '';
   if(c.replied) head='↩️ <b>Replied to your outreach</b> — they raised a hand. Reference it and go straight for a time.';
   else if(open&&open>touch) head='🔥 <b>Opened your email '+fmtAgo(open)+'</b>'+(opens>1?' ('+opens+'× total)':'')+' — you\'re top of mind right now, lead with that.';
   else if(opens>=2) head='👀 <b>'+opens+' opens</b> on your emails — real curiosity, not a cold dial.';
-  else if(c.apolloSeq) head='● In sequence "<b>'+esc(c.apolloSeq)+'</b>" — warm the thread, don\'t restart cold.';
+  else if(seqActive(c)) head='● In sequence — warm the thread, don\'t restart cold.';
   else if(!+c.callCount) head='🆕 <b>First call</b> — keep it short, earn the 15-minute demo.';
   else head='Following up — '+(+c.callCount||0)+' prior call'+((+c.callCount>1)?'s':'')+', last touch '+lastTouchLabel(c)+'.';
   let opener;
@@ -3463,8 +3433,7 @@ function callBrief(c){ if(!c) return '';
   const close='"Can I grab <b>15 minutes</b> later this week to show exactly what this would look like for '+esc(an)+'? What does '+(new Date().getDay()<4?'Thursday':'Monday')+' look like?"';
   // Cadence status nudge
   const cs=cadState(c); let cad;
-  if(cs==='apollo') cad='● Already in Apollo sequence "<b>'+esc(c.apolloSeq)+'</b>" — the call backs up the emails.';
-  else if(cs==='manual'){ const q=seqById(c.emailSeq.seqId); cad='✉️ In "<b>'+esc((q&&q.name)||'email sequence')+'</b>" (Email '+Math.min(+c.emailSeq.step||1,cadNFor(c))+' of '+cadNFor(c)+') — reference the thread, don\'t restart cold.'; }
+  if(cs==='manual'){ const q=seqById(c.emailSeq.seqId); cad='✉️ In "<b>'+esc((q&&q.name)||'email sequence')+'</b>" (Email '+Math.min(+c.emailSeq.step||1,cadNFor(c))+' of '+cadNFor(c)+') — reference the thread, don\'t restart cold.'; }
   else if(cs==='done') cad='✉️ Email sequence complete — this call is the follow-through.';
   else cad='⚠️ Not in a sequence yet — after the call, start the matching email sequence from the contact drawer.';
   // Call-cadence status: where this contact sits in the 5-step dialer sequence (if enrolled).
@@ -3497,7 +3466,6 @@ function callCard(c,dueN,snoozedN){
   if(open>touch) bits.push('<b style="color:var(--sig)">🔥 opened email '+fmtAgo(open)+'</b>');
   else if(open) bits.push('opened '+fmtAgo(open));
   if(c.score) bits.push('score <b>'+esc(c.score)+'</b>');
-  if(c.apolloSeq) bits.push('● '+esc(c.apolloSeq));
   bits.push('last touch '+lastTouchLabel(c));
   if(+c.callCount) bits.push(c.callCount+' prior call'+(c.callCount>1?'s':''));
   let h='<div class="panel callcard"><div class="ph"><h3>🎧 Call Queue · Now up</h3><span class="sub">'+dueN+' due'+(snoozedN?' · '+snoozedN+' scheduled':'')+'</span></div>';
@@ -3520,7 +3488,6 @@ function callCard(c,dueN,snoozedN){
 function recalcQueue(){
   renderHotList();  // instant re-rank from current data
   const jobs=[];
-  if(typeof syncApollo==='function') jobs.push(Promise.resolve(syncApollo(true)).catch(()=>0));
   if(typeof syncGmail==='function') jobs.push(Promise.resolve(syncGmail(true)).catch(()=>0));
   if(!jobs.length){ toast('Queue recalculated'); return; }
   toast('Recalculating & syncing opens…');
@@ -3607,7 +3574,7 @@ function acctIntent(a){
     if(lo){ if(now-lo<=7*_DAY) opens7+=oc||1; if(now-lo<=30*_DAY) opens30+=oc||1; }
     if(c.replied) replies++;
     if(lc) calls++;
-    if(c.apolloSeq || seqActive(c) || hasOpenCallCad(c)) inSeq++;   // Apollo seq, active manual email cadence, OR call cadence all count (paused excluded)
+    if(seqActive(c) || hasOpenCallCad(c)) inSeq++;   // active manual email cadence OR call cadence count (paused excluded)
     if(isOwner(c)) owners++;
     const act=Math.max(lo||0,lc||0,ls||0,+c.lastContactedTs||0); if(act>lastAct) lastAct=act;
     const hot7=(lo&&now-lo<=7*_DAY)||c.replied||(lc&&now-lc<=7*_DAY)||(ls&&now-ls<=7*_DAY); if(hot7) engaged7.add(c.id);
@@ -3623,19 +3590,17 @@ function dismissIntent(aid){ const a=acct(aid); if(!a)return; a.intentMuteAt=Dat
 function markInternal(cid){ const c=contact(cid); if(!c)return; c.internal=true; c.warmth='Cold'; save(); renderActive();
   toast('Marked internal — hidden from Intent & call queue',()=>{ c.internal=false; save(); renderActive(); }); }
 function unmarkInternal(cid){ const c=contact(cid); if(!c)return; c.internal=false; save(); renderActive(); toast('Restored as a lead'); }
-// THE universal sync — pulls Apollo + Gmail + Google Calendar in parallel, then refreshes every tab.
+// THE universal sync — pulls Gmail + Google Calendar in parallel, then refreshes every tab.
 // This is the single "↻ Sync" button in the header; per-panel sync buttons were removed in favor of it.
 function syncAll(){ toast('Syncing everything…'); setSync('busy','Syncing…'); renderCounts();
-  const cu=[]; if(typeof syncApollo==='function') cu.push(Promise.resolve(syncApollo(true)).catch(()=>0));
-  if(typeof syncGmail==='function') cu.push(Promise.resolve(syncGmail(true)).catch(()=>0));
+  const cu=[]; if(typeof syncGmail==='function') cu.push(Promise.resolve(syncGmail(true)).catch(()=>0));
   const cal=(typeof syncCalendar==='function')?Promise.resolve(syncCalendar(true)).catch(()=>0):Promise.resolve(0);
   Promise.all([Promise.all(cu),cal]).then(([rs])=>{ const n=rs.reduce((a,x)=>a+(+x||0),0); render(); setSync('ok','Synced');
-    toast(n?('Synced — '+n+' contact update'+(n>1?'s':'')+', everything refreshed'):'Synced — Apollo, Gmail & Calendar up to date'); })
+    toast(n?('Synced — '+n+' contact update'+(n>1?'s':'')+', everything refreshed'):'Synced — Gmail & Calendar up to date'); })
    .catch(()=>{ render(); setSync('ok','Synced'); toast('Refreshed (sync unavailable)'); }); }
 function recalcIntent(){
   renderIntent();  // instant recompute from current data
   const jobs=[];
-  if(typeof syncApollo==='function') jobs.push(Promise.resolve(syncApollo(true)).catch(()=>0));
   if(typeof syncGmail==='function') jobs.push(Promise.resolve(syncGmail(true)).catch(()=>0));
   if(!jobs.length){ renderCounts(); toast('Intent recalculated'); return; }
   toast('Recalculating & syncing opens…');
@@ -3689,11 +3654,17 @@ function renderIntent(){
   el('view-intent').innerHTML=h; restoreFlt();
 }
 /* ====================== SEQUENCES ======================
-   The Apollo "Sequences" screen, rebuilt inside the CRM: every play in SEQ_LIB, how many
+   The "Sequences" screen, built inside the CRM: every play in SEQ_LIB, how many
    contacts are enrolled and at what step, the exact step copy, and a click-through to each
    enrolled person. Enrollment/step state is the same c.emailSeq the drawer already drives, so
    this tab is a read/nav cockpit — no new data model. */
 let seqFocus=null; let seqStepFocus=null; const seqStepsOpen={}; let seqKindFilter=null;
+// Sequences is a SHARED cockpit (everyone can see every rep's cadences) but defaults to just YOURS,
+// so day-to-day it reads as an individual working list. '__mine' = you own it (or it's unowned),
+// '__all' = everyone, else a specific rep name. Owner = seqStarter (who runs the cadence), not the
+// raw contact.assignee — matches how the Hot List / tasks route.
+let seqRepFilter='__mine';
+function setSeqRepFilter(v){ seqRepFilter=v; renderSequences(); }
 // A contact's current position in ITS play, as kind+ordinal (e.g. "email:2" = the 2nd email step),
 // so we can filter the whole Sequences list by "✉ Email 2" / "📞 Call 1" across mixed plays. For a
 // paused contact we use the step it was paused on (pausedEmail), else its live step.
@@ -3729,9 +3700,11 @@ function seqRowHtml(c){
   const a=acct(c.accountId); const stepDef=cadDefFor(c)[step-1]||{}; const lbl=stepDef.label||'';
   const kk=stepKind(stepDef), noun=kk==='call'?'📞 Call':kk==='task'?'✅ Task':'✉ Email';
   const last=s.lastSentAt?('sent '+fmtAgo(s.lastSentAt)+(s.lastBy?(' · '+esc(s.lastBy)):'')):'not sent yet';
+  const owner=seqStarter(c);
   return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
     '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
     '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
+    '<td>'+(owner?('<span class="tag">'+esc(owner)+'</span>'):'<span class="tsub">—</span>')+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
     '<td>'+(done?'<span class="tag cust">✓ complete</span>':(noun+' '+step+'/'+N+(lbl?' · '+esc(lbl):'')))+'</td>'+
     '<td style="min-width:90px">'+bar(pct, done?'var(--won)':'var(--acc)')+'</td>'+
@@ -3744,97 +3717,37 @@ function pausedRowHtml(c){ const s=c.emailSeq||{}; const q=seqById(s.seqId); con
     '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
     '<td><span class="tag" style="background:#3a2f14;color:#e9c46a">⏸ '+esc(meta.label)+'</span></td>'+
-    '<td class="tsub">'+esc(c.assignee||'—')+'</td>'+
+    '<td class="tsub">'+esc(seqStarter(c)||'—')+'</td>'+
     '<td><span class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">▶ resume</span></td></tr>'; }
-// Map an Apollo sequence NAME to the matching CRM play id (keyword match, order matters —
-// "toast delivery"/TDS is checked before "toast pickup"). Returns '' when there's no CRM twin
-// (those contacts stay in Apollo). Keeps Apollo campaign IDs out of the CRM entirely.
-function apolloSeqToId(name){ const s=String(name||'').toLowerCase();
-  if(/\btds\b|toast delivery/.test(s)) return 'tds';
-  if(/doordash|uber/.test(s)) return 'dd-ue';
-  if(/toast pickup|pickup-only|no delivery at all/.test(s)) return 'toast-pickup';
-  if(/owner\.com|\bowner\b/.test(s)) return 'owner';
-  if(/square/.test(s)) return 'square';
-  if(/no.?show/.test(s)) return 'no-show';
-  if(/closed lost|re.?engag/.test(s)) return 'closed-lost';
-  return ''; }
-// One-click migration off Apollo: every contact still flagged in an Apollo sequence is enrolled
-// in the matching CRM play AT THE SAME STEP (c.apolloStep, synced from Apollo), so nobody gets
-// re-spammed from step 1. apolloDone stops the next Apollo sync from re-flagging them. Reversible.
-let __apolloUndo=null;
-function migrateFromApollo(){
-  const cand=contacts().filter(c=>c.apolloSeq&&!c.apolloDone);
-  if(!cand.length){ toast('No Apollo-enrolled contacts to migrate'); return; }
-  const plan=cand.map(c=>({c,seqId:apolloSeqToId(c.apolloSeq)})).filter(x=>x.seqId);
-  const skip=cand.length-plan.length;
-  if(!plan.length){ toast('None of the '+cand.length+' Apollo sequences map to a CRM play'); return; }
-  const withStep=plan.filter(x=>+x.c.apolloStep>0).length;
-  if(!withStep){ if(!confirm('Heads up: no current-step data has synced from Apollo yet, so all '+plan.length+' would RESTART at step 1.\n\nTo resume everyone where they left off, redeploy the apollo-tasks function and hit ↻ Sync first.\n\nMigrate at step 1 anyway?')) return; }
-  else if(!confirm('Migrate '+plan.length+' contact'+(plan.length===1?'':'s')+' from Apollo into the matching CRM sequence, resuming each at their current step?'+(skip?('\n\n'+skip+' will stay in Apollo (no matching CRM play).'):'')+'\n\nReversible with Undo.')) return;
-  const MR=(typeof myRep==='function'&&myRep())||'';   // claim the migrated book to whoever runs it (the Apollo owner)
-  const undo=[];
-  plan.forEach(({c,seqId})=>{ const q=seqById(seqId); const N=(q&&q.steps&&q.steps.length)||1;
-    const step=Math.min(Math.max(+c.apolloStep||1,1),N);
-    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,assignee:c.assignee,emailSeq:c.emailSeq});
-    c.emailSeq={step:step,startedAt:Date.now(),seqId:seqId,migratedFrom:'apollo'};
-    if(MR&&!c.assignee) c.assignee=MR;
-    c.apolloDone=true; c.apolloSeq='';
-    stampU(c); logAuto(c,'⇄ Migrated from Apollo → CRM play "'+((q&&q.name)||seqId)+'" at step '+step);
-  });
-  syncSeqTasks();   // put every just-migrated contact's current step into the task queue, due today
-  __apolloUndo=undo; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
-  toast('Migrated '+plan.length+' contact'+(plan.length===1?'':'s')+' off Apollo'+(skip?(' · '+skip+' left in Apollo'):'')+' — Undo available · check your task queue');
-}
-function undoApolloMigrate(){ if(!__apolloUndo||!__apolloUndo.length){ toast('Nothing to undo'); return; }
-  __apolloUndo.forEach(u=>{ const c=contact(u.id); if(!c) return;
-    c.emailSeq=u.emailSeq||null; c.apolloDone=u.apolloDone||false; c.apolloSeq=u.apolloSeq; c.apolloStep=u.apolloStep; c.apolloStatus=u.apolloStatus;
-    if('assignee' in u) c.assignee=u.assignee;
-    if(typeof clearEmailTasks==='function') clearEmailTasks(u.id); stampU(c); });
-  const n=__apolloUndo.length; __apolloUndo=null; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
-  toast('Migration undone — '+n+' contact'+(n===1?'':'s')+' restored to Apollo'); }
-// Re-sync steps: heals contacts already migrated off Apollo whose emailSeq.step is wrong (e.g. a
-// migration that ran before real step data was flowing stamped everyone at step 1) AND claims the
-// migrated book to the current rep so it shows in THEIR task dash (not the shared/unassigned pool).
-// Bumps emailSeq.step to the freshly-synced c.apolloStep, assigns unowned rows, then regenerates every
-// task fresh (correct step + owner, due today). Only touches migratedFrom:'apollo' rows; reversible.
-function resyncApolloSteps(){
-  const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo');
-  if(!migd.length){ toast('No migrated contacts yet — Migrate first'); return; }
-  if(!migd.some(c=>+c.apolloStep>0)){ toast('Nothing to re-sync — hit ↻ Sync first so Apollo step data is fresh'); return; }
-  const MR=(typeof myRep==='function'&&myRep())||'';
-  const undo=[]; let fixed=0, claimed=0;
-  migd.forEach(c=>{ const q=seqById(c.emailSeq.seqId); const N=(q&&q.steps&&q.steps.length)||1;
-    const from=+c.emailSeq.step||1;
-    const step=(+c.apolloStep>0)?Math.min(Math.max(+c.apolloStep,1),N):from;
-    const needStep=step!==from, needClaim=!!(MR&&!c.assignee);
-    if(!needStep&&!needClaim) return;
-    undo.push({id:c.id,apolloSeq:c.apolloSeq,apolloStep:c.apolloStep,apolloStatus:c.apolloStatus,apolloDone:c.apolloDone,assignee:c.assignee,emailSeq:JSON.parse(JSON.stringify(c.emailSeq))});
-    if(needStep){ c.emailSeq={...c.emailSeq,step:step}; logAuto(c,'⇄ Re-synced Apollo step '+from+' → '+step+' (matched to Apollo)'); fixed++; }
-    if(needClaim){ c.assignee=MR; claimed++; }
-    stampU(c); });
-  if(!fixed&&!claimed){ toast('All '+migd.length+' migrated contacts already match Apollo & are assigned ✅'); return; }
-  migd.forEach(c=>{ if(typeof clearEmailTasks==='function') clearEmailTasks(c.id); });   // wipe stale tasks…
-  syncSeqTasks();                                                                          // …regenerate with right step + owner, due today
-  __apolloUndo=undo; save(); renderSequences(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
-  toast('Re-synced '+fixed+' step'+(fixed===1?'':'s')+(claimed?(' · claimed '+claimed+' to you'):'')+' — task queue updated · Undo available');
-}
 function renderSequences(){
   const stats=seqStats();
-  const active=contacts().filter(seqActive);
-  const paused=contacts().filter(seqPaused);
-  const done=contacts().filter(c=>c.emailSeq&&c.emailSeq.done);
-  const apollo=contacts().filter(c=>c.apolloSeq);
-  const migd=contacts().filter(c=>c.emailSeq&&c.emailSeq.migratedFrom==='apollo');
-  let h='<div class="panel"><div class="ph"><h3>✉️ Sequences</h3><span class="sub">your Apollo plays, run from inside the CRM — enroll from any contact drawer · click a play to see who\'s in it</span></div>'+
+  const repMatch=c=>{ if(seqRepFilter==='__all') return true; if(seqRepFilter==='__mine') return seqMine(c); return repCanon(seqOwner(c))===repCanon(seqRepFilter); };
+  const active=contacts().filter(seqActive).filter(repMatch);
+  const paused=contacts().filter(seqPaused).filter(repMatch);
+  const done=contacts().filter(c=>c.emailSeq&&c.emailSeq.done).filter(repMatch);
+  // Owner filter bar — counts come from the SAME bucket the list is showing (active by default,
+  // paused when focused) so each chip's number matches what you'll actually see.
+  const focusBase = seqFocus==='__paused'?contacts().filter(seqPaused)
+    : contacts().filter(seqActive);
+  // Owner chips are built from whoever ACTUALLY owns sequences in this bucket (dynamic, like the step
+  // chips) — not team(), which can miss reps who exist only as sequence owners. Your own name is folded
+  // into "Mine" so it isn't shown as a redundant near-duplicate chip.
+  const meCanon=repCanon((typeof myRep==='function'&&myRep())||'');
+  const ownerCount={}, ownerName={};
+  focusBase.forEach(c=>{ const o=seqOwner(c); const k=repCanon(o); if(k){ ownerCount[k]=(ownerCount[k]||0)+1; if(!ownerName[k]) ownerName[k]=o; } });
+  const mineCount=focusBase.filter(seqMine).length;
+  const otherReps=Object.keys(ownerCount).filter(k=>k&&k!==meCanon).sort((a,b)=>ownerCount[b]-ownerCount[a]);
+  const repChip=(v,label,cnt)=>'<button class="btn sm '+(seqRepFilter===v?'pri':'gh')+'" onclick="setSeqRepFilter('+JSON.stringify(v).replace(/"/g,'&quot;')+')">'+esc(label)+(cnt!=null?' <span style="opacity:.7">'+cnt+'</span>':'')+'</button>';
+  const repBar=otherReps.length?('<div style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 0;align-items:center"><span class="tsub" style="margin-right:2px">Assigned to</span>'+
+    repChip('__mine','👤 Mine',mineCount)+repChip('__all','Everyone',focusBase.length)+
+    otherReps.map(k=>repChip(ownerName[k],ownerName[k],ownerCount[k])).join('')+'</div>'):'';
+  let h='<div class="panel"><div class="ph"><h3>✉️ Sequences</h3><span class="sub">your plays, run from inside the CRM — enroll from any contact drawer · click a play to see who\'s in it</span></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
       stat(active.length,'In a sequence',true,"setSeqFocus(null)",seqFocus===null)+
       stat(paused.length,'Paused — re-enroll',false,"setSeqFocus('__paused')",seqFocus==='__paused')+
       stat(done.length,'Completed cadences',false)+
-      stat(apollo.length,'Still in Apollo',false,"setSeqFocus('__apollo')",seqFocus==='__apollo')+
       stat(seqLib().length,'Plays available',false)+'</div>'+
       (paused.length?'<div class="sub" style="margin-top:10px">⏸ '+paused.length+' contact'+(paused.length===1?' was':'s were')+' pulled out of their sequence. Open one and hit <b>▶ Resume</b> to put it back in at the step you choose.</div>':'')+
-      (apollo.length?'<div class="sub" style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">⚠️ '+apollo.length+' contact'+(apollo.length===1?' is':'s are')+' still enrolled in Apollo. <button class="btn sm pri" onclick="migrateFromApollo()">⇄ Migrate all into CRM sequences</button>'+((__apolloUndo&&__apolloUndo.length)?'<button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button>':'')+'<span class="tsub">resumes each at their current Apollo step</span></div>':((__apolloUndo&&__apolloUndo.length)?'<div class="sub" style="margin-top:10px">✅ Migrated off Apollo. <button class="btn sm gh" onclick="undoApolloMigrate()">↩ undo</button></div>':''))+
-      (migd.length?'<div class="sub" style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">🔄 '+migd.length+' migrated from Apollo. <button class="btn sm" onclick="resyncApolloSteps()">⇄ Re-sync steps</button><span class="tsub">↻ Sync first, then click to fix anyone stuck on the wrong step</span></div>':'')+
     '</div></div>';
   // Play library — one card per sequence with enrollment + step histogram + copy preview.
   h+='<div class="panel"><div class="ph"><h3>📚 Play library</h3><span class="sub">click "steps" to preview the copy · ✎ edit a play · click a card to filter the list below</span><button class="btn sm pri" style="margin-left:auto" onclick="openSeqEditor(null)">＋ New sequence</button></div><div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
@@ -3855,18 +3768,17 @@ function renderSequences(){
     '</div>';
   });
   h+='</div></div>';
-  // Enrolled list, filtered by the focused play (or Apollo, or all).
+  // Enrolled list, filtered by the focused play (or all).
   let list=active, title='Everyone in a sequence';
   if(seqFocus==='__paused'){ list=paused; title='Paused — pick these back up'; }
-  else if(seqFocus==='__apollo'){ list=apollo.map(c=>c); title='Still in Apollo — migrate these'; }
   else if(seqFocus){ const q=seqById(seqFocus); title='In "'+((q&&q.name)||seqFocus)+'"'; list=active.filter(c=>c.emailSeq&&c.emailSeq.seqId===seqFocus);
     if(seqStepFocus!=null){ const sd=(q&&q.steps&&q.steps[seqStepFocus-1])||{}, kk=stepKind(sd), noun=kk==='call'?'Call':kk==='task'?'Task':'Email';
       list=list.filter(c=>{ const N=cadNFor(c); return Math.min(Math.max(+((c.emailSeq&&c.emailSeq.step))||1,1),N)===seqStepFocus; });
       title+=' · on '+noun+' '+seqStepFocus; } }
   list=list.slice().sort((a,b)=>((+((b.emailSeq&&b.emailSeq.lastSentAt))||0)-(+((a.emailSeq&&a.emailSeq.lastSentAt))||0)));
   // Step-filter chips (✉ Email 1/2 · 📞 Call 1/2 …) built from whoever's in the current list, so you
-  // can narrow "Everyone" or the Paused list down to a single step. Not meaningful for Apollo rows.
-  const showChips=(seqFocus!=='__apollo')&&list.length;
+  // can narrow "Everyone" or the Paused list down to a single step.
+  const showChips=list.length;
   let chipBar='';
   if(showChips){ const cnt={}, lab={};
     list.forEach(c=>{ const m=seqStepMeta(c); cnt[m.key]=(cnt[m.key]||0)+1; lab[m.key]=m.label; });
@@ -3878,13 +3790,13 @@ function renderSequences(){
   }
   if(seqKindFilter) list=list.filter(c=>seqStepMeta(c).key===seqKindFilter);
   const kindLbl=seqKindFilter?(' · '+(seqKindFilter.split(':')[0]==='call'?'📞 Call ':seqKindFilter.split(':')[0]==='task'?'✅ Task ':'✉ Email ')+seqKindFilter.split(':')[1]):'';
+  const repLbl=seqRepFilter==='__all'?'':(seqRepFilter==='__mine'?' · Mine':' · '+seqRepFilter);
   const clr=(seqFocus||seqStepFocus!=null||seqKindFilter)?' · <a href="javascript:void(0)" onclick="setSeqFocus(null)" style="color:var(--acc)">clear ✕</a>':'';
   let body;
   if(!list.length) body='<div class="qempty">No contacts on this step'+(seqKindFilter?' — try another chip above':'')+'.</div>';
-  else if(seqFocus==='__apollo') body='<table><tbody>'+apollo.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(c=>'<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer"><td><span class="tname">'+esc(cname(c))+'</span></td><td class="tsub">'+esc((acct(c.accountId)&&aname(acct(c.accountId)))||'')+'</td><td>'+esc(c.apolloSeq)+'</td><td class="tsub">Apollo</td></tr>').join('')+'</tbody></table>';
-  else if(seqFocus==='__paused') body='<table><thead><tr><th>Contact</th><th>Account</th><th>Was in</th><th>Last on</th><th>Assignee</th><th></th></tr></thead><tbody>'+list.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(pausedRowHtml).join('')+'</tbody></table>';
-  else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Sequence</th><th>Step</th><th>Progress</th><th>Last email</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
-  h+='<div class="panel"><div class="ph"><h3>👥 '+esc(title)+esc(kindLbl)+'</h3><span class="sub">'+list.length+' contact'+(list.length===1?'':'s')+clr+'</span></div>'+chipBar+body+'</div>';
+  else if(seqFocus==='__paused') body='<table><thead><tr><th>Contact</th><th>Account</th><th>Was in</th><th>Last on</th><th>Owner</th><th></th></tr></thead><tbody>'+list.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(pausedRowHtml).join('')+'</tbody></table>';
+  else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Owner</th><th>Sequence</th><th>Step</th><th>Progress</th><th>Last email</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
+  h+='<div class="panel"><div class="ph"><h3>👥 '+esc(title)+esc(kindLbl)+esc(repLbl)+'</h3><span class="sub">'+list.length+' contact'+(list.length===1?'':'s')+clr+'</span></div>'+repBar+chipBar+body+'</div>';
   el('view-sequences').innerHTML=h;
 }
 /* ===== Sequence builder: create/edit a play with mixed steps (email / call / task). Edits to a
@@ -4364,8 +4276,6 @@ function openContact(id){
   if(c.angle) b+=fld('Why it scores',ta("setC('"+id+"','angle',this.value)",c.angle));
   b+=fld('Notes',ta("setC('"+id+"','notes',this.value)",c.notes));
   b+=outreachBar(c);
-  b+='<div class="sec">Apollo'+(c.apolloUrl?' <a href="'+esc(c.apolloUrl)+'" target="_blank" style="float:right;font-size:11px">Open in Apollo ↗</a>':'')+'</div>';
-  b+='<div class="f2">'+fld('Sequence / status',inp("setC('"+id+"','apolloSeq',this.value)",c.apolloSeq))+fld('Apollo link',inp("setC('"+id+"','apolloUrl',this.value)",c.apolloUrl))+'</div>';
   b+='<div class="sec">Cadence</div>'+cadenceBlock(id);
   b+=customBlock('c',id);
   b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')" title="Add a task due today or in N days">＋ Add task</button>'+(hasCadence('c',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+contactTasks(id);
@@ -4984,9 +4894,8 @@ function importCSV(text){
   const iOpens=col('opens','opened','pixel_visits','pixel visits','email opens'),
     iOpenAt=col('last opened','opened at','last_open','last open'),
     iReplied=col('replied','reply','has replied'),
-    iSeq=col('sequence','campaign','sequence name'),
     iLastAct=col('last contacted','last activity','last touch','lastcontacted','last engaged'),
-    // Apollo contact exports carry the personal/alt addresses people actually reply from — capture
+    // Contact exports carry the personal/alt addresses people actually reply from — capture
     // them so future open/reply imports attach to the right person instead of spawning a duplicate.
     iEmail2=col('secondary email','alt email','email 2','personal email'),iEmail3=col('tertiary email');
   const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='y'||v==='1'; };
@@ -5011,7 +4920,6 @@ function importCSV(text){
     if(openTs){ if(openTs>(+c.lastEmailOpenTs||0)) c.lastEmailOpenTs=openTs;
       c.log=c.log||[]; const txt='👀 Opened email'+(opensN>1?' ('+opensN+'x)':''); if(!c.log.some(l=>l.txt===txt&&l.ts===openTs)) c.log.push({ts:openTs,txt,sys:true}); hit=true; }
     if(iReplied>=0&&yes(r[iReplied])){ c.replied=true; hit=true; }
-    if(iSeq>=0){ const s=String(r[iSeq]||'').trim(); if(s){ c.apolloSeq=s; hit=true; } }
     const laTs=iLastAct>=0?(Date.parse(r[iLastAct]||'')||0):0;
     if(laTs&&laTs>(+c.lastContactedTs||0)){ c.lastContactedTs=laTs; c.lastContacted=fmtD(new Date(laTs)); hit=true; }
     if(hit){ stampU(c); nsig++; } return hit; }
@@ -5117,7 +5025,7 @@ function resolveEmailContact(email,company){
     if(aid && c && c.accountId!==aid && (!cur || isJunkDomainAccount(cur))){  // self-heal a past orphan (junk-domain or dangling acct) → real account
       const oldAid=c.accountId, kids=Object.values(store.contacts).filter(x=>x.accountId===aid);
       const blank=kids.find(x=>!x.email && x.id!==c.id);
-      if(blank){ (blank.log=blank.log||[]).push(...(c.log||[])); blank.email=em; if(c.lastEmailOpenTs>(+blank.lastEmailOpenTs||0))blank.lastEmailOpenTs=c.lastEmailOpenTs; if(c.replied)blank.replied=true; if(c.apolloSeq)blank.apolloSeq=c.apolloSeq; delete store.contacts[c.id]; if(!Object.values(store.contacts).some(x=>x.accountId===oldAid))delete store.accounts[oldAid]; return blank.id; }
+      if(blank){ (blank.log=blank.log||[]).push(...(c.log||[])); blank.email=em; if(c.lastEmailOpenTs>(+blank.lastEmailOpenTs||0))blank.lastEmailOpenTs=c.lastEmailOpenTs; if(c.replied)blank.replied=true; delete store.contacts[c.id]; if(!Object.values(store.contacts).some(x=>x.accountId===oldAid))delete store.accounts[oldAid]; return blank.id; }
       c.accountId=aid; if(!Object.values(store.contacts).some(x=>x.accountId===oldAid))delete store.accounts[oldAid];  // just relocate
     }
     return have; }
@@ -5214,7 +5122,7 @@ function prepEmailImport(rows,idx){
     let openTs=Date.parse((iOpenAt>=0?r[iOpenAt]:'')||'')||0;
     let cnt=parseInt(iCnt>=0?r[iCnt]:0)||0;
     const openedBool=iOpen>=0&&yes(r[iOpen]);
-    if(!openTs&&openedBool) openTs=sentTs||Date.now();   // Apollo gives no open time → use send date as proxy
+    if(!openTs&&openedBool) openTs=sentTs||Date.now();   // no open time in import → use send date as proxy
     if(openedBool&&!cnt) cnt=1;
     const seq=iSeq>=0?String(r[iSeq]||'').trim():'';
     if(sentTs) plan.push({email,company,ts:sentTs,txt:'📧 Sent: '+sub,kind:'sent',seq});
@@ -5235,7 +5143,7 @@ function applyLogImport(plan,kind){
     if(kind==='call'&&!map[key]&&!window.__impMkUnknown){ skippedUnknown++; return; }  // unknown number, checkbox off
     let cid=kind==='call'?(map[key]||ensureCallContact(p.n)):resolveEmailContact(p.email,p.company); map[key]=cid;
     const c=contact(cid); if(!c)return; c.log=c.log||[];
-    if(kind==='email'){ if(p.seq) c.apolloSeq=p.seq; if(p.kind==='reply') c.replied=true; }
+    if(kind==='email'){ if(p.kind==='reply') c.replied=true; }
     const dup=c.log.find(l=>l.txt===p.txt&&(!p.ts||l.ts===p.ts));   // same txt (+ts if known) → dupe
     if(dup){ if(p.by&&!dup.by){ dup.by=p.by; stampU(c); touched[cid]=1; } return; }  // …but backfill who dialed
     const e={ts:p.ts||Date.now(),txt:p.txt,sys:true}; if(p.by)e.by=p.by;
@@ -5404,10 +5312,10 @@ function boot(){
   syncRail(); checkBackupBanner();
   const cloudStart=Promise.resolve(initSync());
   if(!myRep()) repGate(true);   // sign in before working — attribution + lead-locking need a name
-  // Refresh the live Apollo count on load; the cloud pull preserves whichever sync is newer (see initSync),
-  // so this fresh number is never reverted to the stale saved one — fixes the 269-until-manual-↻ flap.
-  const apolloStart=SYNC_FN?Promise.resolve(syncApollo(true)):Promise.resolve(0);
-  Promise.allSettled([cloudStart,apolloStart]).then(()=>{ todayCountReady=true; if(syncSeqTasks())save(); renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); });
+  // Refresh live opens/replies from Gmail on load; the cloud pull preserves whichever sync is newer
+  // (see initSync), so this fresh number is never reverted to the stale saved one.
+  const gmailStart=(SYNC_FN&&typeof syncGmail==='function')?Promise.resolve(syncGmail(true)).catch(()=>0):Promise.resolve(0);
+  Promise.allSettled([cloudStart,gmailStart]).then(()=>{ todayCountReady=true; if(syncSeqTasks())save(); renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); });
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
