@@ -453,6 +453,7 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Decision-makers 👑</h4><div class="frow" id="f-owner"></div></div>
       <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Contact info</h4><div class="frow" id="f-have"></div></div>
       <div class="fsec" data-tabs="hotlist contacts"><h4 style="margin:12px 0 6px">Email opens</h4><div class="frow" id="f-opens"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">ICP tier</h4><div class="frow" id="f-tier"></div></div>
       <div class="fsec" data-tabs="accounts closed live"><h4 style="margin:12px 0 6px">Locations</h4><div class="frow" id="f-loc"></div></div>
       <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">POS</h4><div class="frow" id="f-pos"></div></div>
       <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">Cuisine</h4><div class="frow" id="f-cuisine"></div></div>
@@ -487,6 +488,9 @@ small.hint{color:var(--dim);font-size:11px}
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="importBackupPrompt()">Import CSV / JSON</button>
       <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">Drops in call logs (OpenPhone), email opens (Mailtracker), or contact sheets — auto-detected.</div>
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="el('ohioimp').click()">🍽 Import Ohio market data</button>
+      <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">book_patch.json enriches accounts you already have. ohio_accounts.json adds net-new Ohio restaurants. Existing values are never overwritten.</div>
+      <input type="file" id="ohioimp" style="display:none" accept=".json" onchange="onOhioFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="retierBook()">Re-tier book by heat</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="openDedupe()">Find duplicates</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="repairAltEmails()" title="Pull the personal/alt addresses buried in merge notes (e.g. a gmail someone replied from) up onto the contact so future open/reply imports attach to the right person">Repair alternate emails</button>
@@ -555,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul29·z103';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul31·z104';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -840,7 +844,7 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), hours:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), hours:new Set(), tier:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
@@ -851,6 +855,15 @@ function buildFilters(){
     op.innerHTML=OP.map(([k,lbl])=>'<span class="fchip '+(UI.opens.has(k)?'on':'')+'" onclick="tgl(\'opens\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const ow=el('f-owner'); if(ow){ const OW=[['own','👑 Owners only'],['non','Other titles']];
     ow.innerHTML=OW.map(([k,lbl])=>'<span class="fchip '+(UI.owner.has(k)?'on':'')+'" onclick="tgl(\'owner\',\''+k+'\')">'+lbl+'</span>').join(''); }
+  // ICP tier chips — live counts so you can see how much of the book is actually sellable
+  const tr=el('f-tier'); if(tr){ const tc={};
+    accounts().forEach(a=>{ const k=acctTier(a)||'?'; tc[k]=(tc[k]||0)+1; });
+    const TR=[['A','🟢 A best fit'],['B','B strong'],['C','C workable'],['D','D thin'],
+              ['X','⛔ X chain'],['?','Unscored']];
+    tr.innerHTML=TR.filter(([k])=>tc[k]||UI.tier.has(k)).map(([k,lbl])=>
+      '<span class="fchip '+(UI.tier.has(k)?'on':'')+'" onclick="tgl(\'tier\',\''+k+'\')">'+lbl+
+      ' <span style="opacity:.55">'+(tc[k]||0)+'</span></span>').join('')
+      ||'<span class="tsub">import Ohio data to score</span>'; }
   const lc=el('f-loc'); if(lc){ const LC=[['multi','🏢 Multi-location'],['single','📍 Single location']];
     lc.innerHTML=LC.map(([k,lbl])=>'<span class="fchip '+(UI.loc.has(k)?'on':'')+'" onclick="tgl(\'loc\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const asg=el('f-assignee'); if(asg){ const AS=[['__none','Unassigned'],...team().map(n=>[n,n])];
@@ -874,7 +887,7 @@ function tgl(k,v){ const set=UI[k]; set.has(v)?set.delete(v):set.add(v); buildFi
   // location bubbles filter accounts; the rest filter people — jump to the right tab so the filter takes effect
   const acctTabs=['accounts','closed','live'], peopleTabs=['contacts','leads','hotlist'];
   if(k==='loc'){ if(!acctTabs.includes(UI.tab)){ switchTab('accounts'); return; } }
-  else if(k==='pos'||k==='cuisine'||k==='hours'){ if(!acctTabs.includes(UI.tab)&&!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; } }
+  else if(k==='pos'||k==='cuisine'||k==='hours'||k==='tier'){ if(!acctTabs.includes(UI.tab)&&!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; } }
   else if(!peopleTabs.includes(UI.tab)){ switchTab('contacts'); return; }
   renderActive(); }
 // multi = brand parent or one of its locations; single = standalone account
@@ -886,7 +899,38 @@ const POS_BRANDS=['Toast','Square','Clover','Olo','ChowNow','Deliverect','Lunchb
 function posOf(a){ const p=(a&&a.pos||'').trim(); if(!p) return ''; const low=p.toLowerCase();
   const b=POS_BRANDS.find(x=>low.includes(x.toLowerCase())); return b||'Other'; }
 function cuiOf(a){ return (a&&a.cuisine||'').trim(); }
+
+/* ===== ICP TIERS =====================================================
+   Stamped onto accounts by the Ohio enrichment import (_import/ohio).
+   The score is built OUTSIDE the app from real signals — detected POS,
+   whether that stack is on shipday.com/integrations, 3rd-party delivery
+   spend, location count, and record completeness — so the tier tells you
+   WHY a name is worth a dial, not just that it exists.
+
+   A  best fit — Toast/Square or another native integration
+   B  strong   — integrated stack or paying commissions
+   C  workable
+   D  thin record / poor fit (bars, no ordering, no phone)
+   X  national chain — corporate delivery contract, a franchisee CANNOT
+      buy Shipday. Excluded from every call queue; dialing it is wasted.
+   ''  not yet scored (never imported / out of state)                    */
+const TIER_META={
+  A:{lbl:'A',c:'var(--won)',  t:'Best fit — native Shipday integration'},
+  B:{lbl:'B',c:'var(--sig2)', t:'Strong fit'},
+  C:{lbl:'C',c:'var(--warm)', t:'Workable'},
+  D:{lbl:'D',c:'var(--mut)',  t:'Thin record or poor fit'},
+  X:{lbl:'X',c:'var(--hot)',  t:'National chain — cannot buy, excluded from queues'},
+};
+function acctTier(a){ const t=((a&&a.tier)||'').toUpperCase(); return TIER_META[t]?t:''; }
+// Hard exclusion. Chains stay visible/searchable in Accounts but never enter a queue.
+function isDeadChain(a){ return acctTier(a)==='X'; }
+function tierBadge(a){ const t=acctTier(a); if(!t) return '<span class="tsub">—</span>';
+  const m=TIER_META[t];
+  return '<span class="tag" style="border-color:'+m.c+';color:'+m.c+'" title="'+esc(a.tierWhy||m.t)+'">'+
+    (a.isToast?'★ ':'')+m.lbl+'</span>'; }
+function matchTier(a){ if(!UI.tier.size) return true; return UI.tier.has(acctTier(a)||'?'); }
 function matchPosCui(a){
+  if(!matchTier(a)) return false;
   if(UI.pos.size && !UI.pos.has(posOf(a))) return false;
   if(UI.cuisine.size && !UI.cuisine.has(cuiOf(a))) return false;
   if(UI.hours.size){ const v=hoursOpenNow(a);
@@ -1888,6 +1932,13 @@ function heat(c){ if(!c) return 0; const now=Date.now();
   else if(/reschedul/.test(disp)) p+=140;                    // actively rescheduling — still engaged
   else if(/not interested|dnc/.test(disp)) p-=140;           // told us no — sink it
   if(c.warmth==='Hot') p+=60; else if(c.warmth==='Warm') p+=25;  // manual/inherited warmth tag
+  // ICP FIT — outside-in signal from the enrichment pass. A Toast/Square shop with a native
+  // Shipday connector is a materially better dial than an equally-warm business we'd have to
+  // custom-integrate, so fit breaks the tie. Deliberately smaller than any engagement signal:
+  // fit decides WHO to call when nothing else separates them, it never outranks a real reply.
+  { const a=acct(c.accountId), t=a?acctTier(a):'';
+    if(t==='A') p+=80; else if(t==='B') p+=45; else if(t==='C') p+=15; else if(t==='D') p-=20;
+    if(a&&a.isToast) p+=40; }                                 // core ICP on top of the tier
   const staleD=touch?(now-touch)/_DAY:45;
   p+=Math.min(staleD,30)*2;                                  // staleness, capped so ancients don't hog
   // FAIRNESS — spread the work so the same names don't monopolize the queue and under-worked leads
@@ -2036,7 +2087,7 @@ function prefilter(list){ return list.filter(c=>{
     if(UI.opens.has('none')&&op) return false; }
   if(UI.owner.size){ const own=isOwner(c); if(UI.owner.has('own')&&!own) return false; if(UI.owner.has('non')&&own) return false; }
   if(UI.assignee.size){ const who=c.assignee||''; const ok=(UI.assignee.has('__none')&&!who)||(who&&UI.assignee.has(who)); if(!ok) return false; }
-  if((UI.pos.size||UI.cuisine.size||UI.hours.size)&&!matchPosCui(acct(c.accountId))) return false;
+  if((UI.pos.size||UI.cuisine.size||UI.hours.size||UI.tier.size)&&!matchPosCui(acct(c.accountId))) return false;
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.email2||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
@@ -2138,7 +2189,12 @@ function cmAddPerson(){ const c=contact(callModalId); if(!c) return;
   renderCallModal(); renderCounts();
   toast('Added '+nm+' — this call now logs to them');
 }
-function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;   // disposition = warmth signal only; it never sets the call-back window
+function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;
+  // Pre-select the disposition's SUGGESTED call-back window (d.req). This used to
+  // be dead data — req was declared on every DISPO but never read, so any call the
+  // rep didn't manually re-queue defaulted to 'none' and the lead fell out of the
+  // queue entirely. Rep can still override or clear; 'gone' dispos stay off-queue.
+  const d=DISPO_BY[k]; if(d) cmSel.req=d.gone?'none':(d.req||cmSel.req||'none');
   renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
 function cmPickReq(k){ cmSyncNote(); cmSel.req=k; renderCallModal(); }
 function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
@@ -2158,9 +2214,19 @@ function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
   const nt=(note||'').trim(); if(nt) c.callNote=nt;
   const rq=REQUEUE_BY[reqKey]||REQUEUE_BY.none;
-  // Call-back timing is ONLY what the rep chose here — the disposition never forces it.
+  // Remember WHICH part of the day we just failed in, so the next attempt rotates
+  // to a different band instead of re-dialing into the same dead zone.
+  const bandNow=callBand(new Date()).k; const prevBand=c.lastCallBand; c.lastCallBand=bandNow;
   if(rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; }
-  else { c.queueOut=false; c.nextCallAt=Date.now()+(+rq.ms||0); }
+  else if(rq.k==='next'||rq.ms===0){ c.queueOut=false; c.nextCallAt=Date.now(); }
+  else {
+    c.queueOut=false;
+    // 1) widen the gap with each unanswered attempt so we never burn the number
+    const ladder=attemptLadder(+rq.ms||0,c.callCount);
+    // 2) land the call-back inside a real calling window, rotating off the band
+    //    we just struck out in (a 2pm no-answer retries at 9:30am, not 6pm).
+    c.nextCallAt=nextGoodCallTime(Date.now()+ladder,bandNow);
+  }
   // Disposition + notes are purely a warmth signal: they set how hot the lead is; the Hot List re-ranks.
   if(d.w) c.warmth=d.w;
   // "Already a Shipday customer" → flag the whole ACCOUNT as an existing customer (NOT our win,
@@ -2220,6 +2286,57 @@ const REQUEUE=[
   {k:'none',  t:'No call-back',    ms:-1},
 ];
 const REQUEUE_BY=Object.fromEntries(REQUEUE.map(r=>[r.k,r]));
+/* ===== RESTAURANT CALLING WINDOWS =====================================
+   A restaurant is not an office. Dialing into a service rush doesn't just
+   fail to connect — it burns the number, because the person who picks up is
+   slammed and remembers being interrupted. Connect rate is dominated by WHEN
+   you dial, not who you dial. Bands are local time; w = expected connect
+   quality 0..1. The golden window is between the two rushes, when the owner
+   is doing paperwork and the phone is quiet. */
+const CALL_BANDS=[
+  {k:'early',  s:7.0,  e:9.5,  w:0.30, t:'Early — kitchen usually not staffed yet'},
+  {k:'prep',   s:9.5,  e:11.5, w:0.85, t:'Prep time — good, owner is receiving deliveries'},
+  {k:'lunch',  s:11.5, e:13.5, w:0.05, t:'LUNCH RUSH — do not dial'},
+  {k:'golden', s:13.5, e:16.5, w:1.00, t:'GOLDEN WINDOW — between rushes, best connects'},
+  {k:'dinner', s:16.5, e:20.5, w:0.05, t:'DINNER RUSH — do not dial'},
+  {k:'late',   s:20.5, e:22.0, w:0.35, t:'Late — winding down, hit or miss'},
+  {k:'closed', s:22.0, e:31.0, w:0.02, t:'Closed'},
+];
+// Mon-Thu is prime; weekend service is heavier and staffing thinner.
+const CALL_DOW=[0.45,1.00,1.00,1.00,1.00,0.80,0.55];   // Sun..Sat
+function _hDec(d){ return d.getHours()+d.getMinutes()/60; }
+function callBand(d){ d=d||new Date(); const h=_hDec(d);
+  return CALL_BANDS.find(b=>h>=b.s&&h<b.e)||CALL_BANDS[CALL_BANDS.length-1]; }
+// Overall quality of dialing RIGHT NOW (band × day-of-week).
+function callQuality(d){ d=d||new Date(); const b=callBand(d);
+  return {k:b.k,t:b.t,band:b,w:+(b.w*CALL_DOW[d.getDay()]).toFixed(3),dow:CALL_DOW[d.getDay()]}; }
+function isGoodCallTime(d){ return callQuality(d).w>=0.55; }
+/* Next timestamp that lands inside a good calling window. `avoid` = a band key
+   we already tried and failed on, so repeat attempts ROTATE across the day
+   (a 2pm no-answer retries in the morning, not at 6pm the same day). This is
+   the single biggest lever on connect rate for multi-attempt leads. */
+function nextGoodCallTime(from,avoid){
+  const start=new Date(+from||Date.now());
+  const good=CALL_BANDS.filter(b=>b.w>=0.8);
+  for(let day=0;day<14;day++){
+    const d=new Date(start); d.setDate(d.getDate()+day);
+    if(CALL_DOW[d.getDay()]<0.6) continue;                 // skip Sun (and thin Sat)
+    for(const b of good){
+      if(day===0&&avoid&&b.k===avoid) continue;            // rotate off the failed band
+      const t=new Date(d); t.setHours(Math.floor(b.s),Math.round((b.s%1)*60),0,0);
+      if(day===0&&b.k===avoid) continue;
+      if(t.getTime()>+start+5*6e4) return t.getTime();     // must be at least 5m out
+    }
+  }
+  return (+from||Date.now())+_DAY;
+}
+/* Attempt ladder — each unanswered attempt widens the gap so we never burn a
+   number with 6 dials in 2 days. Applied on top of the rep's chosen window. */
+function attemptLadder(ms,attempts){
+  const n=Math.max(0,+attempts||0);
+  const mult=n<=1?1:n===2?1.5:n===3?2.5:n===4?4:6;
+  return Math.round(ms*mult);
+}
 function dtLocal(ts){ const d=new Date(+ts||Date.now()); const p=n=>(n<10?'0':'')+n;
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
 function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
@@ -2320,7 +2437,9 @@ function hotQueue(){ const now=Date.now();
   // Phone is required to be callable — UNLESS the contact is in a sequence (then they show anyway,
   // even with no phone/email). A sequence is an individual list, so that bypass only applies in the
   // assignee's OWN Hot List (seqMine); it never floods another rep's queue with your sequence.
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c);
+  // Tier X = national chain. The store manager can't sign a delivery contract, so every
+  // one of those dials is dead air. Kept out of the queue entirely (still searchable in Accounts).
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c)&&!isDeadChain(acct(c.accountId));
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   // Body of the list = contacts you tagged Hot PLUS anyone sitting on a sequence CALL step (a planned,
@@ -3542,7 +3661,23 @@ function renderHotList(){
   } else if(coldN>0){
     exhaust='<div class="panel" style="border-color:var(--warm)"><div style="padding:12px 16px;font-size:13px;line-height:1.5">⚠️ <b>Book running low</b> — '+coldN+' cold contact'+(coldN>1?'s':'')+' surfaced into the queue (only '+hotN+' Hot leads have real phones). Sync fresh opens or add prospects to keep 150 warm calls stocked.</div></div>';
   }
-  let h = idBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
+  // ===== CALLING-WINDOW BANNER =====
+  // Restaurants are unreachable during service. Telling the rep to stop dialing at
+  // 12:15pm and come back at 2:00 is worth more than any ranking tweak.
+  const cq=callQuality(); let winBar='';
+  if(cq.w<0.25){
+    const nxt=nextGoodCallTime(Date.now(),null);
+    const nd=new Date(nxt), hh=nd.getHours(), mm=(nd.getMinutes()<10?'0':'')+nd.getMinutes();
+    const when=(nd.toDateString()===new Date().toDateString()?'':'tomorrow ')+
+      ((hh%12)||12)+':'+mm+(hh<12?'am':'pm');
+    winBar='<div class="panel" style="border-color:var(--hot)"><div style="padding:12px 16px;font-size:13px;line-height:1.5">'+
+      '⛔ <b>'+esc(cq.band.t)+'</b> — you\'ll burn numbers dialing now. Next good window: <b>'+esc(when)+'</b>.'+
+      '<br><span style="opacity:.75">Good time to clear email steps instead — the queue will hold.</span></div></div>';
+  } else if(cq.k==='golden'&&cq.dow>=0.8){
+    winBar='<div class="panel" style="border-color:var(--sig)"><div style="padding:10px 16px;font-size:13px">'+
+      '🎯 <b>Golden window</b> — between lunch and dinner rush. Best connect rate of the day. Dial hard.</div></div>';
+  }
+  let h = idBar + winBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
     : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
   // Leads teammates are actively on — live box, ticks every second (see onCallsHtml + ticker below).
   h+='<div id="onCallsBox">'+onCallsHtml()+'</div>';
@@ -3882,6 +4017,12 @@ function promptDirectLine(id){ const c=contact(id); if(!c) return; const a=acct(
 /* ====================== ACCOUNTS ====================== */
 const A_COLS=[
   {k:'name',t:'Account',val:a=>a.name,cell:a=>'<span class="tname">'+esc(a.name)+'</span>'+(isBrand(a)?' <span class="tsub">🏢'+childLocs(a.id).length+'</span>':isLocation(a)?' <span class="tsub">📍</span>':'')},
+  // Sorts A,B,C,D then X, unscored last — so "sort by Tier" surfaces best-fit first.
+  {k:'tier',t:'Tier',val:a=>({A:1,B:2,C:3,D:4,X:8}[acctTier(a)]||9),cell:a=>tierBadge(a)},
+  {k:'fit',t:'Shipday fit',val:a=>a.integrated||a.notIntegrated||'',
+   cell:a=>a.integrated?'<span class="tag cust" title="Native connector on shipday.com/integrations">✓ '+esc(a.integrated)+'</span>'
+        :a.notIntegrated?'<span class="tag" title="Runs online ordering, but no native Shipday connector — custom/API conversation">⚠ '+esc(a.notIntegrated)+'</span>'
+        :'<span class="tsub">—</span>'},
   {k:'cuisine',t:'Cuisine',val:a=>a.cuisine||''},
   {k:'loc',t:'Location',val:a=>[a.city,a.state].filter(Boolean).join(', ')},
   {k:'address',t:'Address',val:a=>a.address||''},
@@ -3896,7 +4037,7 @@ const A_COLS=[
   {k:'source',t:'Source',val:a=>a.source||''},
   {k:'assigned',t:'Assigned to',val:a=>a.assignee||'',cell:a=>a.assignee?'<span class="tag">'+esc(a.assignee)+'</span>':'<span class="tsub">—</span>'}
 ];
-COLDEF.accounts=['name','cuisine','loc','pos','delivery','contacts','type','mrr'];
+COLDEF.accounts=['name','tier','fit','loc','pos','delivery','contacts','type'];
 COLDEF.closed=['name','onboard','pos','contacts','mrr'];
 COLDEF.live=['name','onboard','mrr','pos','contacts'];
 function renderAccounts(){
@@ -4150,6 +4291,13 @@ function setDplan(id,v){ const d=deal(id); if(!d)return; d.plan=+v||0; d.mrr=+v|
 function setDclosed(id,v){ const d=deal(id); if(!d)return; d.closedAt = v? new Date(v+'T12:00:00').getTime() : 0; stampU(d); touch(); }
 function setAplan(id,v){ const a=acct(id); if(!a)return; a.plan=+v||0; a.mrr=+v||0; stampU(a); touch(); if(drawerOpen())openAccount(id); }
 function setAcust(id,v){ const a=acct(id); if(!a)return; a.isCustomer=v; stampU(a); touch(); openAccount(id); }
+// Manual ICP tier. tierManual makes the choice sticky — the next Ohio import
+// re-scores everything else but leaves accounts the rep has personally judged.
+function setTier(id,v){ const a=acct(id); if(!a||!TIER_META[v])return;
+  a.tier=v; a.tierManual=true; a.excluded=(v==='X');
+  a.tierWhy='Set manually by '+((typeof myRep==='function'&&myRep())||'you');
+  stampU(a); touch(); openAccount(id);
+  toast('Tier '+v+(v==='X'?' — removed from call queues':'')); }
 function setAcustType(id,v){ const a=acct(id); if(!a)return;
   if(v==='Existing — not mine'){ a.isCustomer=true; a.existingCust=true; a.notOwned=true; }
   else if(v==='Yes — my customer'){ a.isCustomer=true; a.existingCust=false; a.notOwned=false; }
@@ -4319,7 +4467,27 @@ function openAccount(id){
       statChip('Last contacted',lt?fmtAgo(lt):'never'),
       statChip('Last email open',lo?fmtAgo(lo):'—',lo?'var(--sig)':'') ];
     if(open!==null) chips.push(statChip('Right now',open?'🟢 Open':'🔴 Closed',open?'var(--sig)':'var(--hot)'));
+    const tk=acctTier(a); if(tk) chips.push(statChip('ICP tier',(a.isToast?'★ ':'')+tk,TIER_META[tk].c));
     b+=statStrip(chips)+aiLine(acctAI(a)); }
+  // WHY this tier — the scoring happens offline against real signals, so show the
+  // rep the actual evidence instead of an unexplained letter grade.
+  { const tk=acctTier(a); if(tk&&(a.tierWhy||a.integrated||a.notIntegrated)){
+      const m=TIER_META[tk];
+      b+='<div class="panel" style="margin:0 0 12px;border-color:'+m.c+'"><div style="padding:9px 12px">'+
+        '<div style="font-size:11px;color:var(--mut);font-weight:700;letter-spacing:.04em">WHY TIER '+tk+
+          (a.tierScore?' <span style="opacity:.6">· score '+esc(a.tierScore)+'</span>':'')+'</div>'+
+        '<div style="font-size:12px;margin-top:3px">'+esc(a.tierWhy||m.t)+'</div>'+
+        (a.integrated?'<div style="font-size:12px;margin-top:4px;color:var(--won)">✓ Native Shipday integration: '+esc(a.integrated)+'</div>':'')+
+        (a.notIntegrated&&!a.integrated?'<div style="font-size:12px;margin-top:4px;color:var(--warm)">⚠ Runs '+esc(a.notIntegrated)+' — no native connector, expect an API conversation</div>':'')+
+        (tk==='X'?'<div style="font-size:12px;margin-top:4px;color:var(--hot)">⛔ Excluded from call queues — a franchisee can\'t choose the delivery stack.</div>':'')+
+        // Escape hatch. The score is computed from name/POS matching, which gets it
+        // wrong at the edges (a local "Freddy's Bar & Grill" reads as the custard chain).
+        // If Saad knows better, his call wins and sticks through the next import.
+        '<div style="margin-top:8px;display:flex;align-items:center;gap:7px">'+
+          '<span class="tsub" style="font-size:11px">Override</span>'+
+          sel("setTier('"+id+"',this.value)",['A','B','C','D','X'],tk)+
+          (a.tierManual?'<span class="tsub" style="font-size:11px">set by you</span>':'')+
+        '</div></div></div>'; } }
   // Customer marker up front — customers stay OUT of the Accounts list (they live on Closed/Live) but still exist
   b+='<div class="f2">'+fld('Name',inp("setA('"+id+"','name',this.value)",a.name))+
      fld('Current customer?',sel("setAcustType('"+id+"',this.value)",['No','Yes — my customer','Existing — not mine'],a.existingCust?'Existing — not mine':a.isCustomer?'Yes — my customer':'No'))+'</div>';
@@ -4872,6 +5040,113 @@ function onFile(e){ const f=e.target.files[0]; if(!f)return; const r=new FileRea
     else { smartImport(r.result); }
   }catch(err){ alert('Import failed: '+err.message); } e.target.value=''; };
   r.readAsText(f);
+}
+/* ============ OHIO MARKET IMPORT ====================================
+   Two files, both produced offline by _import/ohio (OpenStreetMap harvest +
+   a POS crawl of every restaurant website we could reach):
+
+     book_patch.json     [{id, name, match, fills:{...}}]
+       Accounts ALREADY in the book, matched against the harvest. Fills only
+       what's blank — address, phone, website, lat/lon, POS — and stamps the
+       ICP tier. Your data always wins; we never overwrite a value you have.
+
+     ohio_accounts.json  [{extId, name, address, ..., tier, ...}]
+       Net-new Ohio restaurants. Deduped against the book on phone / website /
+       name+city before anything is created, so re-running is safe.
+
+   Neither file touches contacts you own. New accounts get a single "Main Line"
+   contact built from the restaurant's public number and flagged for
+   decision-maker enrichment, so they're dialable on day one without pretending
+   we know who the owner is.                                                  */
+function _oNorm(s){ return String(s||'').toLowerCase().replace(/&/g,' and ')
+  .replace(/[^a-z0-9 ]/g,' ').replace(/\b(the|a|an|llc|inc|co|company)\b/g,' ')
+  .replace(/\s+/g,' ').trim(); }
+function _oPhone(s){ let d=String(s||'').replace(/\D/g,''); if(d.length===11&&d[0]==='1') d=d.slice(1); return d.length===10?d:''; }
+function _oSite(u){ return String(u||'').toLowerCase().replace(/^https?:\/\/(www\.)?/,'').replace(/\/+$/,'').split('/')[0]; }
+function onOhioFile(e){ const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ try{
+    const d=JSON.parse(r.result);
+    if(!Array.isArray(d)||!d.length) throw new Error('Expected a non-empty JSON array');
+    if(d[0]&&d[0].fills) applyBookPatch(d);
+    else if(d[0]&&d[0].extId) importOhioAccounts(d);
+    else throw new Error('Unrecognised file — expected book_patch.json or ohio_accounts.json');
+  }catch(err){ alert('Ohio import failed: '+err.message); } e.target.value=''; };
+  r.readAsText(f);
+}
+// ---- enrich accounts already in the book ----
+const OHIO_FILL=['address','city','zip','phone','website','cuisine','lat','lon','pos','delivery'];
+const OHIO_STAMP=['tier','tierScore','tierWhy','isToast','integrated','notIntegrated','excluded','osmId'];
+function applyBookPatch(patch){
+  let filled=0,stamped=0,missing=0,kept=0; const bump={};
+  patch.forEach(p=>{ const a=acct(p.id); if(!a){ missing++; return; }
+    let f=false;
+    OHIO_FILL.forEach(k=>{ const v=p.fills[k];
+      if(v!==undefined&&v!==null&&v!==''&&(a[k]===undefined||a[k]===null||a[k]==='')){ a[k]=v; bump[k]=(bump[k]||0)+1; f=true; } });
+    if(f) filled++;
+    // Tier is a scoring output, not user data — it's refreshed from the latest pass
+    // on every import. The one exception is an account the rep has tiered by hand;
+    // a human who has actually spoken to the business outranks the model.
+    if(!a.tierManual) OHIO_STAMP.forEach(k=>{ if(p.fills[k]!==undefined&&a[k]!==p.fills[k]){ a[k]=p.fills[k]; f=true; } });
+    else kept++;
+    if(f){ stamped++; stampU(a); } });
+  save(); render();
+  toast('Ohio enrichment: '+stamped+' accounts updated · '+filled+' got missing details'+
+        (kept?' · '+kept+' manual tiers kept':'')+(missing?' · '+missing+' no longer in book':''));
+  console.log('[ohio] fields filled:',bump);
+}
+// ---- add net-new Ohio restaurants ----
+function importOhioAccounts(recs){
+  // Only the sellable half is worth creating. National chains (tier X) are scored
+  // and kept in the file for auditing, but importing 6.6k unsellable names would
+  // bury the book — so they're dropped at the door.
+  const live=recs.filter(r=>!r.excluded);
+  const tiers={}; live.forEach(r=>{ tiers[r.tier]=(tiers[r.tier]||0)+1; });
+  const pick=(prompt('Ohio restaurants available (national chains already excluded):\n'+
+    ['A','B','C','D'].map(t=>'  tier '+t+': '+(tiers[t]||0)).join('\n')+
+    '\n\nImport which tiers? (e.g. "A" or "AB" or "ABC")','AB')||'').toUpperCase().replace(/[^ABCD]/g,'');
+  if(!pick) return;
+  const want=live.filter(r=>pick.includes(r.tier));
+  if(!want.length){ toast('Nothing matched those tiers'); return; }
+  if(!confirm('Create up to '+want.length+' new Ohio accounts (tier '+pick.split('').join('/')+')?\n\n'+
+              'Anything already in your book is skipped. Each new account gets one "Main Line" contact '+
+              'from the restaurant\'s public number, flagged for decision-maker enrichment.')) return;
+  // index the existing book once
+  const byPhone={},bySite={},byNameCity={},byExt={};
+  accounts().forEach(a=>{ const p=_oPhone(a.phone); if(p&&!byPhone[p]) byPhone[p]=a.id;
+    const s=_oSite(a.website); if(s&&!bySite[s]) bySite[s]=a.id;
+    const k=_oNorm(a.name)+'|'+String(a.city||'').toLowerCase().trim(); if(!byNameCity[k]) byNameCity[k]=a.id;
+    if(a.osmId&&!byExt[a.osmId]) byExt[a.osmId]=a.id; });
+  let created=0,skipped=0,cons=0;
+  want.forEach(r=>{
+    const p=_oPhone(r.phone), s=_oSite(r.website), nk=_oNorm(r.name)+'|'+String(r.city||'').toLowerCase().trim();
+    if(byExt[r.extId]||(p&&byPhone[p])||(s&&bySite[s])||byNameCity[nk]){ skipped++; return; }
+    const aid=uid('a');
+    store.accounts[aid]={id:aid,name:r.name,address:r.address||'',city:r.city||'',state:'OH',zip:r.zip||'',
+      phone:r.phone||'',website:r.website||'',cuisine:r.cuisine||'',pos:r.pos||'',delivery:r.delivery||'',
+      employees:r.employees||'',lat:r.lat,lon:r.lon,osmId:r.extId,
+      tier:r.tier,tierScore:r.tierScore,tierWhy:r.tierWhy,isToast:r.isToast,
+      integrated:r.integrated||'',notIntegrated:r.notIntegrated||'',excluded:!!r.excluded,
+      needsDM:true,source:r.source||'Ohio market data',isCustomer:false,_u:Date.now()};
+    // NOTE: each harvested record is ONE physical restaurant, not a brand parent.
+    // employees carries how many Ohio locations share the name (useful context —
+    // a 6-location local group has one decision-maker worth six stores), but we
+    // deliberately do NOT set locType:'multi', which would render it as a brand
+    // header with zero child locations.
+    // reserve the keys so two rows for the same shop can't both land
+    if(p) byPhone[p]=aid; if(s) bySite[s]=aid; byNameCity[nk]=aid; byExt[r.extId]=aid;
+    created++;
+    // Main Line contact — the shop's public number is a real, dialable entry point.
+    // needsDM flags it so the enrichment pass (and the rep) knows the human is still unknown.
+    if(r.phone){ const cid=uid('c');
+      store.contacts[cid]={id:cid,accountId:aid,first:'Main',last:'Line',title:'',email:'',
+        phone:r.phone,warmth:'Cold',status:'New',needsDM:true,source:'Ohio market data',
+        log:[{ts:Date.now(),txt:'📇 Imported from Ohio market data — public line, decision-maker not yet identified.',sys:true}],
+        _u:Date.now()};
+      cons++; }
+  });
+  store.__updatedAt=Date.now(); save(); render();
+  alert('Ohio import complete\n\n  '+created+' new accounts\n  '+cons+' Main Line contacts\n  '+skipped+
+        ' skipped (already in your book)\n\nFilter Accounts by ICP tier to work the best fits first.');
 }
 function parseCSV(text){ const rows=[]; let row=[],cur='',q=false;
   for(let i=0;i<text.length;i++){ const ch=text[i];
