@@ -590,7 +590,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug3·z113';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug3·z114';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2847,11 +2847,17 @@ function hotQueue(){ const now=Date.now();
   // The play has its own clock. If the cadence just fired Email 1 and booked "Call 2/10" for
   // tomorrow, this person HAS been contacted today — dialing them now is the queue overruling
   // the sequence it just built. Their turn comes when the step's task comes due.
+  // ...but a PROMISE beats the play. "Call me back Tuesday at 2" came from the person themselves;
+  // the cadence's schedule is a guess made before that conversation happened. So once a call-back
+  // is promised, nextCallAt (which holds the promised time) is the only clock that counts.
   const isDue=c=>{ if(+c.nextCallAt&&+c.nextCallAt>now) return false;
+    if(+c.promisedCallAt) return true;
     const e=taskIndex()[c.id]; return !(e&&e.callDue>now); };
-  // When it IS their turn — whichever comes first, the call-back you booked or the play's next
-  // call step. Drives the Later list so a held-back contact still shows a date instead of vanishing.
-  const dueAt=c=>{ const e=taskIndex()[c.id], a=+c.nextCallAt||0, b=(e&&e.callDue)||0;
+  // When it IS their turn — the promised time if one was given, otherwise whichever comes first,
+  // the call-back you booked or the play's next call step. Drives the Later list so a held-back
+  // contact still shows a date instead of vanishing.
+  const dueAt=c=>{ const a=+c.nextCallAt||0; if(+c.promisedCallAt) return a;
+    const e=taskIndex()[c.id], b=(e&&e.callDue)||0;
     return (a&&b)?Math.min(a,b):(a||b); };
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   // Body of the list = contacts you tagged Hot PLUS anyone sitting on a sequence CALL step (a planned,
@@ -2903,7 +2909,10 @@ function hotQueue(){ const now=Date.now();
   const promised=prefilter(contacts().filter(c=>+c.promisedCallAt&&canCall(c)));
   if(promised.length){
     const duePr=promised.filter(c=>+c.nextCallAt<=now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
-    if(duePr.length){ const s=new Set(duePr.map(c=>c.id)); due=duePr.concat(due.filter(c=>!s.has(c.id))); }
+    // Pull them OUT of Later as well as into due — a promise can be due while the contact's play
+    // still says "wait", which put the same person in Now-up and Scheduled at the same time.
+    if(duePr.length){ const s=new Set(duePr.map(c=>c.id));
+      due=duePr.concat(due.filter(c=>!s.has(c.id))); snoozed=snoozed.filter(c=>!s.has(c.id)); }
     const inSn=new Set(snoozed.map(c=>c.id));
     const laterPr=promised.filter(c=>+c.nextCallAt>now&&!inSn.has(c.id));
     if(laterPr.length) snoozed=snoozed.concat(laterPr).sort((a,b)=>dueAt(a)-dueAt(b));
