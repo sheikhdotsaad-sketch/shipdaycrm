@@ -489,7 +489,7 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">Drops in call logs (OpenPhone), email opens (Mailtracker), or contact sheets — auto-detected.</div>
       <input type="file" id="fileimp" style="display:none" accept=".json,.csv" onchange="onFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="el('ohioimp').click()">🍽 Import Ohio market data</button>
-      <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">book_patch.json enriches accounts you already have. ohio_accounts.json adds net-new Ohio restaurants. Existing values are never overwritten.</div>
+      <div class="tsub" style="font-size:10px;line-height:1.4;margin-bottom:6px">Pick <b>ohio_accounts.json</b>. Fills in the blanks on accounts you already have, flags who runs Toast or Square, then offers new Ohio restaurants to add. Nothing you've entered is overwritten. Safe to run again.</div>
       <input type="file" id="ohioimp" style="display:none" accept=".json" onchange="onOhioFile(event)">
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="retierBook()">Re-tier book by heat</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="openDedupe()">Find duplicates</button>
@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Jul31·z104';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Jul31·z105';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -5042,24 +5042,35 @@ function onFile(e){ const f=e.target.files[0]; if(!f)return; const r=new FileRea
   r.readAsText(f);
 }
 /* ============ OHIO MARKET IMPORT ====================================
-   Two files, both produced offline by _import/ohio (OpenStreetMap harvest +
-   a POS crawl of every restaurant website we could reach):
+   ONE file: ohio_accounts.json — 16,638 Ohio restaurants harvested from
+   OpenStreetMap, each crawled for its POS and scored into an ICP tier by
+   _import/ohio/build_ohio.py.
 
-     book_patch.json     [{id, name, match, fills:{...}}]
-       Accounts ALREADY in the book, matched against the harvest. Fills only
-       what's blank — address, phone, website, lat/lon, POS — and stamps the
-       ICP tier. Your data always wins; we never overwrite a value you have.
+   Importing it does BOTH jobs in a single pass:
 
-     ohio_accounts.json  [{extId, name, address, ..., tier, ...}]
-       Net-new Ohio restaurants. Deduped against the book on phone / website /
-       name+city before anything is created, so re-running is safe.
+     1. ENRICH  every account already in the book is matched against the
+                harvest and gets its blanks filled — address, phone, website,
+                lat/lon, POS — plus an ICP tier. Your data always wins; we
+                only ever write into an empty field.
+     2. ADD     restaurants that matched nothing in your book are offered as
+                net-new accounts, by tier.
 
-   Neither file touches contacts you own. New accounts get a single "Main Line"
-   contact built from the restaurant's public number and flagged for
-   decision-maker enrichment, so they're dialable on day one without pretending
-   we know who the owner is.                                                  */
+   Matching happens HERE, against the live book, rather than offline against
+   an exported copy. That was the whole reason the old two-file flow drifted:
+   the patch file was built from a stale export, so every account added after
+   the export silently missed out. Now there is nothing to keep in sync.
+
+   Contacts you own are never touched. New accounts get a single "Main Line"
+   contact from the restaurant's public number, flagged for decision-maker
+   enrichment, so they're dialable on day one without pretending we know who
+   the owner is.                                                             */
 function _oNorm(s){ return String(s||'').toLowerCase().replace(/&/g,' and ')
   .replace(/[^a-z0-9 ]/g,' ').replace(/\b(the|a|an|llc|inc|co|company)\b/g,' ')
+  .replace(/\s+/g,' ').trim(); }
+// Looser key — also drops the generic restaurant nouns, so "Papa Gyros Grill"
+// still finds "Papa Gyros". Only ever used when it resolves to ONE candidate.
+function _oLoose(s){ return _oNorm(s).replace(
+  /\b(restaurant|grill|grille|bar|cafe|kitchen|pizzeria|pizza|tavern|eatery|bistro|diner|deli|bakery|lounge|pub|house|shop)\b/g,' ')
   .replace(/\s+/g,' ').trim(); }
 function _oPhone(s){ let d=String(s||'').replace(/\D/g,''); if(d.length===11&&d[0]==='1') d=d.slice(1); return d.length===10?d:''; }
 function _oSite(u){ return String(u||'').toLowerCase().replace(/^https?:\/\/(www\.)?/,'').replace(/\/+$/,'').split('/')[0]; }
@@ -5067,50 +5078,94 @@ function onOhioFile(e){ const f=e.target.files[0]; if(!f) return; const r=new Fi
   r.onload=()=>{ try{
     const d=JSON.parse(r.result);
     if(!Array.isArray(d)||!d.length) throw new Error('Expected a non-empty JSON array');
-    if(d[0]&&d[0].fills) applyBookPatch(d);
-    else if(d[0]&&d[0].extId) importOhioAccounts(d);
-    else throw new Error('Unrecognised file — expected book_patch.json or ohio_accounts.json');
+    if(!d[0].extId) throw new Error('That doesn\'t look like the Ohio file. Pick ohio_accounts.json.');
+    importOhioMarket(d);
   }catch(err){ alert('Ohio import failed: '+err.message); } e.target.value=''; };
   r.readAsText(f);
 }
-// ---- enrich accounts already in the book ----
-const OHIO_FILL=['address','city','zip','phone','website','cuisine','lat','lon','pos','delivery'];
-const OHIO_STAMP=['tier','tierScore','tierWhy','isToast','integrated','notIntegrated','excluded','osmId'];
-function applyBookPatch(patch){
-  let filled=0,stamped=0,missing=0,kept=0; const bump={};
-  patch.forEach(p=>{ const a=acct(p.id); if(!a){ missing++; return; }
+const OHIO_LOC  =['address','city','zip','phone','website','cuisine','lat','lon'];
+const OHIO_POS  =['pos','delivery'];
+const OHIO_STAMP=['tier','tierScore','tierWhy','isToast','integrated','notIntegrated','excluded'];
+function importOhioMarket(recs){
+  // ---- index the harvest once -----------------------------------------
+  const hPhone={},hSite={},hNameCity={},hName={},hLoose={};
+  recs.forEach(r=>{
+    if(r.mkPhone&&!hPhone[r.mkPhone]) hPhone[r.mkPhone]=r;
+    if(r.mkSite){ const s=_oSite(r.mkSite); if(s&&!hSite[s]) hSite[s]=r; }
+    if(r.mkName){
+      const k=r.mkName+'|'+(r.mkCity||''); if(!hNameCity[k]) hNameCity[k]=r;
+      (hName[r.mkName]=hName[r.mkName]||[]).push(r);
+      const lk=_oLoose(r.name); if(lk)(hLoose[lk]=hLoose[lk]||[]).push(r);
+    }
+  });
+  // A name that maps to several Ohio locations can't be pinned to one store —
+  // but if every one of them runs the same POS, that's true of the brand, so
+  // we can still fill POS/tier while leaving the address fields alone.
+  const consensus=c=>{ const p={}; let n=0;
+    c.forEach(x=>{ if(x.pos&&!p[x.pos]){p[x.pos]=1;n++;} });
+    return (n===1&&c.length>1)?c.find(x=>x.pos):null; };
+
+  // ---- PASS 1: enrich what's already in the book -----------------------
+  const used={}; let filled=0,stamped=0,kept=0,newTier=0; const bump={},how={};
+  accounts().forEach(a=>{
+    const nm=_oNorm(a.name), ph=_oPhone(a.phone), st=_oSite(a.website),
+          city=String(a.city||'').toLowerCase().trim(), lk=_oLoose(a.name);
+    let m=null,hw='',brandOnly=false;
+    // Cascade, strongest signal first. Phone and website are near-certain;
+    // name matches only count when they resolve to exactly one candidate.
+    if(ph&&hPhone[ph]){ m=hPhone[ph]; hw='phone'; }
+    else if(st&&hSite[st]){ m=hSite[st]; hw='website'; }
+    else if(hNameCity[nm+'|'+city]){ m=hNameCity[nm+'|'+city]; hw='name+city'; }
+    else if(nm&&(hName[nm]||[]).length===1){ m=hName[nm][0]; hw='name'; }
+    else if(lk&&city){ const c=(hLoose[lk]||[]).filter(r=>r.mkCity===city);
+      if(c.length===1){ m=c[0]; hw='loose+city'; } }
+    if(!m&&lk&&(hLoose[lk]||[]).length===1){ m=hLoose[lk][0]; hw='loose'; }
+    if(!m){ const b=consensus(hName[nm]||hLoose[lk]||[]);
+      if(b){ m=b; hw='brand'; brandOnly=true; } }
+    if(!m) return;
+    used[m.extId]=1; how[hw]=(how[hw]||0)+1;
     let f=false;
-    OHIO_FILL.forEach(k=>{ const v=p.fills[k];
-      if(v!==undefined&&v!==null&&v!==''&&(a[k]===undefined||a[k]===null||a[k]==='')){ a[k]=v; bump[k]=(bump[k]||0)+1; f=true; } });
+    // location fields only on a real store match — a brand-level match tells us
+    // nothing about WHICH address this particular account sits at
+    if(!brandOnly) OHIO_LOC.forEach(k=>{ const v=m[k];
+      if(v!==undefined&&v!==null&&v!==''&&(a[k]===undefined||a[k]===null||a[k]==='')){
+        a[k]=v; bump[k]=(bump[k]||0)+1; f=true; } });
+    OHIO_POS.forEach(k=>{ if(m[k]&&!String(a[k]||'').trim()){ a[k]=m[k]; bump[k]=(bump[k]||0)+1; f=true; } });
     if(f) filled++;
-    // Tier is a scoring output, not user data — it's refreshed from the latest pass
-    // on every import. The one exception is an account the rep has tiered by hand;
-    // a human who has actually spoken to the business outranks the model.
-    if(!a.tierManual) OHIO_STAMP.forEach(k=>{ if(p.fills[k]!==undefined&&a[k]!==p.fills[k]){ a[k]=p.fills[k]; f=true; } });
-    else kept++;
-    if(f){ stamped++; stampU(a); } });
-  save(); render();
-  toast('Ohio enrichment: '+stamped+' accounts updated · '+filled+' got missing details'+
-        (kept?' · '+kept+' manual tiers kept':'')+(missing?' · '+missing+' no longer in book':''));
-  console.log('[ohio] fields filled:',bump);
-}
-// ---- add net-new Ohio restaurants ----
-function importOhioAccounts(recs){
-  // Only the sellable half is worth creating. National chains (tier X) are scored
-  // and kept in the file for auditing, but importing 6.6k unsellable names would
-  // bury the book — so they're dropped at the door.
-  const live=recs.filter(r=>!r.excluded);
-  const tiers={}; live.forEach(r=>{ tiers[r.tier]=(tiers[r.tier]||0)+1; });
-  const pick=(prompt('Ohio restaurants available (national chains already excluded):\n'+
+    // Tier is a scoring output, not user data — refreshed from the latest pass on
+    // every import. Exception: an account the rep tiered by hand. A human who has
+    // actually spoken to the business outranks the model.
+    if(a.tierManual) kept++;
+    else { if(!a.tier) newTier++;
+      OHIO_STAMP.forEach(k=>{ if(m[k]!==undefined&&a[k]!==m[k]){ a[k]=m[k]; f=true; } });
+      if(a.osmId!==m.extId){ a.osmId=m.extId; f=true; } }
+    if(f){ stamped++; stampU(a); }
+  });
+  save();
+
+  // ---- PASS 2: offer the rest as net-new ------------------------------
+  // Anything that matched an existing account is already spoken for. National
+  // chains (tier X) are scored and kept in the file for auditing, but a
+  // franchisee can't buy Shipday, so importing 7k of them would only bury the
+  // book — they're dropped at the door.
+  const fresh=recs.filter(r=>!r.excluded&&!used[r.extId]);
+  const tiers={}; fresh.forEach(r=>{ tiers[r.tier]=(tiers[r.tier]||0)+1; });
+  const sum='Enriched '+stamped+' of your accounts'+
+    (filled?' — '+filled+' had missing details filled in':'')+
+    (kept?'\n'+kept+' manual tiers left alone':'')+'\n\n';
+  const pick=(prompt(sum+'New Ohio restaurants not yet in your book:\n'+
     ['A','B','C','D'].map(t=>'  tier '+t+': '+(tiers[t]||0)).join('\n')+
-    '\n\nImport which tiers? (e.g. "A" or "AB" or "ABC")','AB')||'').toUpperCase().replace(/[^ABCD]/g,'');
-  if(!pick) return;
-  const want=live.filter(r=>pick.includes(r.tier));
-  if(!want.length){ toast('Nothing matched those tiers'); return; }
-  if(!confirm('Create up to '+want.length+' new Ohio accounts (tier '+pick.split('').join('/')+')?\n\n'+
-              'Anything already in your book is skipped. Each new account gets one "Main Line" contact '+
-              'from the restaurant\'s public number, flagged for decision-maker enrichment.')) return;
-  // index the existing book once
+    '\n\nAdd which tiers? (A = best fit. Try "AB". Leave blank to add none.)','AB')||'')
+    .toUpperCase().replace(/[^ABCD]/g,'');
+  if(!pick){ render();
+    toast('Enriched '+stamped+' accounts · no new accounts added');
+    console.log('[ohio] fields filled:',bump,'match methods:',how); return; }
+  const want=fresh.filter(r=>pick.includes(r.tier));
+  if(!want.length){ render(); toast('Enriched '+stamped+' accounts · nothing matched those tiers'); return; }
+  if(!confirm('Add up to '+want.length+' new Ohio restaurants (tier '+pick.split('').join('/')+')?\n\n'+
+              'Each gets one "Main Line" contact from the restaurant\'s public number, '+
+              'flagged so you know the decision-maker isn\'t identified yet.')) { render(); return; }
+  // index the existing book so two rows for the same shop can't both land
   const byPhone={},bySite={},byNameCity={},byExt={};
   accounts().forEach(a=>{ const p=_oPhone(a.phone); if(p&&!byPhone[p]) byPhone[p]=a.id;
     const s=_oSite(a.website); if(s&&!bySite[s]) bySite[s]=a.id;
@@ -5145,8 +5200,15 @@ function importOhioAccounts(recs){
       cons++; }
   });
   store.__updatedAt=Date.now(); save(); render();
-  alert('Ohio import complete\n\n  '+created+' new accounts\n  '+cons+' Main Line contacts\n  '+skipped+
-        ' skipped (already in your book)\n\nFilter Accounts by ICP tier to work the best fits first.');
+  const toastSq=accounts().filter(a=>a.isToast).length;
+  alert('Ohio import complete\n\n'+
+        '  '+stamped+' of your accounts enriched\n'+
+        '  '+created+' new restaurants added\n'+
+        '  '+cons+' Main Line contacts created\n'+
+        '  '+skipped+' skipped (already in your book)\n\n'+
+        toastSq+' accounts now known to run Toast or Square — those are your best fits.\n'+
+        'Open Accounts and filter by ICP tier to work them first.');
+  console.log('[ohio] fields filled:',bump,'match methods:',how);
 }
 function parseCSV(text){ const rows=[]; let row=[],cur='',q=false;
   for(let i=0;i<text.length;i++){ const ch=text[i];
