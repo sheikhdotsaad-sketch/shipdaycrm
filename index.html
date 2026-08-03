@@ -84,6 +84,11 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
   padding:2px 7px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);color:var(--mut)}
 .cm-chip.seq{border-color:var(--sig);color:var(--sig)}
 .cm-chip.seqcall{border-color:var(--acc);color:var(--acc)}
+button.cm-chip{cursor:pointer}
+button.cm-chip:hover{border-color:var(--acc);color:var(--acc)}
+.cm-task{display:flex;align-items:center;gap:7px;padding:5px 8px;margin-bottom:4px;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel2);font-size:12.5px}
+.cm-tasktxt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cadstep{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
 .cadstep-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .cadgrid{display:flex;gap:6px}
@@ -579,7 +584,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug3·z109';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug3·z110';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2153,7 +2158,7 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
 let callModalId=null, cmSel={dispo:'',req:'none',note:''};
 function openCallModal(cid){ const c=contact(cid); if(!c) return;
-  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',at:0,showPick:false,noteWhen:null,more:false,who:false};
+  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',at:0,showPick:false,noteWhen:null,more:false,who:false,seq:false};
   claimLead(c);  // opening to work the lead locks it to you (no log yet)
   let m=el('callModal'); if(!m){ m=document.createElement('div'); m.id='callModal'; m.className='cmodal-wrap';
     m.addEventListener('click',function(e){ if(e.target===m) closeCallModal(); }); document.body.appendChild(m); }
@@ -2196,6 +2201,7 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
       (a&&a.ordering?'<a class="btn sm gh" href="'+esc(_extUrl(a.ordering))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🛒 Ordering</a>':'')+
       (!dnc&&p?'<button type="button" class="cm-link" style="color:var(--lost);margin-left:auto" onclick="markDNC(\''+c.id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Do not call</button>':'')+
       '</div>'; })()+
+    cmSeqBox(c)+cmTasks(c)+
     // Someone else picked up? Add them on the spot — the outcome you save logs to THEM.
     // Folded away by default: it's the exception, and open it cost four rows of scroll
     // on every single dial.
@@ -2216,6 +2222,45 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
     '</div>'; }
 function cmSyncNote(){ const t=el('cmNote'); if(t) cmSel.note=t.value; }
 function cmMore(){ cmSyncNote(); cmSel.more=true; renderCallModal(); }
+/* The task dash for THIS person, inline. Dialling with an open "send Email 3" or a
+   promised call-back still sitting in the task list is how a lead gets worked twice —
+   so it shows while the phone rings and can be ticked off without leaving the card.
+   Account-level tasks count too, but only the unassigned-to-a-contact ones. */
+function cmTasks(c){
+  const now=today0().getTime();
+  const open=tasks().filter(t=>!t.done&&taskMine(t)&&
+      (t.contactId===c.id||(!t.contactId&&c.accountId&&t.accountId===c.accountId)))
+    .sort((a,b)=>(+a.due)-(+b.due));
+  if(!open.length) return '';
+  const show=open.slice(0,3), more=open.length-show.length;
+  return '<div class="cm-lbl">Already on your plate ('+open.length+')</div>'+
+    show.map(t=>{ const od=+t.due<now;
+      return '<div class="cm-task">'+
+        '<span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span>'+
+        '<span class="cm-tasktxt" title="'+esc(t.title)+'">'+esc(t.title)+'</span>'+
+        '<span class="tag'+(od?' od':'')+'">'+esc(od?('overdue '+fmtWhen(+t.due)):fmtWhen(+t.due))+'</span>'+
+        '<button type="button" class="cm-link" title="Mark this task done" onclick="cmDoneTask(\''+t.id+'\')">✓</button>'+
+        '<button type="button" class="cm-link" title="Push to tomorrow" onclick="cmSnoozeTask(\''+t.id+'\')">+1d</button>'+
+      '</div>'; }).join('')+
+    (more?'<div class="cm-sub" style="margin:0 0 2px">+'+more+' more in your task list</div>':'');
+}
+function cmDoneTask(id){ cmSyncNote(); completeTask(id); renderCallModal(); toast('Task done'); }
+function cmSnoozeTask(id){ cmSyncNote(); snoozeTask(id,1); renderCallModal(); toast('Pushed to tomorrow'); }
+/* Enrol into an email play without leaving the dial. The single most common thing to do
+   after a "not now" is to drop them in a sequence — it should not cost a tab change. */
+function cmToggleSeq(){ cmSyncNote(); cmSel.seq=!cmSel.seq; renderCallModal(); }
+function cmStartSeq(cid){ cmSyncNote(); const sel=el('cmSeqPick_'+cid);
+  startEmailCadence(cid,(sel&&sel.value)||''); cmSel.seq=false; renderCallModal(); }
+function cmSeqBox(c){
+  if(!cmSel.seq) return '';
+  const sug=suggestSeq(c);
+  let opts=seqLib().map(q=>'<option value="'+q.id+'"'+(q.id===sug?' selected':'')+'>'+esc(q.name)+' · '+q.steps.length+' steps</option>').join('');
+  if(isCustomCad()) opts+='<option value="custom">Custom (your pasted copy) · '+cadN()+' steps</option>';
+  return '<div style="display:flex;gap:6px;align-items:center;margin:8px 0 2px">'+
+    '<select id="cmSeqPick_'+c.id+'" class="cflt" style="flex:1;min-width:0">'+opts+'</select>'+
+    '<button type="button" class="btn sm pri" onclick="cmStartSeq(\''+c.id+'\')">Start</button>'+
+    '<button type="button" class="cm-link" onclick="cmToggleSeq()">Cancel</button></div>';
+}
 function cmToggleWho(){ cmSyncNote(); cmSel.who=!cmSel.who; renderCallModal();
   const i=el('cmNewName'); if(i) i.focus(); }
 /* Sequence status, right under the name. Dialling someone mid-cadence is a different
@@ -2224,7 +2269,7 @@ function cmToggleWho(){ cmSyncNote(); cmSel.who=!cmSel.who; renderCallModal();
 function cmSeqChip(c){
   const on=typeof inSeq==='function'&&inSeq(c);
   const paused=!!(c.seqPaused||(c.emailSeq&&c.emailSeq.paused));
-  if(!on&&!paused) return '<div style="margin-top:5px"><span class="cm-chip">✉ Not in a sequence</span></div>';
+  if(!on&&!paused) return '<div style="margin-top:5px"><button type="button" class="cm-chip" onclick="cmToggleSeq()" title="Drop them into an email play right now — no tab change">✉ Not in a sequence · ＋ add</button></div>';
   // meta.label already carries its own icon ("✉ Email 3"), so don't prefix another one.
   let lbl='✉ In a sequence', cls='seq';
   try{ const meta=(typeof seqStepMeta==='function')&&seqStepMeta(c);
@@ -3580,8 +3625,10 @@ function revertEmailStep(id){ const c=contact(id); const s=c&&c.emailSeq; if(!s)
   store.__tasks=tasks().filter(t=>!(t.emailCad&&t.contactId===id&&(+t.cadStep||0)>target));     // remove steps beyond target
   const tk=tasks().find(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===target); if(tk){ tk.done=false; tk.doneTs=0; } else ensureEmailTask(id,target);
   logAuto(c,'↩ Reverted to Email '+target); stampU(c); save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive(); toast('Reverted to Email '+target); }
-function startEmailCadence(id){ const c=contact(id); if(!c)return;
-  const sel=el('seqPick_'+id); const seqId=(sel&&sel.value)||(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c);
+// seqIdIn lets a caller outside the drawer (the call modal) pass the play directly —
+// the drawer's own picker can be on-screen at the same time with the same element id.
+function startEmailCadence(id,seqIdIn){ const c=contact(id); if(!c)return;
+  const sel=el('seqPick_'+id); const seqId=seqIdIn||(sel&&sel.value)||(c.emailSeq&&c.emailSeq.seqId)||suggestSeq(c);
   const q=seqById(seqId); const was=switchSeqFor===id&&c.emailSeq&&c.emailSeq.seqId;
   if(was){ const curName=(seqById(c.emailSeq.seqId)||{}).name||'the current sequence';
     if(!confirm('Replace "'+curName+'" with "'+((q&&q.name)||'this sequence')+'"?\n\nProgress on the current sequence will be cleared and the new one starts at Email 1.')) return; }
