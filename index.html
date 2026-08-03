@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug3·z107';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug3·z108';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2178,8 +2178,11 @@ function cmWhenBar(c){
   // Suggestion read out of the note. Shown whenever a time is detected; auto-armed
   // only when the note reads like an actual promise to call back.
   const w=cmSel.noteWhen;
-  if(w) extra+='<button type="button" class="cm-req'+(cmSel.req==='at'&&cmSel.at===w.ts?' on':'')+'"'+
-      ' style="border-color:var(--won);color:var(--won)"'+
+  // Tint the chip green ONLY while it's unselected — the .on state already paints a
+  // green background, and green-on-green made the time unreadable once armed.
+  const wOn=cmSel.req==='at'&&w&&cmSel.at===w.ts;
+  if(w) extra+='<button type="button" class="cm-req'+(wOn?' on':'')+'"'+
+      (wOn?'':' style="border-color:var(--won);color:var(--won)"')+
       ' title="Picked up from your note — this exact time, not rounded to a calling window"'+
       ' onclick="cmUseParsed()">⏰ '+esc(w.label)+'</button>';
   extra+='<button type="button" class="cm-req'+(cmSel.showPick?' on':'')+'" onclick="cmTogglePick()" title="Choose an exact date and time">📅 Pick a time</button>';
@@ -2247,7 +2250,13 @@ function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;
   // be dead data — req was declared on every DISPO but never read, so any call the
   // rep didn't manually re-queue defaulted to 'none' and the lead fell out of the
   // queue entirely. Rep can still override or clear; 'gone' dispos stay off-queue.
-  const d=DISPO_BY[k]; if(d) cmSel.req=d.gone?'none':(d.req||cmSel.req||'none');
+  // An exact time the rep committed to ("call back at 4") BEATS the suggested window.
+  // Order of clicks must not matter: typing the note then picking the outcome used to
+  // silently throw the promise away and fall back to the generic 4h default.
+  const d=DISPO_BY[k];
+  if(d&&d.gone){ cmSel.req='none'; cmSel.at=0; cmSel.showPick=false; }
+  else if(cmSel.req==='at'&&cmSel.at>Date.now()){ /* keep the promised time */ }
+  else if(d) cmSel.req=d.req||cmSel.req||'none';
   renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
 function cmPickReq(k){ cmSyncNote(); cmSel.req=k; if(k!=='at'){ cmSel.at=0; cmSel.showPick=false; } cmRefreshWhen(); }
 function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
