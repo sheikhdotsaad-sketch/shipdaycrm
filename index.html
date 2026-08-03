@@ -63,7 +63,27 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cm-dispo.on{background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:700}
 .cm-req.on{background:var(--sig);color:#04121f;border-color:var(--sig);font-weight:700}
 .cm-note{width:100%;box-sizing:border-box;min-height:70px;background:var(--bg);border:1px solid var(--line);border-radius:9px;color:var(--ink);padding:9px 11px;font-size:13px;font-family:inherit;resize:vertical}
-.cm-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+/* Save has to be reachable without scrolling — on a fast dialling run the rep
+   should never hunt for it. Sticks to the bottom of the modal. */
+.cm-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;
+  position:sticky;bottom:-16px;background:var(--panel);padding:10px 0 2px;
+  border-top:1px solid var(--line);z-index:2}
+/* Compact dialling layout: tighter labels, one-line secondary rows, and a
+   "more" disclosure so the 7 rare outcomes don't push Save off-screen. */
+.cmodal.cm-tight{max-width:470px;padding:14px 16px}
+.cm-tight .cm-lbl{margin:10px 0 5px}
+.cm-tight .cm-dispo{padding:6px 9px;font-size:12.5px}
+.cm-tight .cm-req{padding:5px 8px;font-size:12px}
+.cm-tight .cm-dispos,.cm-tight .cm-reqs{gap:5px}
+.cm-tight .cm-note{min-height:56px}
+.cm-tight .cm-foot{margin-top:10px;padding:8px 0 0}
+.cm-tight .cm-foot .btn{padding:7px 12px;font-size:13px}
+.cm-link{background:transparent;border:0;color:var(--acc);font-size:12px;cursor:pointer;padding:2px 0;text-decoration:underline}
+.cm-link:hover{color:var(--ink)}
+.cm-chip{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;
+  padding:2px 7px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);color:var(--mut)}
+.cm-chip.seq{border-color:var(--sig);color:var(--sig)}
+.cm-chip.seqcall{border-color:var(--acc);color:var(--acc)}
 .cadstep{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
 .cadstep-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .cadgrid{display:flex;gap:6px}
@@ -559,7 +579,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug3·z108';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug3·z109';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -715,7 +735,8 @@ function setSync(cls,msg){ const d=document.getElementById('sync-dot'),s=documen
 function syncReady(){ const c=syncCfg(); return sb && c.url && c.key; }
 async function initSync(){
   const c=syncCfg();
-  if(!c.url||!c.key||!window.supabase){ syncPulled=true; setSync('off','Local only'); renderCounts(); return; }
+  if(!c.url||!c.key||!window.supabase){ syncPulled=true; setSync('off','Local only'); renderCounts();
+    if(typeof hideBootVeil==='function') hideBootVeil(); return; }
   try{
     // Reuse the client the login gate already created — a fresh client here would drop the
     // signed-in session and every request would hit RLS as anon (locked-down = silent failure).
@@ -746,8 +767,12 @@ async function initSync(){
     subscribeClaims();
     await loadClaims(); if(UI.tab==='hotlist'&&!drawerOpen()) renderHotList();
     setSync('ok','Synced'); renderCounts();
+    // The cloud repaint is what makes the numbers jump — release the veil here rather
+    // than waiting on the slower Gmail fetch.
+    if(typeof hideBootVeil==='function') hideBootVeil();
     if((store.__updatedAt||0) && Object.keys(store.accounts).length) pushCloudNow();
-  }catch(e){ console.warn(e); syncPulled=true; setSync('err','Sync error'); renderCounts(); }
+  }catch(e){ console.warn(e); syncPulled=true; setSync('err','Sync error'); renderCounts();
+    if(typeof hideBootVeil==='function') hideBootVeil(); }
 }
 function subscribeRealtime(row){
   if(sbChan) sb.removeChannel(sbChan);
@@ -2128,40 +2153,60 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
 let callModalId=null, cmSel={dispo:'',req:'none',note:''};
 function openCallModal(cid){ const c=contact(cid); if(!c) return;
-  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||''};
+  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',at:0,showPick:false,noteWhen:null,more:false,who:false};
   claimLead(c);  // opening to work the lead locks it to you (no log yet)
   let m=el('callModal'); if(!m){ m=document.createElement('div'); m.id='callModal'; m.className='cmodal-wrap';
     m.addEventListener('click',function(e){ if(e.target===m) closeCallModal(); }); document.body.appendChild(m); }
   renderCallModal(); m.style.display='flex'; }
 function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId); if(!m||!c) return;
   const a=acct(c.accountId), p=telNum(c), pd=(c.phone||c.mobile||'');
-  const dispoBtns=DISPOS.map(d=>'<button type="button" class="cm-dispo'+(cmSel.dispo===d.k?' on':'')+'" onclick="cmPickDispo(\''+d.k+'\')">'+esc(d.t)+'</button>').join('');
+  const btn=d=>'<button type="button" class="cm-dispo'+(cmSel.dispo===d.k?' on':'')+'" onclick="cmPickDispo(\''+d.k+'\')">'+esc(d.t)+'</button>';
+  // Rare outcomes stay folded until asked for — but if one is already selected the
+  // list opens itself, so the rep can always see what they picked.
+  const rest=DISPOS.filter(d=>!d.pri);
+  const showAll=cmSel.more||rest.some(d=>d.k===cmSel.dispo);
+  const dispoBtns=DISPOS.filter(d=>d.pri).map(btn).join('')+
+    (showAll?rest.map(btn).join(''):'')+
+    (showAll?'':'<button type="button" class="cm-dispo" style="color:var(--mut)" onclick="cmMore()">More ▾</button>');
   const reqBtns=REQUEUE.map(r=>'<button type="button" class="cm-req'+(cmSel.req===r.k?' on':'')+'" onclick="cmPickReq(\''+r.k+'\')">'+esc(r.t)+'</button>').join('');
   const prior=+c.callCount?('<span class="cm-sub">'+c.callCount+' prior call'+(c.callCount>1?'s':'')+(c.dispo?' · last: '+esc(c.dispo):'')+'</span>'):'';
   const cl=claimOf(c), other=(cl&&cl.rep!==myRep())?cl:null;
   const clWarn=other?'<div style="margin:10px 0 2px;padding:8px 11px;border:1px solid var(--warm);border-radius:8px;font-size:12.5px;color:var(--warm)">⚠️ <b>'+esc(other.rep)+'</b> is working this lead right now (locked '+fmtAgo(other.at)+') — check with them before dialing.</div>':'';
+  // Same LINE, different contact record — the case the id-based claim can't see.
+  // Shown even when the rep opened this manually, because that's exactly how the
+  // double-dial happened: the queue was fine, the record was opened by hand.
+  const dupClaim=numberClaimant(c), dupRecent=recentDialOnNumber(c,7*_DAY);
+  let dupWarn='';
+  if(dupClaim) dupWarn='<div style="margin:10px 0 2px;padding:9px 12px;border:1px solid var(--hot);background:#3a2414;border-radius:8px;font-size:12.5px;color:var(--hot)">🚨 <b>'+esc(dupClaim.rep)+'</b> is on this same phone line right now (via <b>'+esc(cname(dupClaim.who))+'</b>, '+esc(fmtAgo(dupClaim.at))+'). <b>Do not dial</b> — you would ring the same person.</div>';
+  else if(dupRecent) dupWarn='<div style="margin:8px 0 0;padding:6px 9px;border:1px solid var(--warm);border-radius:8px;font-size:12px;color:var(--warm)">⚠️ Same line already called '+esc(fmtAgo(dupRecent.ts))+(dupRecent.by?' by <b>'+esc(dupRecent.by)+'</b>':'')+' via <b>'+esc(cname(dupRecent.who))+'</b>'+(dupRecent.dispo?' — '+esc(dupRecent.dispo):'')+'</div>';
   const dnc=isDNC(c), de=dnc?dncEntry(c):null;
   const dncBanner=dnc?('<div style="margin:10px 0 2px;padding:9px 12px;border:1px solid #a33;background:#3a1414;border-radius:8px;font-size:12.5px;color:#f2a3a3">🚫 <b>Do Not Call</b> — this number is on the compliance DNC list'+(de&&de.reason?(': '+esc(de.reason)):'')+(de&&de.by?(' · flagged by '+esc(de.by)):'')+(de&&de.at?(' '+esc(fmtAgo(de.at))):'')+'. Dialing is blocked.</div>'):'';
-  m.innerHTML='<div class="cmodal">'+
-    '<div class="cm-head"><div><div class="cm-name">'+esc(cname(c))+'</div><div class="cm-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>'+prior+'</div>'+
-      '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+clWarn+dncBanner+
+  m.innerHTML='<div class="cmodal cm-tight">'+
+    '<div class="cm-head"><div><div class="cm-name">'+esc(cname(c))+'</div><div class="cm-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>'+prior+cmSeqChip(c)+'</div>'+
+      '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+dupWarn+clWarn+dncBanner+
     (dnc?'<div style="margin:8px 0"><button class="btn sm" style="background:var(--won);color:#04210f" onclick="unmarkDNC(\''+c.id+'\')" title="Remove this number from the Do Not Call list">✅ Remove from Do Not Call</button></div>'
       :(p?'<a class="cm-dial" href="tel:'+esc(p)+'">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')
-        +(p?'<div style="margin:6px 0 2px"><button class="btn sm gh" style="color:var(--lost)" onclick="markDNC(\''+c.id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Mark Do Not Call</button></div>':''))+
-    // quick research right where the dial button is — Google the business while it rings
-    (function(){ const g=a||{name:cname(c)}; return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 2px">'+
+        )+
+    // Quick research right where the dial button is — Google the business while it rings.
+    // DNC rides on the end of this row instead of owning a line of its own.
+    (function(){ const g=a||{name:cname(c)}; return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 2px;align-items:center">'+
       '<a class="btn sm gh" href="'+esc(gsearch(g))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔎 Google</a>'+
       '<a class="btn sm gh" href="'+esc(gmaps(g))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">📍 Maps</a>'+
       (a&&a.website?'<a class="btn sm gh" href="'+esc(_extUrl(a.website))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🌐 Site</a>':'')+
       (a&&a.ordering?'<a class="btn sm gh" href="'+esc(_extUrl(a.ordering))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🛒 Ordering</a>':'')+
+      (!dnc&&p?'<button type="button" class="cm-link" style="color:var(--lost);margin-left:auto" onclick="markDNC(\''+c.id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Do not call</button>':'')+
       '</div>'; })()+
     // Someone else picked up? Add them on the spot — the outcome you save logs to THEM.
-    '<div class="cm-lbl">Someone else answered?</div>'+
-    '<div style="display:flex;gap:6px;align-items:center;margin:2px 0 2px">'+
-      '<input id="cmNewName" placeholder="Their name" style="flex:2;min-width:0">'+
-      '<input id="cmNewRole" placeholder="Role (optional)" style="flex:1.2;min-width:0">'+
-      '<button type="button" class="btn sm" onclick="cmAddPerson()">＋ Add &amp; switch</button></div>'+
-    '<div class="cm-sub" style="margin:0 0 6px">Creates them under '+esc(a?a.name:'this account')+' — your outcome &amp; notes save to them.</div>'+
+    // Folded away by default: it's the exception, and open it cost four rows of scroll
+    // on every single dial.
+    (cmSel.who
+      ? '<div class="cm-lbl">Someone else answered?</div>'+
+        '<div style="display:flex;gap:6px;align-items:center;margin:2px 0 2px">'+
+          '<input id="cmNewName" placeholder="Their name" style="flex:2;min-width:0">'+
+          '<input id="cmNewRole" placeholder="Role (optional)" style="flex:1.2;min-width:0">'+
+          '<button type="button" class="btn sm" onclick="cmAddPerson()">＋ Add &amp; switch</button></div>'+
+        '<div class="cm-sub" style="margin:0 0 6px">Creates them under '+esc(a?a.name:'this account')+' — your outcome &amp; notes save to them.</div>'
+      : '<div style="margin:8px 0 0"><button type="button" class="cm-link" onclick="cmToggleWho()">＋ Someone else answered?</button></div>')+
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
     '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…  (type &quot;call back at 4&quot; and I&#39;ll set it)" oninput="cmNoteInput(this.value)">'+esc(cmSel.note)+'</textarea>'+
     '<div class="cm-lbl">Call back</div><div id="cmWhenBar">'+cmWhenBar(c)+'</div>'+
@@ -2170,6 +2215,29 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
       '<button class="btn pri" onclick="saveCallModal()">Save outcome</button></div>'+
     '</div>'; }
 function cmSyncNote(){ const t=el('cmNote'); if(t) cmSel.note=t.value; }
+function cmMore(){ cmSyncNote(); cmSel.more=true; renderCallModal(); }
+function cmToggleWho(){ cmSyncNote(); cmSel.who=!cmSel.who; renderCallModal();
+  const i=el('cmNewName'); if(i) i.focus(); }
+/* Sequence status, right under the name. Dialling someone mid-cadence is a different
+   conversation than a cold dial — you need to know they've had 3 emails from you, and
+   whether THIS call is the planned cadence step, before they pick up. */
+function cmSeqChip(c){
+  const on=typeof inSeq==='function'&&inSeq(c);
+  const paused=!!(c.seqPaused||(c.emailSeq&&c.emailSeq.paused));
+  if(!on&&!paused) return '<div style="margin-top:5px"><span class="cm-chip">✉ Not in a sequence</span></div>';
+  // meta.label already carries its own icon ("✉ Email 3"), so don't prefix another one.
+  let lbl='✉ In a sequence', cls='seq';
+  try{ const meta=(typeof seqStepMeta==='function')&&seqStepMeta(c);
+    if(meta&&meta.label) lbl='On '+meta.label;
+  }catch(e){}
+  if(typeof onCallStep==='function'&&onCallStep(c)){ cls='seqcall'; lbl='Cadence says CALL now — '+lbl; }
+  const own=(typeof seqOwner==='function'&&seqOwner(c))||'';
+  const mine=!own||(typeof repCanon==='function'&&typeof myRep==='function'&&repCanon(own)===repCanon(myRep()));
+  return '<div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap">'+
+    '<span class="cm-chip '+cls+'">'+(paused?'⏸ Paused — ':'')+esc(lbl)+'</span>'+
+    (own&&!mine?'<span class="cm-chip" title="This cadence belongs to another rep">👤 '+esc(own)+'</span>':'')+
+    '</div>';
+}
 /* The call-back row. Re-rendered on its own as the rep types, so the textarea
    never loses focus or cursor position mid-sentence. */
 function cmWhenBar(c){
@@ -2336,13 +2404,15 @@ const _HR=36e5, _DAY=864e5;
 // Outcome + a warmth nudge (w). The disposition is COMPLEMENTARY to warmth: a good call heats the
 // lead, a bad one cools it, so the Hot List re-ranks itself off the call result. w omitted = neutral
 // (warmth untouched). req = a SUGGESTED call-back window (rep can override or clear).
+// pri = shown up-front while dialling. These six are ~95% of real outcomes; the
+// rest sit behind "More" so Save stays on screen and a dial is 3 clicks, not 3 scrolls.
 const DISPOS=[
-  {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot'},
-  {k:'callback',   t:'↩ Callback set',       req:'1d',  w:'Hot'},
-  {k:'lvm',        t:'📩 Left voicemail',     req:'4h'},
-  {k:'noanswer',   t:'📵 No answer',          req:'4h'},
-  {k:'gatekeeper', t:'🛡 Gatekeeper',         req:'1d'},
-  {k:'wrongtime',  t:'🕒 Not a good time',    req:'1w',  w:'Warm'},
+  {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot',  pri:1},
+  {k:'callback',   t:'↩ Callback set',       req:'1d',  w:'Hot',  pri:1},
+  {k:'lvm',        t:'📩 Left voicemail',     req:'4h',           pri:1},
+  {k:'noanswer',   t:'📵 No answer',          req:'4h',           pri:1},
+  {k:'gatekeeper', t:'🛡 Gatekeeper',         req:'1d',           pri:1},
+  {k:'wrongtime',  t:'🕒 Not a good time',    req:'1w',  w:'Warm', pri:1},
   {k:'thinking',   t:'🤔 Thinking it over',   req:'1w',  w:'Warm'},
   {k:'notnow',     t:'💤 Not now / later Q',  req:'30d', w:'Warm'},
   {k:'notint',     t:'🙅 Not interested',     gone:1,    w:'Cold'},
@@ -2591,6 +2661,53 @@ async function releaseClaim(c){ if(!c||!claimsReady()) return; const r=claimsMap
 function callPriority(c){ return heat(c); }
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
+/* ===== DOUBLE-DIAL GUARD ==============================================
+   Claims are keyed on CONTACT ID, which is the wrong unit. A restaurant has one
+   phone line but often several contact records against it (owner, manager, and a
+   "Main Line" placeholder). Two reps picking two different records were dialling
+   the SAME human minutes apart — the claim never fired because the ids differed.
+   Everything below keys on the NUMBER instead, which is what actually rings. */
+const DIAL_COOLDOWN=2*_DAY;    // someone rang this line recently → leave it alone
+function telKeys(c){ const out=[];
+  [c&&c.phone,c&&c.mobile].forEach(p=>{ let d=String(p||'').replace(/\D/g,'');
+    if(d.length===11&&d[0]==='1') d=d.slice(1);
+    if(d.length===10&&out.indexOf(d)<0) out.push(d); });
+  return out; }
+// number -> contacts sharing it. Rebuilt only when the book changes.
+let _numIdx=null,_numIdxAt=0;
+function numIndex(){ const stamp=(+store.__updatedAt||0)+'|'+Object.keys(store.contacts||{}).length;
+  if(_numIdx&&_numIdxAt===stamp) return _numIdx;
+  const m={}; contacts().forEach(c=>telKeys(c).forEach(k=>{ (m[k]=m[k]||[]).push(c); }));
+  _numIdx=m; _numIdxAt=stamp; return m; }
+// Other contact records that ring the same phone as c.
+function sameNumberContacts(c){ const seen={},out=[]; const idx=numIndex();
+  telKeys(c).forEach(k=>(idx[k]||[]).forEach(o=>{ if(o.id!==c.id&&!seen[o.id]){ seen[o.id]=1; out.push(o); } }));
+  return out; }
+/* The most recent call anyone on the team made to this NUMBER via a different
+   contact record. This is what we show in the modal and suppress the queue on. */
+function recentDialOnNumber(c,within){
+  const cut=Date.now()-(within||DIAL_COOLDOWN); let best=null;
+  sameNumberContacts(c).forEach(o=>{
+    const ts=+o.lastContactedTs||0; if(ts<=cut) return;
+    if(!best||ts>best.ts) best={ts,who:o,by:lastCallBy(o),dispo:o.dispo||''};
+  });
+  return best; }
+// Who logged the last call on a contact — read off the activity log, since the
+// disposition itself doesn't store a rep.
+function lastCallBy(c){ const lg=(c&&c.log)||[];
+  for(let i=lg.length-1;i>=0;i--){ const l=lg[i]; if(l&&/^☎/.test(l.txt||'')) return l.by||''; }
+  return ''; }
+// A future call-back already promised on this line by anyone → don't queue a second rep onto it.
+function numberBooked(c){ const now=Date.now();
+  return sameNumberContacts(c).some(o=>+o.nextCallAt>now); }
+// Queue gate: this line is already handled by another record, so serving it is a double-dial.
+function dupDial(c){ return !!(hasRealPhone(c)&&(recentDialOnNumber(c)||numberBooked(c)||numberClaimedByOther(c))); }
+// Anyone else on the team actively holding this NUMBER (not just this contact id).
+function numberClaimedByOther(c){ const me=myRep();
+  return sameNumberContacts(c).some(o=>{ const r=claimOf(o); return !!r&&r.rep!==me; }); }
+function numberClaimant(c){ const me=myRep();
+  for(const o of sameNumberContacts(c)){ const r=claimOf(o); if(r&&r.rep!==me) return {rep:r.rep,at:r.at,who:o}; }
+  return null; }
 // In a live sequence = a running manual cadence. These are your active working set, so they belong
 // in the Hot List even without a phone number on file (Saad's rule).
 const inSeq=c=>!!(c&&seqActive(c));
@@ -2613,7 +2730,10 @@ function hotQueue(){ const now=Date.now();
   // assignee's OWN Hot List (seqMine); it never floods another rep's queue with your sequence.
   // Tier X = national chain. The store manager can't sign a delivery contract, so every
   // one of those dials is dead air. Kept out of the queue entirely (still searchable in Accounts).
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c)&&!isDeadChain(acct(c.accountId));
+  // ...&&!dupDial(c): don't serve a contact whose PHONE LINE was just worked through a
+  // different contact record, or already has a call-back booked on it. Without this,
+  // two reps dial the same restaurant minutes apart off two records of one number.
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c)&&!isDeadChain(acct(c.accountId))&&!dupDial(c);
   const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   // Body of the list = contacts you tagged Hot PLUS anyone sitting on a sequence CALL step (a planned,
@@ -5841,7 +5961,28 @@ async function doLogout(){ if(sb)await sb.auth.signOut(); location.reload(); }
 function enterApp(){ el('gate').classList.add('hidden'); el('app').style.display='block'; el('signout').style.display='inline-block'; boot(); }
 
 /* ====================== BOOT ====================== */
+/* On refresh the app paints instantly from the local copy, then the cloud pull lands a
+   second later and repaints with different numbers — so you watch yesterday's book flash
+   past before the real one appears. Hold a veil over that first repaint. Timed out and
+   released on error too, so a sync problem can never leave you staring at a blank screen. */
+let _veilT=null;
+function showBootVeil(){
+  const cfg=(typeof syncCfg==='function')&&syncCfg();
+  if(!cfg||!cfg.url||!cfg.key||!window.supabase) return;      // local-only: nothing will repaint
+  if(document.getElementById('bootveil')) return;
+  const v=document.createElement('div'); v.id='bootveil';
+  v.style.cssText='position:fixed;inset:0;z-index:900;background:var(--bg);display:flex;'+
+    'align-items:center;justify-content:center;flex-direction:column;gap:10px;'+
+    'transition:opacity .18s ease;font-size:13px;color:var(--mut)';
+  v.innerHTML='<div style="font-size:22px">📇</div><div>Loading your book…</div>';
+  document.body.appendChild(v);
+  _veilT=setTimeout(hideBootVeil,6000);                        // never trap the user
+}
+function hideBootVeil(){ const v=document.getElementById('bootveil'); if(!v) return;
+  if(_veilT){ clearTimeout(_veilT); _veilT=null; }
+  v.style.opacity='0'; setTimeout(()=>{ if(v.parentNode) v.parentNode.removeChild(v); },200); }
 function boot(){
+  showBootVeil();
   let t='today'; try{ t=localStorage.getItem('shipday_crm_tab')||'today'; }catch(e){}
   const valid=['today','hotlist','pipeline','accounts','contacts','intent','closed','live','quota'];
   if(!valid.includes(t)) t='today';
@@ -5853,7 +5994,7 @@ function boot(){
   // Refresh live opens/replies from Gmail on load; the cloud pull preserves whichever sync is newer
   // (see initSync), so this fresh number is never reverted to the stale saved one.
   const gmailStart=(SYNC_FN&&typeof syncGmail==='function')?Promise.resolve(syncGmail(true)).catch(()=>0):Promise.resolve(0);
-  Promise.allSettled([cloudStart,gmailStart]).then(()=>{ todayCountReady=true; if(syncSeqTasks())save(); renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); });
+  Promise.allSettled([cloudStart,gmailStart]).then(()=>{ todayCountReady=true; if(syncSeqTasks())save(); renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); hideBootVeil(); });
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
