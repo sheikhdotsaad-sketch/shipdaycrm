@@ -590,7 +590,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug3·z112';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug3·z113';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2761,6 +2761,24 @@ function telKeys(c){ const out=[];
     if(d.length===11&&d[0]==='1') d=d.slice(1);
     if(d.length===10&&out.indexOf(d)<0) out.push(d); });
   return out; }
+/* OPEN-TASK INDEX — contactId -> { by, callDue }.
+   `by`      = the rep running this contact right now, read off their open tasks. A contact can be
+               visibly someone else's work (their name on every task) while the contact record's
+               assignee is blank and emailSeq lives only on their side — that contact used to read
+               as unowned, so the Hot List handed another rep's live lead to you.
+   `callDue` = when the play's next CALL step is actually due. A sequence that just fired Email 1
+               and queued "Call 2/10" for tomorrow has already touched this person today.
+   Rebuilt only when the book changes — seqOwner/isDue run over every contact, so a per-contact
+   scan of the task list would be O(contacts x tasks) on every render. */
+let _taskIdx=null,_taskIdxAt='';
+function taskIndex(){ const T=tasks(); const stamp=(+store.__updatedAt||0)+'|'+T.length;
+  if(_taskIdx&&_taskIdxAt===stamp) return _taskIdx;
+  const m={};
+  T.forEach(t=>{ if(t.done||!t.contactId) return;
+    const e=m[t.contactId]||(m[t.contactId]={by:'',callDue:0});
+    if(!e.by&&t.assignee) e.by=t.assignee;
+    if((t.emailCad||t.cadence)&&t.type==='call'&&+t.due&&(!e.callDue||+t.due<e.callDue)) e.callDue=+t.due; });
+  _taskIdx=m; _taskIdxAt=stamp; return m; }
 // number -> contacts sharing it. Rebuilt only when the book changes.
 let _numIdx=null,_numIdxAt=0;
 function numIndex(){ const stamp=(+store.__updatedAt||0)+'|'+Object.keys(store.contacts||{}).length;
@@ -2821,15 +2839,27 @@ function hotQueue(){ const now=Date.now();
   // ...&&!dupDial(c): don't serve a contact whose PHONE LINE was just worked through a
   // different contact record, or already has a call-back booked on it. Without this,
   // two reps dial the same restaurant minutes apart off two records of one number.
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c)&&!isDeadChain(acct(c.accountId))&&!dupDial(c);
-  const isDue=c=>!(+c.nextCallAt)||+c.nextCallAt<=now;
+  // ...&&seqMine(c): the Hot List is an INDIVIDUAL list. Ownership used to be checked only on the
+  // deliberate paths (Hot-tagged / call-step / in-sequence) while the heat auto-fill below took
+  // anything eligible — so a lead another rep is actively running got excluded by name and then
+  // readmitted by heat. Checking it here covers every path at once. Unowned still = shared pool.
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c)&&!isDeadChain(acct(c.accountId))&&!dupDial(c)&&seqMine(c);
+  // The play has its own clock. If the cadence just fired Email 1 and booked "Call 2/10" for
+  // tomorrow, this person HAS been contacted today — dialing them now is the queue overruling
+  // the sequence it just built. Their turn comes when the step's task comes due.
+  const isDue=c=>{ if(+c.nextCallAt&&+c.nextCallAt>now) return false;
+    const e=taskIndex()[c.id]; return !(e&&e.callDue>now); };
+  // When it IS their turn — whichever comes first, the call-back you booked or the play's next
+  // call step. Drives the Later list so a held-back contact still shows a date instead of vanishing.
+  const dueAt=c=>{ const e=taskIndex()[c.id], a=+c.nextCallAt||0, b=(e&&e.callDue)||0;
+    return (a&&b)?Math.min(a,b):(a||b); };
   const byHeat=(a,b)=>callPriority(b)-callPriority(a);
   // Body of the list = contacts you tagged Hot PLUS anyone sitting on a sequence CALL step (a planned,
   // meaningful dial). Call-steps join the ranked body so they compete by heat in the top 150 and get
   // dialed — not stranded in the appended tail behind every Hot-tagged lead.
   const base=prefilter(contacts().filter(c=>(c.warmth==='Hot'||(onCallStep(c)&&seqMine(c)))&&elig(c)));
   let due=base.filter(isDue).sort(byHeat);
-  let snoozed=base.filter(c=>+c.nextCallAt>now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
+  let snoozed=base.filter(c=>!isDue(c)).sort((a,b)=>dueAt(a)-dueAt(b));
   if(due.length<HOT_CAP){                                    // auto-fill to 150 with next-best heat
     const have=new Set(base.map(c=>c.id));
     const extra=prefilter(contacts().filter(c=>!have.has(c.id)&&elig(c)&&isDue(c))).sort(byHeat);
@@ -2858,22 +2888,25 @@ function hotQueue(){ const now=Date.now();
   if(me){ const inSn=new Set(snoozed.map(c=>c.id));
     const pinSn=prefilter(contacts().filter(c=>hotForMe(c)&&!inSn.has(c.id)&&+c.nextCallAt>now&&!c.queueOut
       &&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)));
-    if(pinSn.length) snoozed=snoozed.concat(pinSn).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt)); }
+    if(pinSn.length) snoozed=snoozed.concat(pinSn).sort((a,b)=>dueAt(a)-dueAt(b)); }
   /* PROMISED CALL-BACKS OUTRANK EVERYTHING. If you told an owner "I'll ring you at 4",
      that call is not a heat guess — it's an appointment. Left to the normal path a warm
      lead only re-enters via the heat auto-fill and can be squeezed out of the top 150 by
      hotter names, so the one call you actually committed to is the one you miss. Due
      promises jump to the front; upcoming ones stay visible in Later so you can see the
      day coming. Both bypass the cap. */
+  // A promise outranks heat, but it does not cross reps: "I'll ring you at 4" was said by ONE
+  // person, and the call-back task carries their name. Without seqMine this lane bypassed every
+  // other filter and dropped another rep's committed call at the top of your queue.
   const canCall=c=>!c.queueOut&&!c.internal&&!['In Pipeline','Customer'].includes(c.status)
-    &&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c);
+    &&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)&&seqMine(c);
   const promised=prefilter(contacts().filter(c=>+c.promisedCallAt&&canCall(c)));
   if(promised.length){
     const duePr=promised.filter(c=>+c.nextCallAt<=now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
     if(duePr.length){ const s=new Set(duePr.map(c=>c.id)); due=duePr.concat(due.filter(c=>!s.has(c.id))); }
     const inSn=new Set(snoozed.map(c=>c.id));
     const laterPr=promised.filter(c=>+c.nextCallAt>now&&!inSn.has(c.id));
-    if(laterPr.length) snoozed=snoozed.concat(laterPr).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
+    if(laterPr.length) snoozed=snoozed.concat(laterPr).sort((a,b)=>dueAt(a)-dueAt(b));
   }
   return {due,snoozed};
 }
@@ -2902,7 +2935,12 @@ function retierBook(){
 function setDispo(cid,key){ const c=contact(cid); if(!c)return; const d=DISPO_BY[key]; if(!d)return;
   applyDispo(c,key,'',(d.gone?'none':(d.req||'none'))); }
 function setNote(cid,v){ const c=contact(cid); if(!c)return; c.callNote=v; stampU(c); save(); }
-function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false; stampU(c); save(); renderActive(); toast('Re-queued to top'); }
+// "⚡ Now" means now. Clearing the call-back is no longer enough on its own — a contact can also be
+// held back by their play's next call step, so pull that step's task forward too or the row would
+// sit in Scheduled refusing to move.
+function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c.queueOut=false;
+  tasks().forEach(t=>{ if(!t.done&&t.contactId===cid&&(t.emailCad||t.cadence)&&t.type==='call'&&+t.due>Date.now()) t.due=Date.now(); });
+  stampU(c); save(); renderActive(); toast('Re-queued to top'); }
 // Reschedule a snoozed lead's call-back forward (from now) without dialing — keeps the Scheduled
 // list under the rep's control so anything already in the re-queue can be pulled up or pushed out.
 function reschedule(cid,days){ const c=contact(cid); if(!c)return; c.queueOut=false; c.nextCallAt=Date.now()+days*_DAY; stampU(c); save(); renderActive(); toast('Rescheduled — call back '+fmtWhen(c.nextCallAt)); }
@@ -3429,7 +3467,14 @@ function onCallStep(c){ const s=c&&c.emailSeq; if(!s||s.done||s.paused) return f
 // whoever the contact record is assigned to. This is what keeps another rep's cadence (e.g. one whose
 // Gmail thread they started) out of YOUR Hot List even when the contact's assignee is blank.
 // Unowned = shared pool (shows for whoever's logged in).
-function seqOwner(c){ return (c&&c.emailSeq)?seqStarter(c):((c&&c.assignee)||''); }
+// LAST resort is the rep named on the contact's own open tasks: a lead can be actively worked by
+// someone else with a blank assignee and no emailSeq on this copy of the record (their cadence
+// tasks are the only trace). Without that fallback the contact reads as unowned and lands in
+// everybody's Hot List — which is how another rep's live lead became your next call.
+function seqOwner(c){ if(!c) return '';
+  if(c.emailSeq) return seqStarter(c);
+  if(c.assignee) return c.assignee;
+  const e=taskIndex()[c.id]; return (e&&e.by)||''; }
 function seqMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); if(!me||!c) return true; const o=seqOwner(c); return !o||repCanon(o)===me; }
 // seqLib(): the live play library = built-in SEQ_LIB, with the team's edits/additions from
 // store.__seqLib layered on top (replace-by-id, else append). Everything that used to read SEQ_LIB
