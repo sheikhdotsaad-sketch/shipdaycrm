@@ -559,7 +559,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug3·z106';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug3·z107';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2163,13 +2163,66 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
       '<button type="button" class="btn sm" onclick="cmAddPerson()">＋ Add &amp; switch</button></div>'+
     '<div class="cm-sub" style="margin:0 0 6px">Creates them under '+esc(a?a.name:'this account')+' — your outcome &amp; notes save to them.</div>'+
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
-    '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…" oninput="cmSel.note=this.value">'+esc(cmSel.note)+'</textarea>'+
-    '<div class="cm-lbl">Call back</div><div class="cm-reqs">'+reqBtns+'</div>'+
+    '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…  (type &quot;call back at 4&quot; and I&#39;ll set it)" oninput="cmNoteInput(this.value)">'+esc(cmSel.note)+'</textarea>'+
+    '<div class="cm-lbl">Call back</div><div id="cmWhenBar">'+cmWhenBar(c)+'</div>'+
     '<div class="cm-foot"><button class="btn gh" onclick="closeCallModal()">Cancel</button>'+
       '<button class="btn" onclick="bookDemoFromModal()">✅ Booked demo</button>'+
       '<button class="btn pri" onclick="saveCallModal()">Save outcome</button></div>'+
     '</div>'; }
 function cmSyncNote(){ const t=el('cmNote'); if(t) cmSel.note=t.value; }
+/* The call-back row. Re-rendered on its own as the rep types, so the textarea
+   never loses focus or cursor position mid-sentence. */
+function cmWhenBar(c){
+  const reqBtns=REQUEUE.map(r=>'<button type="button" class="cm-req'+(cmSel.req===r.k?' on':'')+'" onclick="cmPickReq(\''+r.k+'\')">'+esc(r.t)+'</button>').join('');
+  let extra='';
+  // Suggestion read out of the note. Shown whenever a time is detected; auto-armed
+  // only when the note reads like an actual promise to call back.
+  const w=cmSel.noteWhen;
+  if(w) extra+='<button type="button" class="cm-req'+(cmSel.req==='at'&&cmSel.at===w.ts?' on':'')+'"'+
+      ' style="border-color:var(--won);color:var(--won)"'+
+      ' title="Picked up from your note — this exact time, not rounded to a calling window"'+
+      ' onclick="cmUseParsed()">⏰ '+esc(w.label)+'</button>';
+  extra+='<button type="button" class="cm-req'+(cmSel.showPick?' on':'')+'" onclick="cmTogglePick()" title="Choose an exact date and time">📅 Pick a time</button>';
+  let pick='';
+  if(cmSel.showPick){
+    const seed=new Date(cmSel.at||(Date.now()+_HR));
+    const pad=n=>String(n).padStart(2,'0');
+    const v=seed.getFullYear()+'-'+pad(seed.getMonth()+1)+'-'+pad(seed.getDate())+'T'+pad(seed.getHours())+':'+pad(seed.getMinutes());
+    pick='<div style="display:flex;gap:6px;align-items:center;margin:7px 0 0">'+
+      '<input type="datetime-local" id="cmAtInput" value="'+v+'" onchange="cmSetAt(this.value)" style="flex:1;min-width:0">'+
+      '</div>';
+  }
+  // Confirmation line so the rep can see the committed time before saving.
+  let note='';
+  if(cmSel.req==='at'&&cmSel.at) note='<div class="cm-sub" style="margin:6px 0 0;color:var(--won)">📌 Calling back '+esc(fmtWhenAt(cmSel.at))+' — exact time, and a task lands on your dashboard.</div>';
+  else if(w) note='<div class="cm-sub" style="margin:6px 0 0">Found “'+esc(w.label)+'” in your note — tap it to lock that exact time.</div>';
+  return '<div class="cm-reqs">'+reqBtns+extra+'</div>'+pick+note;
+}
+function cmRefreshWhen(){ const b=el('cmWhenBar'); const c=contact(callModalId); if(b&&c) b.innerHTML=cmWhenBar(c); }
+function cmNoteInput(v){
+  cmSel.note=v;
+  const prev=cmSel.noteWhen&&cmSel.noteWhen.ts;
+  cmSel.noteWhen=parseWhen(v);
+  const now=cmSel.noteWhen&&cmSel.noteWhen.ts;
+  // Auto-arm a newly-found time when the sentence reads like a call-back promise.
+  // Never override a window the rep chose by hand after the fact.
+  if(now&&now!==prev&&noteAsksCallback(v)&&(cmSel.req!=='at'||cmSel.at===prev)){ cmSel.req='at'; cmSel.at=now; }
+  // If the time they typed disappears (line deleted), release the lock.
+  if(!now&&cmSel.req==='at'&&cmSel.at===prev){ cmSel.req=cmSel.dispo?((DISPO_BY[cmSel.dispo]||{}).req||'none'):'none'; cmSel.at=0; }
+  cmRefreshWhen();
+}
+function cmUseParsed(){ const w=cmSel.noteWhen; if(!w) return;
+  if(cmSel.req==='at'&&cmSel.at===w.ts){ cmSel.req='none'; cmSel.at=0; }   // tap again to clear
+  else { cmSel.req='at'; cmSel.at=w.ts; }
+  cmRefreshWhen(); }
+function cmTogglePick(){ cmSyncNote(); cmSel.showPick=!cmSel.showPick;
+  if(cmSel.showPick&&!cmSel.at) cmSel.at=nextGoodCallTime(Date.now()+_HR,'');
+  if(cmSel.showPick) cmSel.req='at';
+  cmRefreshWhen(); const i=el('cmAtInput'); if(i) i.focus(); }
+function cmSetAt(v){ const t=v?new Date(v).getTime():0;
+  if(!t||isNaN(t)){ return; }
+  if(t<=Date.now()){ toast('Pick a time in the future'); return; }
+  cmSel.at=t; cmSel.req='at'; cmRefreshWhen(); }
 // Mid-call handoff: whoever actually answered gets their own contact under the same account,
 // shares the business line, and the modal switches to them so the saved outcome lands right.
 function cmAddPerson(){ const c=contact(callModalId); if(!c) return;
@@ -2196,16 +2249,16 @@ function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;
   // queue entirely. Rep can still override or clear; 'gone' dispos stay off-queue.
   const d=DISPO_BY[k]; if(d) cmSel.req=d.gone?'none':(d.req||cmSel.req||'none');
   renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
-function cmPickReq(k){ cmSyncNote(); cmSel.req=k; renderCallModal(); }
+function cmPickReq(k){ cmSyncNote(); cmSel.req=k; if(k!=='at'){ cmSel.at=0; cmSel.showPick=false; } cmRefreshWhen(); }
 function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
 function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal(); return; }
   cmSyncNote(); if(!cmSel.dispo){ toast('Pick an outcome first'); return; }
-  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req); closeCallModal(); }
+  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req,cmSel.req==='at'?cmSel.at:0); closeCallModal(); }
 function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
   if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
 // applyDispo = the SINGLE place a call is recorded: bumps call count, stamps last-contacted,
 // saves the note, and requeues ONLY if the rep chose a call-back window. Fully reversible.
-function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return;
+function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) return;
   if(pinnedLead===c.id) setPin(null);
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,queueOut:c.queueOut,queueOutTs:c.queueOutTs,
     callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted,warmth:c.warmth};
@@ -2217,9 +2270,21 @@ function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return
   // Remember WHICH part of the day we just failed in, so the next attempt rotates
   // to a different band instead of re-dialing into the same dead zone.
   const bandNow=callBand(new Date()).k; const prevBand=c.lastCallBand; c.lastCallBand=bandNow;
-  if(rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; }
-  else if(rq.k==='next'||rq.ms===0){ c.queueOut=false; c.nextCallAt=Date.now(); }
+  // An exact time — either read out of the note ("call back at 4") or set on the
+  // date picker. This is a commitment the prospect actually made, so it is used
+  // VERBATIM: no attempt ladder, no rotation into a calling window. Our connect-rate
+  // model is a guess about a stranger; this is the stranger telling us directly.
+  let promised=0;
+  if(reqKey==='at'&&+atTs>Date.now()){
+    promised=+atTs; c.queueOut=false; c.nextCallAt=promised; c.promisedCallAt=promised;
+    const a2=acct(c.accountId);
+    addTask({type:'call',title:'Call back '+cname(c)+(a2?' — '+a2.name:''),due:promised,
+      contactId:c.id,accountId:c.accountId||'',assignee:myRep()||'',promised:true});
+  }
+  else if(rq.ms<0){ c.queueOut=true; c.queueOutTs=Date.now(); c.nextCallAt=0; c.promisedCallAt=0; }
+  else if(rq.k==='next'||rq.ms===0){ c.queueOut=false; c.nextCallAt=Date.now(); c.promisedCallAt=0; }
   else {
+    c.promisedCallAt=0;
     c.queueOut=false;
     // 1) widen the gap with each unanswered attempt so we never burn the number
     const ladder=attemptLadder(+rq.ms||0,c.callCount);
@@ -2234,12 +2299,17 @@ function applyDispo(c,key,note,reqKey){ const d=DISPO_BY[key]; if(!c||!d) return
   let aPrev=null; const a=d.cust?acct(c.accountId):null;
   if(a){ aPrev={id:a.id,isCustomer:a.isCustomer,existingCust:a.existingCust,notOwned:a.notOwned};
     a.isCustomer=true; a.existingCust=true; a.notOwned=true; stampU(a); }
-  stampU(c); logAuto(c,'☎ '+d.t+(nt?' — '+nt:'')); if(a) logAuto(a,'🏢 Marked existing Shipday customer (not owned) via call');
+  stampU(c); logAuto(c,'☎ '+d.t+(nt?' — '+nt:''));
+  // Record the promise itself, so the drawer shows WHEN you said you'd ring back,
+  // not just that the call happened.
+  if(promised) logAuto(c,'📌 Promised call back '+fmtWhenAt(promised));
+  if(a) logAuto(a,'🏢 Marked existing Shipday customer (not owned) via call');
   // Consume the current call-cadence step (if any) — this call handled it.
   const cadTaskId=advanceCallCadence(c); if(cadTaskId) logAuto(c,'☑ Call-cadence step completed');
   releaseClaim(c);
   save(); renderActive(); refreshDrawer();
-  const back=(rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt);
+  const back=promised?'calling back '+fmtWhenAt(promised)+' · task added'
+           :(rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt);
   toast(d.t+' · '+back,()=>{ Object.assign(c,prev); if(aPrev){ const aa=acct(aPrev.id); if(aa){ aa.isCustomer=aPrev.isCustomer; aa.existingCust=aPrev.existingCust; aa.notOwned=aPrev.notOwned; stampU(aa); } } if(cadTaskId){ const tk=tasks().find(x=>x.id===cadTaskId); if(tk){ tk.done=false; tk.doneTs=0; } } stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function logCall(cid){ openCallModal(cid); }   // legacy shim: any old dial hook now opens the modal
 function renderLeads(){
@@ -2286,6 +2356,90 @@ const REQUEUE=[
   {k:'none',  t:'No call-back',    ms:-1},
 ];
 const REQUEUE_BY=Object.fromEntries(REQUEUE.map(r=>[r.k,r]));
+/* ===== "CALL BACK AT 4" — read the time straight out of the note ==========
+   The single most valuable thing on a call is the moment they tell you when to
+   try again. Making the rep translate "call back Tuesday at 2" into a fixed
+   bucket ("in 2 days") throws that away — the callback lands at the wrong hour
+   and the promise gets quietly broken.
+
+   parseWhen reads the note as it's typed and pulls out a real timestamp:
+     "call back at 4"            → today 4:00 PM  (or tomorrow if 4pm passed)
+     "call him tomorrow at 10"   → tomorrow 10:00 AM
+     "try Tuesday 2:30pm"        → next Tuesday 2:30 PM
+     "in 20 minutes"             → now + 20m
+     "call back 8/5 at 3"        → Aug 5, 3:00 PM
+     "reach out Monday morning"  → Monday 9:30 AM
+   An exact time the prospect ASKED for is honoured exactly — it is never
+   rounded into a calling window, because their instruction outranks our
+   connect-rate model.                                                        */
+const _WDAY={sunday:0,sun:0,monday:1,mon:1,tuesday:2,tue:2,tues:2,wednesday:3,wed:3,weds:3,
+  thursday:4,thu:4,thur:4,thurs:4,friday:5,fri:5,saturday:6,sat:6};
+const _MON={jan:0,january:0,feb:1,february:1,mar:2,march:2,apr:3,april:3,may:4,jun:5,june:5,
+  jul:6,july:6,aug:7,august:7,sep:8,sept:8,september:8,oct:9,october:9,nov:10,november:10,dec:11,december:11};
+// Bare hours are ambiguous. For a restaurant rep, "call back at 4" is always
+// 4pm and "at 9" is always 9am — bias by what an actual working day looks like
+// rather than defaulting to AM and booking a 4am callback.
+function _hr12(h,mer){
+  if(mer==='pm') return h===12?12:h+12;
+  if(mer==='am') return h===12?0:h;
+  return (h>=1&&h<=6)?h+12:h;              // 1–6 → afternoon, 7–12 → morning
+}
+function parseWhen(txt,now){
+  const s=' '+String(txt||'').toLowerCase().replace(/\s+/g,' ')+' ';
+  if(!s.trim()) return null;
+  now=now?new Date(+now):new Date(); let hit=false;   // accept a Date or a timestamp
+  // ---- relative: "in 20 minutes" / "in 2 hours" / "in 3 days" -------------
+  let m=s.match(/\bin (a |an |\d+ ?)(min|minute|minutes|hr|hour|hours|day|days|week|weeks)\b/);
+  if(m){ const n=(m[1]||'').trim(); const q=(n===''||n==='a'||n==='an')?1:parseInt(n,10)||1;
+    const u=m[2], ms=/^min/.test(u)?6e4:/^h/.test(u)?_HR:/^d/.test(u)?_DAY:7*_DAY;
+    const d=new Date(+now+q*ms);
+    return {ts:d.getTime(),label:fmtWhenAt(d.getTime()),exact:/^(min|hr|hour)/.test(u)}; }
+  // ---- time of day -------------------------------------------------------
+  let hh=null,mm=0,exact=false;
+  m=s.match(/\b(?:at |@ ?|around |about )?(\d{1,2})(?::(\d{2}))? ?(a\.?m\.?|p\.?m\.?)\b/);
+  if(m){ hh=_hr12(+m[1],m[3][0]==='p'?'pm':'am'); mm=+(m[2]||0); exact=true; hit=true; }
+  if(hh===null){ m=s.match(/\b(?:at|@|around|about|after|past) (\d{1,2})(?::(\d{2}))?\b(?! ?(?:min|hour|day|week|%|dollar))/);
+    if(m){ hh=_hr12(+m[1],''); mm=+(m[2]||0); exact=true; hit=true; } }
+  if(hh===null){ m=s.match(/\b(\d{1,2}):(\d{2})\b/);            // bare 24h "14:30"
+    if(m){ hh=+m[1]; mm=+m[2]; exact=true; hit=true; } }
+  if(hh===null){                                                 // fuzzy parts of the day
+    if(/\b(morning|first thing|before noon)\b/.test(s)){ hh=9; mm=30; hit=true; }
+    else if(/\b(after lunch|afternoon|after the lunch rush)\b/.test(s)){ hh=14; mm=30; hit=true; }
+    else if(/\b(end of day|eod|close|closing|tonight|this evening|evening)\b/.test(s)){ hh=16; mm=30; hit=true; }
+  }
+  // ---- the day -----------------------------------------------------------
+  const d=new Date(now); let dayFixed=false;
+  m=s.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);         // 8/5 or 8/5/26
+  if(m){ const yr=m[3]?(+m[3]<100?2000+ +m[3]:+m[3]):now.getFullYear();
+    d.setFullYear(yr,+m[1]-1,+m[2]); dayFixed=true; hit=true; }
+  if(!dayFixed){ m=s.match(new RegExp('\\b('+Object.keys(_MON).join('|')+')\\.? (\\d{1,2})\\b'));
+    if(m){ d.setMonth(_MON[m[1]],+m[2]); dayFixed=true; hit=true;
+      if(d<now-_DAY) d.setFullYear(d.getFullYear()+1); } }
+  if(!dayFixed){
+    if(/\b(day after tomorrow)\b/.test(s)){ d.setDate(d.getDate()+2); dayFixed=true; hit=true; }
+    else if(/\b(tomorrow|tmrw|tmr|2moro)\b/.test(s)){ d.setDate(d.getDate()+1); dayFixed=true; hit=true; }
+    else if(/\b(today|this afternoon|tonight|later today)\b/.test(s)){ dayFixed=true; hit=true; }
+    else { const wm=s.match(new RegExp('\\b(next )?('+Object.keys(_WDAY).join('|')+')\\b'));
+      if(wm){ const want=_WDAY[wm[2]]; let add=(want-d.getDay()+7)%7;
+        if(add===0) add=7;                                       // "monday" on a Monday = next Monday
+        if(wm[1]&&add<7) add+=7;                                 // "next tuesday" = the following week
+        d.setDate(d.getDate()+add); dayFixed=true; hit=true; }
+      else if(/\bnext week\b/.test(s)){ d.setDate(d.getDate()+7); dayFixed=true; hit=true; } }
+  }
+  if(!hit) return null;
+  if(hh===null){ hh=9; mm=30; exact=false; }                     // a day with no time → start of golden window
+  d.setHours(hh,mm,0,0);
+  // a time already gone today rolls to tomorrow, unless they named the day
+  if(d.getTime()<=+now && !dayFixed) d.setDate(d.getDate()+1);
+  if(d.getTime()<=+now) return null;                             // in the past and pinned there — ignore
+  return {ts:d.getTime(),label:fmtWhenAt(d.getTime()),exact:exact};
+}
+// Only auto-arm the chip when the note actually reads like a call-back promise.
+// "left him a voicemail at 2" is a record of what happened, not an instruction.
+function noteAsksCallback(txt){
+  return /\b(call|cb|ring|reach|try|follow ?up|check ?back|touch base|get back|hit)\b[^.!?]{0,28}\b(back|him|her|them|me|again|then|at|on|next|tomorrow|tmrw|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/
+    .test(String(txt||'').toLowerCase()) || /\b(call ?back|callback|cb)\b/.test(String(txt||'').toLowerCase());
+}
 /* ===== RESTAURANT CALLING WINDOWS =====================================
    A restaurant is not an office. Dialing into a service rush doesn't just
    fail to connect — it burns the number, because the person who picks up is
@@ -2342,6 +2496,17 @@ function dtLocal(ts){ const d=new Date(+ts||Date.now()); const p=n=>(n<10?'0':''
 function fmtWhen(ts){ const d=ts-Date.now(); if(d<=0) return 'now';
   const h=d/36e5; if(h<1) return Math.max(1,Math.round(d/6e4))+'m'; if(h<24) return Math.round(h)+'h';
   const days=Math.round(h/24); if(days===1) return 'tomorrow'; if(days<30) return 'in '+days+'d'; return 'in '+Math.round(days/30)+'mo'; }
+/* A promised call-back has to read as a CLOCK TIME. "in 1h" is fine for a queue
+   estimate but useless when you told an owner you'd ring at 4 — you need to see
+   "Today 4:00 PM" to know the CRM heard you right. */
+function fmtWhenAt(ts){ const d=new Date(ts), n=new Date();
+  const t=d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  const day0=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime();
+  const diff=Math.round((day0(d)-day0(n))/864e5);
+  if(diff===0) return 'today '+t;
+  if(diff===1) return 'tomorrow '+t;
+  if(diff>1&&diff<7) return d.toLocaleDateString('en-US',{weekday:'short'})+' '+t;
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+t; }
 // Priority score — higher = call sooner. Uses the composite heat() ranking
 // (opens recency & volume, replies, intent, decision-maker, staleness).
 const HOT_CAP=150;
@@ -2477,6 +2642,22 @@ function hotQueue(){ const now=Date.now();
     const pinSn=prefilter(contacts().filter(c=>hotForMe(c)&&!inSn.has(c.id)&&+c.nextCallAt>now&&!c.queueOut
       &&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)));
     if(pinSn.length) snoozed=snoozed.concat(pinSn).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt)); }
+  /* PROMISED CALL-BACKS OUTRANK EVERYTHING. If you told an owner "I'll ring you at 4",
+     that call is not a heat guess — it's an appointment. Left to the normal path a warm
+     lead only re-enters via the heat auto-fill and can be squeezed out of the top 150 by
+     hotter names, so the one call you actually committed to is the one you miss. Due
+     promises jump to the front; upcoming ones stay visible in Later so you can see the
+     day coming. Both bypass the cap. */
+  const canCall=c=>!c.queueOut&&!c.internal&&!['In Pipeline','Customer'].includes(c.status)
+    &&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c);
+  const promised=prefilter(contacts().filter(c=>+c.promisedCallAt&&canCall(c)));
+  if(promised.length){
+    const duePr=promised.filter(c=>+c.nextCallAt<=now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
+    if(duePr.length){ const s=new Set(duePr.map(c=>c.id)); due=duePr.concat(due.filter(c=>!s.has(c.id))); }
+    const inSn=new Set(snoozed.map(c=>c.id));
+    const laterPr=promised.filter(c=>+c.nextCallAt>now&&!inSn.has(c.id));
+    if(laterPr.length) snoozed=snoozed.concat(laterPr).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
+  }
   return {due,snoozed};
 }
 // Bulk re-tier every non-customer, non-pipeline contact — INTENT-AWARE:
