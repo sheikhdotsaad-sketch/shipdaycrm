@@ -89,6 +89,12 @@ button.cm-chip:hover{border-color:var(--acc);color:var(--acc)}
 .cm-task{display:flex;align-items:center;gap:7px;padding:5px 8px;margin-bottom:4px;
   border:1px solid var(--line);border-radius:8px;background:var(--panel2);font-size:12.5px}
 .cm-tasktxt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-hist{border:1px solid var(--line);border-radius:8px;background:var(--panel2);
+  padding:3px 8px;max-height:172px;overflow:auto}
+.cm-histrow{display:flex;gap:8px;align-items:baseline;font-size:12px;padding:3px 0;border-bottom:1px solid var(--line)}
+.cm-histrow:last-child{border-bottom:0}
+.cm-histts{color:var(--mut);white-space:nowrap;font-size:11px;min-width:40px}
+.cm-histtxt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cadstep{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
 .cadstep-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .cadgrid{display:flex;gap:6px}
@@ -584,7 +590,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug3·z111';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug3·z112';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2158,7 +2164,7 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
 let callModalId=null, cmSel={dispo:'',req:'none',note:''};
 function openCallModal(cid){ const c=contact(cid); if(!c) return;
-  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',at:0,showPick:false,noteWhen:null,more:false,who:false,seq:false};
+  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',at:0,showPick:false,noteWhen:null,more:false,who:false,seq:false,hist:false};
   claimLead(c);  // opening to work the lead locks it to you (no log yet)
   let m=el('callModal'); if(!m){ m=document.createElement('div'); m.id='callModal'; m.className='cmodal-wrap';
     m.addEventListener('click',function(e){ if(e.target===m) closeCallModal(); }); document.body.appendChild(m); }
@@ -2201,7 +2207,7 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
       (a&&a.ordering?'<a class="btn sm gh" href="'+esc(_extUrl(a.ordering))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🛒 Ordering</a>':'')+
       (!dnc&&p?'<button type="button" class="cm-link" style="color:var(--lost);margin-left:auto" onclick="markDNC(\''+c.id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Do not call</button>':'')+
       '</div>'; })()+
-    cmSeqBox(c)+cmTasks(c)+
+    cmSeqBox(c)+cmTasks(c)+cmHistory(c)+
     // Someone else picked up? Add them on the spot — the outcome you save logs to THEM.
     // Folded away by default: it's the exception, and open it cost four rows of scroll
     // on every single dial.
@@ -2244,6 +2250,26 @@ function cmTasks(c){
       '</div>'; }).join('')+
     (more?'<div class="cm-sub" style="margin:0 0 2px">+'+more+' more in your task list</div>':'');
 }
+/* A quick look at what's already happened, without leaving the dial. Ringing someone
+   who opened your pricing email twice yesterday is a different call than a cold one,
+   and the rep can't read that off a name. Newest first, 3 lines, expandable to 12. */
+function cmHistory(c){
+  const L=(c.log||[]).map((x,i)=>({x,i}))
+    .sort((a,b)=>((+b.x.ts||0)-(+a.x.ts||0))||(b.i-a.i)).map(o=>o.x);
+  if(!L.length) return '<div class="cm-lbl">Recent activity</div>'+
+    '<div class="cm-sub" style="margin:0 0 2px">Nothing logged yet — this is a first touch.</div>';
+  const show=L.slice(0,cmSel.hist?12:3), more=L.length-show.length;
+  return '<div class="cm-lbl">Recent activity</div>'+
+    '<div class="cm-hist">'+show.map(x=>{ const ttl=(x.txt||'')+(x.by?' · '+x.by:'');
+      return '<div class="cm-histrow" title="'+esc(ttl)+'">'+
+        '<span class="cm-histts">'+esc(x.ts?fmtAgo(+x.ts):'')+'</span>'+
+        '<span class="cm-histtxt">'+esc(x.txt||'')+'</span></div>'; }).join('')+'</div>'+
+    (cmSel.hist
+      ? '<button type="button" class="cm-link" onclick="cmToggleHist()">Show less</button>'+
+        (more>0?'<span class="cm-sub"> · '+more+' older on the full record</span>':'')
+      : (more>0?'<button type="button" class="cm-link" onclick="cmToggleHist()">Show '+Math.min(more,9)+' more</button>':''));
+}
+function cmToggleHist(){ cmSyncNote(); cmSel.hist=!cmSel.hist; renderCallModal(); }
 function cmDoneTask(id){ cmSyncNote(); completeTask(id); renderCallModal(); toast('Task done'); }
 function cmSnoozeTask(id){ cmSyncNote(); snoozeTask(id,1); renderCallModal(); toast('Pushed to tomorrow'); }
 /* Enrol into an email play without leaving the dial. The single most common thing to do
