@@ -592,7 +592,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug4·z116';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug4·z117';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2879,8 +2879,18 @@ function hotQueue(){ const now=Date.now();
   // ...but a PROMISE beats the play. "Call me back Tuesday at 2" came from the person themselves;
   // the cadence's schedule is a guess made before that conversation happened. So once a call-back
   // is promised, nextCallAt (which holds the promised time) is the only clock that counts.
+  // ...and a mail YOU just sent from this list beats the play too. Sending the email advances
+  // the cadence, which books the next call step for tomorrow, which used to yank the person out
+  // of Now-up the instant you hit send — you'd be looking at them, email them, and watch the row
+  // disappear. But emailing is not dialing: the whole reason to send it from the queue is to warm
+  // the line and ring straight after. So a contact you personally emailed today stays in today's
+  // list, right where they were. At midnight the play's clock takes back over as normal.
+  // Order matters. nextCallAt stays FIRST: once you've dialed and logged "no answer" the
+  // disposition snoozes them 4h, and that has to outrank the email grace or you'd be right back
+  // to the same rows cycling forever. The grace only ever overrules the CADENCE's guess.
   const isDue=c=>{ if(+c.nextCallAt&&+c.nextCallAt>now) return false;
     if(+c.promisedCallAt) return true;
+    if(+c.emailedByMeAt>=+today0()) return true;
     const e=taskIndex()[c.id]; return !(e&&e.callDue>now); };
   // When it IS their turn — the promised time if one was given, otherwise whichever comes first,
   // the call-back you booked or the play's next call step. Drives the Later list so a held-back
@@ -3859,6 +3869,9 @@ async function sendSeqEmail(id){
     if(d.threadId) s.threadId=d.threadId;      // remember the thread for the next reply step
     if(d.messageId) s.lastMsgId=d.messageId;
     markEmailStepSent(c,n,by);                  // advances step, closes this task, spawns the next
+    // You sent this one by hand, just now. Keep them in today's Hot List instead of letting the
+    // freshly-booked next call step file them under tomorrow — see isDue() in hotQueue.
+    c.emailedByMeAt=Date.now();
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
     setSync&&setSync('ok','Sent');
     toast(c.emailSeq.done?('✅ Cadence complete — Email '+n+' sent to '+cname(c)):('✅ Email '+n+' sent to '+cname(c)+' · Email '+(n+1)+' queued'));
