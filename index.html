@@ -592,7 +592,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug4·z115';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug4·z116';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -5789,8 +5789,24 @@ function importOhioGroups(recs){
   // what happened to Rockne's, Stauf's and Old Bag of Nails on the first run.
   const hasDialable=new Set();
   Object.values(store.contacts).forEach(c=>{ if(c.accountId&&_oPhone(c.phone)) hasDialable.add(c.accountId); });
-  let upgraded=0,created=0,filled=0,childLinked=0,closedFlagged=0,renamed=0,noPhone=0,newContacts=0;
+  // Numbers already in the book. Several brands can genuinely share one corporate
+  // switchboard (Gosh Enterprises owns Charleys and BIBIBOP — all three answer on
+  // 614-923-4700), and putting the same line on three contacts means three dials to
+  // the same receptionist and a same-number guard that quietly buries two of them.
+  // One line, one contact.
+  const numOwner={};
+  Object.values(store.contacts).forEach(c=>{ const d=_oPhone(c.phone); if(d&&!numOwner[d]) numOwner[d]=c.id; });
+  let upgraded=0,created=0,filled=0,childLinked=0,closedFlagged=0,renamed=0,noPhone=0,newContacts=0,sharedLine=0,movedLine=0;
   const tierCount={};
+  // Biggest, owner-run groups first. Two research rows can land on ONE account (a
+  // company and its own flagship brand share a website — "Northstar Restaurant Group"
+  // 16 locations and "Northstar Cafe" 6, both on thenorthstarcafe.com). Whichever ran
+  // last used to win, so the parent's 16 got overwritten by the child's 6 and the
+  // group ranked as a third of its real size. Ordering means the parent lands first,
+  // and claimSize below stops anything smaller from shrinking it.
+  const _sz=g=>(+g.ohioLocations||0)||(+g.totalLocations||0);
+  recs=recs.slice().sort((x,y)=>(x.franchised===true)-(y.franchised===true)||_sz(y)-_sz(x));
+  const claimSize={};
   recs.forEach(g=>{
     const nm=_oNorm(g.name), lk=_oLoose(g.name), st=_oSite(g.website);
     const t=_grpTier(g); tierCount[t.tier]=(tierCount[t.tier]||0)+1;
@@ -5805,6 +5821,11 @@ function importOhioGroups(recs){
       if(c) a=c;
     }
     if(!a) a=hits[0]||null;
+    // A bigger sibling already claimed this exact account earlier in the run (same
+    // website, e.g. the parent company and one of its brands). Its facts are the
+    // truthful ones for the account as a whole, so this row only fills blanks and
+    // is otherwise left alone rather than shrinking the group.
+    const shadowed=!!(a&&claimSize[a.id]!==undefined&&claimSize[a.id]>=_sz(g));
     if(a){
       // Existing row becomes the group parent. Blanks only — never overwrite.
       GRP_FILL.forEach(k=>{ if(g[k]&&!String(a[k]||'').trim()){ a[k]=g[k]; filled++; } });
@@ -5835,15 +5856,42 @@ function importOhioGroups(recs){
     // comes in as a dialable contact flagged needsDM, exactly like the market
     // import. This runs for accounts he ALREADY had too: those are the biggest
     // groups in the book and most of them were sitting there uncallable.
-    if(g.phone&&t.tier!=='X'&&!hasDialable.has(a.id)){ const cid=uid('c');
-      store.contacts[cid]={id:cid,accountId:a.id,first:'Main',last:'Line',title:'',email:'',
-        phone:g.phone,warmth:'Cold',status:'New',needsDM:true,source:'Ohio restaurant groups',
-        log:[{ts:Date.now(),txt:'📇 '+(g.ohioLocations||g.totalLocations||'')+'-location group — '+
-          (g.franchised===false?'corporate-owned, one decision-maker':'multi-unit operator')+
-          '. Ask for the owner or director of operations.',sys:true}],
-        _u:Date.now()};
-      hasDialable.add(a.id); newContacts++; }
+    const pd=_oPhone(g.phone);
+    if(g.phone&&t.tier!=='X'&&!hasDialable.has(a.id)){
+      const holder=pd?store.contacts[numOwner[pd]]:null;
+      const hAcct=holder?store.accounts[holder.accountId]:null;
+      if(holder&&hAcct&&hAcct.id!==a.id&&!hAcct.isGroup){
+        // Somebody in the book already answers on this exact line, and they're sitting
+        // on ONE STORE of this group — Thunderdome's corporate line was filed under
+        // Maplewood Kitchen, Cafeo's under Jefferson Social. Cloning would mean two
+        // dials to one desk; skipping would leave the group row (the one that knows
+        // it's 22 restaurants and one owner) with nobody to call. So the person moves
+        // up to the company they actually answer for, and the store is filed under it
+        // so nothing disappears — it just reads the right way round now.
+        holder.accountId=a.id; stampU(holder);
+        if(!hAcct.parentId){ hAcct.parentId=a.id; hAcct.locType='single'; stampU(hAcct); childLinked++; }
+        hasDialable.add(a.id); movedLine++;
+      } else if(holder){
+        // A sibling BRAND already answers here (Gosh Enterprises owns Charleys and
+        // BIBIBOP — all three ring 614-923-4700). Say so on the account instead of
+        // cloning the contact, so one dial is understood to cover both rather than
+        // looking like two separate opportunities.
+        const note='☎ Shares a corporate line with another group in your book — one call covers both.';
+        if(!String(a.notes||'').includes(note)) a.notes=(a.notes?a.notes+' | ':'')+note;
+        sharedLine++;
+      } else { const cid=uid('c');
+        store.contacts[cid]={id:cid,accountId:a.id,first:'Main',last:'Line',title:'',email:'',
+          phone:g.phone,warmth:'Cold',status:'New',needsDM:true,source:'Ohio restaurant groups',
+          log:[{ts:Date.now(),txt:'📇 '+(g.ohioLocations||g.totalLocations||'')+'-location group — '+
+            (g.franchised===false?'corporate-owned, one decision-maker':'multi-unit operator')+
+            '. Ask for the owner or director of operations.',sys:true}],
+          _u:Date.now()};
+        if(pd) numOwner[pd]=cid;
+        hasDialable.add(a.id); newContacts++; }
+    }
     // ---- group facts (these ARE the point of the file, so they refresh) --
+    if(!shadowed){
+    claimSize[a.id]=_sz(g);
     a.locType='multi';
     a.locationCount=ohN||totN||1;
     a.totalLocations=totN||undefined;
@@ -5857,6 +5905,7 @@ function importOhioGroups(recs){
     // A closed brand still belongs in the book so a stale list can't send you
     // chasing it — but it must never reach the queue.
     if(t.tier==='X'){ a.excluded=true; closedFlagged++; }
+    }
     if(g.notes) a.notes=String(a.notes||'').includes(g.notes)?a.notes:((a.notes?a.notes+' | ':'')+g.notes);
     stampU(a);
     // ---- file matching single stores under the group --------------------
@@ -5882,6 +5931,8 @@ function importOhioGroups(recs){
         '  '+childLinked+' single stores filed under their parent company\n'+
         '  '+filled+' blank fields filled in\n'+
         (renamed?'  '+renamed+' renamed to the company name\n':'')+
+        (movedLine?'  '+movedLine+' had their corporate contact filed under one store — moved up to the company\n':'')+
+        (sharedLine?'  '+sharedLine+' share a corporate line with another group (one call covers both)\n':'')+
         (closedFlagged?'  '+closedFlagged+' flagged closed so you stop chasing them\n':'')+
         '\n'+best+' are tier A — corporate-owned, 3-40 Ohio locations.\n'+
         'That\'s one owner who can say yes for every store. Work those first.'+
