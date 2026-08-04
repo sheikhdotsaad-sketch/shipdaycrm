@@ -592,7 +592,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug4·z118';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug4·z119';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2042,6 +2042,15 @@ function tierC(c){ const i=intentC(c), ph=!!telNum(c);
 function hasOpenDeal(c){ if(!c) return false;
   return deals().some(d=>d.stage!=='Closed Lost'&&d.stage!=='Closed Deal'&&
     (d.contactId===c.id||(c.accountId&&d.accountId===c.accountId))); }
+/* A deal should only take someone OUT of the call queue once a meeting is actually on the calendar.
+   The queue used to test "any open deal", which quietly broke two things: a No Show — the most
+   urgent call-back there is — went invisible the moment it was logged, and it meant "✅ Interested"
+   could never open a deal without deleting the very person you'd just promised to ring back.
+   Booked Demo = stop dialing, you have the meeting. Follow Up and No Show = keep dialing, that IS
+   the work. Closed Lost/Closed Deal never counted here and still don't. */
+function demoBooked(c){ if(!c) return false;
+  return deals().some(d=>d.stage==='Booked Demo'&&
+    (d.contactId===c.id||(c.accountId&&d.accountId===c.accountId))); }
 /* ---- account-level rollups + plain-English "AI read" for the drawers ---- */
 function acctHeat(a){ const cs=contactsOf(a.id).filter(c=>!c.internal); return cs.length?Math.max(...cs.map(heat)):0; }
 function acctIntentScore(a){ const cs=contactsOf(a.id).filter(c=>!c.internal); return cs.length?Math.max(...cs.map(intentC)):0; }
@@ -2435,7 +2444,8 @@ function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSe
 function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) return;
   if(pinnedLead===c.id) setPin(null);
   const prev={dispo:c.dispo,dispoTs:c.dispoTs,nextCallAt:c.nextCallAt,queueOut:c.queueOut,queueOutTs:c.queueOutTs,
-    callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted,warmth:c.warmth};
+    callNote:c.callNote,callCount:c.callCount,lastContactedTs:c.lastContactedTs,lastContacted:c.lastContacted,
+    warmth:c.warmth,status:c.status};
   c.callCount=(+c.callCount||0)+1;
   c.dispo=d.t; c.dispoTs=Date.now();
   c.lastContactedTs=Date.now(); c.lastContacted=fmtD(new Date());
@@ -2468,6 +2478,24 @@ function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) r
   }
   // Disposition + notes are purely a warmth signal: they set how hot the lead is; the Hot List re-ranks.
   if(d.w) c.warmth=d.w;
+  // "✅ Interested" used to do nothing but turn the row red — the opportunity existed only in the
+  // rep's head, so it never reached Pipeline and never got forecast. It now opens a real deal at
+  // FOLLOW UP. Deliberately not "Booked Demo": no meeting is set yet and the stage is what the
+  // forecast reads, so calling it a demo would inflate the number. The deal does NOT end the
+  // dialing — demoBooked() only parks a lead once a meeting is actually on the calendar — so the
+  // call-back you just promised still lands in the Hot List. Status goes to Working, not
+  // In Pipeline, for the same reason: In Pipeline is excluded from the queue everywhere.
+  // If this restaurant already has an open deal we leave it alone rather than stacking a second
+  // one on the same account.
+  let newDealId=null;
+  if(d.deal&&!hasOpenDeal(c)){
+    newDealId=uid('d'); const ad=acct(c.accountId);
+    store.deals[newDealId]={id:newDealId,accountId:c.accountId||'',contactId:c.id,
+      name:(ad?ad.name:cname(c)),stage:d.deal,value:0,warmth:'Hot',log:[],
+      createdAt:Date.now(),_u:Date.now()};
+    logAuto(store.deals[newDealId],'Opened from a call with '+cname(c)+' — marked interested');
+    if(!['In Pipeline','Customer'].includes(c.status)) c.status='Working';
+  }
   // "Already a Shipday customer" → flag the whole ACCOUNT as an existing customer (NOT our win,
   // no MRR/quota credit) so it drops out of the prospect queue and nobody dials it again.
   let aPrev=null; const a=d.cust?acct(c.accountId):null;
@@ -2476,6 +2504,7 @@ function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) r
   stampU(c); logAuto(c,'☎ '+d.t+(nt?' — '+nt:''));
   // Record the promise itself, so the drawer shows WHEN you said you'd ring back,
   // not just that the call happened.
+  if(newDealId) logAuto(c,'💼 Opened a '+d.deal+' deal in Pipeline');
   if(promised) logAuto(c,'📌 Promised call back '+fmtWhenAt(promised));
   if(a) logAuto(a,'🏢 Marked existing Shipday customer (not owned) via call');
   // Consume the current call-cadence step (if any) — this call handled it.
@@ -2493,9 +2522,10 @@ function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) r
   releaseClaim(c);
   save(); renderActive(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget();
   const seqNote=seqPrev?(c.emailSeq&&c.emailSeq.done?' · sequence complete':' · cadence → step '+(seqPrev.n+1)):'';
+  const dealNote=newDealId?' · 💼 deal opened in Pipeline':'';
   const back=(promised?'calling back '+fmtWhenAt(promised)+' · task added'
-           :(rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt))+seqNote;
-  toast(d.t+' · '+back,()=>{ Object.assign(c,prev); if(aPrev){ const aa=acct(aPrev.id); if(aa){ aa.isCustomer=aPrev.isCustomer; aa.existingCust=aPrev.existingCust; aa.notOwned=aPrev.notOwned; stampU(aa); } } if(cadTaskId){ const tk=tasks().find(x=>x.id===cadTaskId); if(tk){ tk.done=false; tk.doneTs=0; } }
+           :(rq.ms<0)?'done — off queue':'call back '+fmtWhen(c.nextCallAt))+dealNote+seqNote;
+  toast(d.t+' · '+back,()=>{ Object.assign(c,prev); if(newDealId){ delete store.deals[newDealId]; tomb(newDealId); } if(aPrev){ const aa=acct(aPrev.id); if(aa){ aa.isCustomer=aPrev.isCustomer; aa.existingCust=aPrev.existingCust; aa.notOwned=aPrev.notOwned; stampU(aa); } } if(cadTaskId){ const tk=tasks().find(x=>x.id===cadTaskId); if(tk){ tk.done=false; tk.doneTs=0; } }
     // roll the sequence back to the call step this dial consumed: restore the pointer,
     // drop the step it queued next, and reopen the step's own task
     if(seqPrev&&c.emailSeq){ const s=c.emailSeq; s.step=seqPrev.step; s.done=seqPrev.done; s.lastBy=seqPrev.lastBy; s.lastSentAt=seqPrev.lastSentAt;
@@ -2520,8 +2550,9 @@ const _HR=36e5, _DAY=864e5;
 // (warmth untouched). req = a SUGGESTED call-back window (rep can override or clear).
 // pri = shown up-front while dialling. These six are ~95% of real outcomes; the
 // rest sit behind "More" so Save stays on screen and a dial is 3 clicks, not 3 scrolls.
+// deal = the outcome opens a real opportunity at that stage (see applyDispo).
 const DISPOS=[
-  {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot',  pri:1},
+  {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot',  pri:1, deal:'Follow Up'},
   {k:'callback',   t:'↩ Callback set',       req:'1d',  w:'Hot',  pri:1},
   {k:'lvm',        t:'📩 Left voicemail',     req:'4h',           pri:1},
   {k:'noanswer',   t:'📵 No answer',          req:'4h',           pri:1},
@@ -2873,7 +2904,7 @@ function hotQueue(){ const now=Date.now();
   // deliberate paths (Hot-tagged / call-step / in-sequence) while the heat auto-fill below took
   // anything eligible — so a lead another rep is actively running got excluded by name and then
   // readmitted by heat. Checking it here covers every path at once. Unowned still = shared pool.
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!hasOpenDeal(c)&&!isDeadChain(acct(c.accountId))&&!dupDial(c)&&seqMine(c);
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!demoBooked(c)&&!isDeadChain(acct(c.accountId))&&!dupDial(c)&&seqMine(c);
   // The play has its own clock. If the cadence just fired Email 1 and booked "Call 2/10" for
   // tomorrow, this person HAS been contacted today — dialing them now is the queue overruling
   // the sequence it just built. Their turn comes when the step's task comes due.
@@ -2947,14 +2978,14 @@ function hotQueue(){ const now=Date.now();
   // correctly snooze it 4h... and this line put it straight back at the top. That was the real
   // "same calls always show up" bug: the pin silently outranked the disposition you just recorded.
   // Pinning still means "top of my list", it just can't mean "ignore the clock".
-  if(me){ const mine=prefilter(contacts().filter(c=>hotForMe(c)&&isDue(c)&&!c.queueOut&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)))
+  if(me){ const mine=prefilter(contacts().filter(c=>hotForMe(c)&&isDue(c)&&!c.queueOut&&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!demoBooked(c)&&!claimedByOther(c)&&!isDNC(c)))
       .sort((a,b)=>((b.hotFor&&b.hotFor[me])||0)-((a.hotFor&&a.hotFor[me])||0));
     if(mine.length){ const pin=new Set(mine.map(c=>c.id)); due=mine.concat(due.filter(c=>!pin.has(c.id))); } }
   // A pinned contact that's snoozed must still be VISIBLE with its call-back time, otherwise it
   // just disappears after you dispo it and you're left wondering where your pin went.
   if(me){ const inSn=new Set(snoozed.map(c=>c.id));
     const pinSn=prefilter(contacts().filter(c=>hotForMe(c)&&!inSn.has(c.id)&&+c.nextCallAt>now&&!c.queueOut
-      &&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)));
+      &&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!demoBooked(c)&&!claimedByOther(c)&&!isDNC(c)));
     if(pinSn.length) snoozed=snoozed.concat(pinSn).sort((a,b)=>dueAt(a)-dueAt(b)); }
   // A PARKED lead has to stay visible in Scheduled with the date it comes back. Parking drops
   // warmth off Hot — which is honest, they just told you "not now" — but that also takes them
@@ -2973,7 +3004,7 @@ function hotQueue(){ const now=Date.now();
   // person, and the call-back task carries their name. Without seqMine this lane bypassed every
   // other filter and dropped another rep's committed call at the top of your queue.
   const canCall=c=>!c.queueOut&&!c.internal&&!['In Pipeline','Customer'].includes(c.status)
-    &&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)&&seqMine(c);
+    &&!isCustC(c)&&!demoBooked(c)&&!claimedByOther(c)&&!isDNC(c)&&seqMine(c);
   const promised=prefilter(contacts().filter(c=>+c.promisedCallAt&&canCall(c)));
   if(promised.length){
     const duePr=promised.filter(c=>+c.nextCallAt<=now).sort((a,b)=>(+a.nextCallAt)-(+b.nextCallAt));
@@ -2992,7 +3023,7 @@ function hotQueue(){ const now=Date.now();
 // then the remaining Hot slots (to 150) fill by heat; next 350 → Warm, rest → Cold.
 // Contacts with an open deal are skipped (they live in Pipeline, not the tiers).
 function retierBook(){
-  const pool=contacts().filter(c=>!isCustC(c)&&!['In Pipeline','Customer'].includes(c.status)&&!c.internal&&!hasOpenDeal(c));
+  const pool=contacts().filter(c=>!isCustC(c)&&!['In Pipeline','Customer'].includes(c.status)&&!c.internal&&!demoBooked(c));
   if(!pool.length){ toast('No contacts to re-tier'); return; }
   const autoHot=pool.filter(c=>tierC(c).k==='now');
   if(!confirm('Re-tier '+pool.length+' contacts?\n\n'+autoHot.length+' actively-engaging contacts (opens/replies + phone) → Hot automatically.\nRemaining Hot slots fill by heat to 150, next 350 → Warm, the rest → Cold.\nCustomers, in-pipeline and open-deal contacts are left untouched.')) return;
