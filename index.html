@@ -592,7 +592,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug4·z117';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug4·z118';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2183,7 +2183,8 @@ function unmarkDNC(cid){ const c=contact(cid); if(!c) return;
 const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;align-items:center">'+
   (isDNC(r)?'<span class="tag" style="background:#3a1414;color:#f2a3a3" title="Do Not Call — compliance flag. Click Log to view/remove.">🚫 DNC</span>'
     :(telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>'))+
-  '<button class="btn sm gh" title="Log call outcome" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')">Log ▾</button></div>';
+  '<button class="btn sm gh" title="Log call outcome" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')">Log ▾</button>'+
+  '<button class="btn sm gh" title="Not interested right now — park for a month" onclick="event.stopPropagation();parkLead(\''+r.id+'\')">💤</button></div>';
 // ===== Call & disposition modal =====
 // Opening the modal does NOT log anything — dialing (the tel: link) just rings the phone.
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
@@ -2955,6 +2956,13 @@ function hotQueue(){ const now=Date.now();
     const pinSn=prefilter(contacts().filter(c=>hotForMe(c)&&!inSn.has(c.id)&&+c.nextCallAt>now&&!c.queueOut
       &&!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!hasOpenDeal(c)&&!claimedByOther(c)&&!isDNC(c)));
     if(pinSn.length) snoozed=snoozed.concat(pinSn).sort((a,b)=>dueAt(a)-dueAt(b)); }
+  // A PARKED lead has to stay visible in Scheduled with the date it comes back. Parking drops
+  // warmth off Hot — which is honest, they just told you "not now" — but that also takes them
+  // out of `base`, so without this they'd disappear from Now-up AND Scheduled at once and
+  // "back in a month" would be a promise the screen never keeps. Same shape as the pin lane.
+  { const inSn2=new Set(snoozed.map(c=>c.id));
+    const parked=prefilter(contacts().filter(c=>+c.parkedAt&&+c.nextCallAt>now&&!inSn2.has(c.id)&&elig(c)));
+    if(parked.length) snoozed=snoozed.concat(parked).sort((a,b)=>dueAt(a)-dueAt(b)); }
   /* PROMISED CALL-BACKS OUTRANK EVERYTHING. If you told an owner "I'll ring you at 4",
      that call is not a heat guess — it's an appointment. Left to the normal path a warm
      lead only re-enters via the heat auto-fill and can be squeezed out of the top 150 by
@@ -3015,6 +3023,24 @@ function clearSnooze(cid){ const c=contact(cid); if(!c)return; c.nextCallAt=0; c
 function reschedule(cid,days){ const c=contact(cid); if(!c)return; c.queueOut=false; c.nextCallAt=Date.now()+days*_DAY; stampU(c); save(); renderActive(); toast('Rescheduled — call back '+fmtWhen(c.nextCallAt)); }
 function dropFromQueue(cid){ const c=contact(cid); if(!c)return; if(pinnedLead===cid) setPin(null); c.queueOut=true; c.queueOutTs=Date.now(); stampU(c); releaseClaim(c); save(); renderActive();
   toast('Removed from call queue — '+esc(cname(c)),()=>{ c.queueOut=false; save(); renderActive(); }); }
+/* "Not interested RIGHT NOW" — the single most common thing a rep learns on a cold call, and
+   until now there was nowhere to put it from the list itself. Removing them is wrong (they're
+   not dead, they're just busy this month) and the only alternatives were to dial them again or
+   open the log modal, so in practice the same names came round every day. One click parks them
+   for a month: they leave Now-up, stay visible in Scheduled with the date they come back, and
+   nothing is lost — the toast undoes it. */
+const PARK_DAYS=30;
+function parkLead(cid){ const c=contact(cid); if(!c) return;
+  const prev={nextCallAt:c.nextCallAt,promisedCallAt:c.promisedCallAt,warmth:c.warmth,
+    dispo:c.dispo,dispoTs:c.dispoTs,emailedByMeAt:c.emailedByMeAt,parkedAt:c.parkedAt};
+  if(pinnedLead===cid) setPin(null);
+  c.nextCallAt=Date.now()+PARK_DAYS*_DAY; c.promisedCallAt=0; c.emailedByMeAt=0; c.parkedAt=Date.now();
+  if(c.warmth==='Hot') c.warmth='Warm';          // still a lead, just not a this-week lead
+  c.dispo='💤 Not now / later Q'; c.dispoTs=Date.now();
+  logAuto(c,'💤 Not interested right now — parked until '+fmtWhen(c.nextCallAt));
+  stampU(c); releaseClaim(c); save(); renderActive();
+  toast('💤 Parked '+cname(c)+' — back '+fmtWhen(c.nextCallAt),
+    ()=>{ Object.assign(c,prev); stampU(c); save(); renderActive(); }); }
 function requeueDropped(){ const out=contacts().filter(c=>c.queueOut); if(!out.length){ toast('Nothing removed'); return; }
   if(!confirm('Restore '+out.length+' removed contact'+(out.length>1?'s':'')+' back to the call queue?')) return;
   out.forEach(c=>{ c.queueOut=false; }); save(); renderActive(); toast('Restored '+out.length+' to queue'); }
@@ -4129,6 +4155,7 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-dispo" id="ccDispo"><div class="cc-dispo-lbl">After the call →</div>'+
     '<button class="btn sm pri" onclick="openCallModal(\''+c.id+'\')">📋 Log outcome & notes</button>'+
     '<button class="btn sm gh" onclick="bookDemo(\''+c.id+'\')">✅ Booked demo</button>'+
+    '<button class="btn sm gh" onclick="parkLead(\''+c.id+'\')" title="Not interested right now — park for a month">💤 Not now</button>'+
     '<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button></div></div>';
   return h;
 }
