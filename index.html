@@ -390,8 +390,8 @@ tr.tgrp .car{float:right;color:var(--mut);font-weight:700}
 @media(max-width:640px){#sellypanel{right:3vw;left:3vw;width:auto;bottom:82px;height:72vh}#sellyfab{left:78px;bottom:14px}}
 
 /* Rep sign-in gate (identity picker — real password auth stays Phase C) */
-#repgate{position:fixed;inset:0;background:rgba(4,7,12,.78);backdrop-filter:blur(5px);z-index:120;display:none;align-items:center;justify-content:center;padding:16px}
-#repgate .rbtn{display:block;width:100%;text-align:left;font-size:14px;padding:12px 14px;margin-bottom:8px}
+#repgate,#bookgate{position:fixed;inset:0;background:rgba(4,7,12,.78);backdrop-filter:blur(5px);z-index:120;display:none;align-items:center;justify-content:center;padding:16px}
+#repgate .rbtn,#bookgate .rbtn{display:block;width:100%;text-align:left;font-size:14px;padding:12px 14px;margin-bottom:8px}
 
 /* Login gate */
 #gate{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;align-items:center;justify-content:center}
@@ -455,6 +455,7 @@ small.hint{color:var(--dim);font-size:11px}
     <div class="s"><b id="hs-cust">0</b><span>Customers</span></div>
   </div>
   <div class="hspace"></div>
+  <button class="hbtn" id="book-chip" style="display:none" onclick="bookMenu()" title="Which territory you're working in"></button>
   <button class="hbtn" id="bell" onclick="openSignals()" title="New opens &amp; replies">🔔 <span id="bellN"></span></button>
   <button class="hbtn" id="rep-chip" onclick="setMyRep()" title="Who's working in this browser — every call, email &amp; note you log is stamped with this name so Team Activity can tell reps apart">👤 …</button>
   <button class="hbtn" onclick="syncAll()" title="Universal sync — pulls Gmail &amp; Google Calendar, then refreshes every tab">↻ Sync</button>
@@ -599,53 +600,65 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z123';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z124';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
 const AUTH_ON = true;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
 
-/* ====================== WHOSE BOOK ======================
-   Every sign-in used to land in the same row. That was fine while the only two people with a
-   login were working the same Ohio list — but it means a third rep signing in and importing
-   their own territory would merge thousands of their accounts straight into this book: into
-   these Hot List rankings, these counts, this quota. There is no clean undo for that.
-   So the book is now chosen by WHO signed in. The names below keep the original shared Ohio
-   book; anyone else gets a private row of their own, which simply doesn't exist until their
-   first sign-in and therefore starts empty — import your list, it's yours, nobody sees it.
-   Matching is on the login email, lowercased. Getting this list wrong is the one genuinely
-   costly mistake here (a listed rep dropped from it would sign in to an empty CRM — their
-   data is untouched in the shared row, but it would look like everything vanished), so it is
-   written out explicitly rather than inferred, and BOOK_SPLIT stays false until it's filled in. */
-const SHARED_BOOK='shipday-team';
-const SHARED_USERS=[ 'saad.sheikh@shipday.com', 'embert.sy@shipday.com' ]
-  .map(s=>String(s).toLowerCase().trim());
-// Safety catch: with no confirmed list, everyone stays on the shared book exactly as before.
-// This flips on in the same commit that fills SHARED_USERS in — never before it.
-const BOOK_SPLIT = SHARED_USERS.length>0;
-/* Manual override, per browser. The allowlist above is a hand-written list of email addresses,
-   which means the failure mode is a typo — and the symptom of a typo is a rep signing in to an
-   empty CRM, which reads as "all my data is gone". It isn't (their book is untouched in the
-   other row), but nobody believes that while staring at a blank screen. So the choice is
-   reversible from inside the app without waiting on a redeploy: Integrations shows which book
-   you're on and switches you to the other one. Kept in localStorage rather than the book
-   itself, because the whole point is to be readable before any book has loaded. */
+/* ====================== TERRITORIES ======================
+   Every sign-in used to land in one row, so a second rep importing their own state would merge
+   thousands of their accounts straight into this book — into these rankings, counts and quota,
+   with no clean undo. But a hard per-PERSON split was the wrong shape too: the team isn't three
+   islands, it's two TERRITORIES with overlapping people. Saad runs Ohio. Aime runs Michigan.
+   Embert is the SDR and works both. So the unit is the territory, and people are members of one
+   or more of them.
+
+   Ohio deliberately keeps the original row id: it holds every account, contact, log and deal
+   already in the system, and renaming it would mean a migration for zero benefit.
+
+   Membership is written out by hand rather than inferred, because getting it wrong is the one
+   genuinely costly mistake in here. Someone left off a list they belong to signs in to an empty
+   CRM, which reads as "all my data is gone" — it isn't, it's untouched in the other row, but
+   nobody believes that while staring at a blank screen. Anyone NOT on this list at all is a
+   stranger and gets a private row of their own that starts empty, so an unexpected sign-in can
+   never reach a real book. */
+const SHARED_BOOK='shipday-team';                    // Ohio — the original row, never renamed
+const BOOKS=[
+  { row:'shipday-team',  name:'Ohio',     icon:'🏠' },
+  { row:'book:michigan', name:'Michigan', icon:'🚗' }
+];
+/* First book listed is that person's HOME — where they land at sign-in.
+   Aime has exactly one entry on purpose: Michigan is the only book he can reach. */
+const BOOK_MEMBERS={
+  'saad.sheikh@shipday.com': ['shipday-team','book:michigan'],
+  'embert.sy@shipday.com':   ['shipday-team','book:michigan'],
+  'aime.kamana@shipday.com': ['book:michigan']
+};
+const BOOK_SPLIT = Object.keys(BOOK_MEMBERS).length>0;
+/* Which book this browser last chose, and who chose it. Both live in localStorage, not in the
+   book, because they have to be readable at parse time — before any sign-in resolves and before
+   a single byte comes down from the cloud — so the right local cache can be opened straight away
+   (see lsKey below). */
 function bookPref(){ try{ return localStorage.getItem('shipday_book_pref')||''; }catch(e){ return ''; } }
-function setBookPref(v){ try{ v?localStorage.setItem('shipday_book_pref',v):localStorage.removeItem('shipday_book_pref'); }catch(e){}
-  location.reload(); }
+function bookEmail(){ try{ return localStorage.getItem('shipday_book_email')||''; }catch(e){ return ''; } }
+function savedBookRow(){ try{ return localStorage.getItem('shipday_book_row')||SHARED_BOOK; }catch(e){ return SHARED_BOOK; } }
 function bookRowFor(user){
   if(!BOOK_SPLIT) return SHARED_BOOK;
   const em=String((user&&user.email)||'').toLowerCase().trim();
+  if(!em) return SHARED_BOOK;                        // can't identify them — never risk a wrong book
+  const allowed=BOOK_MEMBERS[em];
+  if(!allowed||!allowed.length) return 'book:'+(user.id||em);   // stranger → their own empty book
   const pref=bookPref();
-  if(pref==='shared') return SHARED_BOOK;
-  if(pref==='own'&&(user&&(user.id||em))) return 'book:'+(user.id||em);
-  if(!em) return SHARED_BOOK;                       // can't identify them — never risk a wrong book
-  if(SHARED_USERS.includes(em)) return SHARED_BOOK;
-  return 'book:'+(user.id||em);
+  // A saved preference is only ever honoured if they're still a member. That single check is what
+  // stops a stale localStorage entry — or a hand-edited one — from reaching a book they left.
+  return allowed.includes(pref)?pref:allowed[0];
 }
 function myBook(){ return (TEAM.row||SHARED_BOOK); }
 function onSharedBook(){ return myBook()===SHARED_BOOK; }
+function myBooks(){ const m=BOOK_MEMBERS[bookEmail()]; return (m&&m.length)?m.slice():[myBook()]; }
+function bookName(row){ const b=BOOKS.find(x=>x.row===row); return b?(b.icon+' '+b.name):'🔒 My own book'; }
 
 /* ====================== CONSTANTS ====================== */
 const STAGES = ["Booked Demo","No Show","Follow Up","Closed Lost","Closed Deal"];
@@ -655,7 +668,15 @@ const WARMC={Hot:"b-hot",Warm:"b-warm",Cold:"b-cold"};
 const C_STATUS=["New","Working","Nurturing","In Pipeline","Customer","Disqualified"];
 const PROSPECT=["New","Working","Nurturing"];      // Leads tab
 const PLANS=[99,159,199,249,299,349];
-const LS='shipday_crm_v1';
+/* One local cache PER BOOK. This is the whole ballgame: pushCloudNow() merges the local store
+   into whatever row it's pointed at, so a single shared cache meant that switching territories
+   and then saving anything would write all of Ohio into Michigan — precisely the contamination
+   the split exists to prevent, just triggered by the switcher instead of by an import. Keying
+   the cache by book makes that impossible, and has the nice side effect that switching back is
+   instant instead of a full re-download. Ohio keeps the original bare key so the book already
+   sitting in this browser is picked up untouched. */
+function lsKey(row){ return (!row||row===SHARED_BOOK)?'shipday_crm_v1':('shipday_crm_v1::'+row); }
+let LS=lsKey(savedBookRow());
 
 /* ====================== STORE ====================== */
 let store = load();
@@ -677,7 +698,9 @@ function load(){
   // first run: use injected SEED if present. Keep __updatedAt=0 so a brand-new browser
   // NEVER outranks your real cloud book — initSync() pulls the cloud copy instead of
   // pushing the fresh seed up over your data.
-  if(SEED){ const s=norm(JSON.parse(JSON.stringify(SEED))); s.__updatedAt=0; return s; }
+  // ...but only into the Ohio book. The seed IS the Ohio book; dropping it into an empty
+  // Michigan cache would hand Aime the entire Ohio list on his first sign-in.
+  if(SEED&&LS===lsKey(SHARED_BOOK)){ const s=norm(JSON.parse(JSON.stringify(SEED))); s.__updatedAt=0; return s; }
   return blank();
 }
 function norm(s){
@@ -889,6 +912,10 @@ function subscribeRealtime(row){
 }
 async function pushCloudNow(){
   if(!syncReady()||!syncPulled) return; const c=syncCfg();
+  // Last line of defence. This function merges whatever is in memory into the target row, so if
+  // the in-memory book and the target row ever disagree it would quietly copy one territory into
+  // another — unrecoverable in practice. Refuse rather than risk it.
+  if(store.__sbId&&c.row&&store.__sbId!==c.row){ console.warn('push blocked: store is',store.__sbId,'target is',c.row); setSync('err','Save blocked'); return; }
   try{ setSync('busy','Saving…');
     // fetch the current cloud book and MERGE, so this push never clobbers a teammate's records
     let adopted=false;
@@ -923,13 +950,13 @@ function syncRail(){
 function bookRail(){ const b=document.getElementById('bookBox'); if(!b) return;
   if(!BOOK_SPLIT){ b.style.display='none'; return; }
   b.style.display='block';
-  const shared=onSharedBook();
-  b.innerHTML='<b>'+(shared?'📚 Shared team book':'🔒 Your own private book')+'</b><br>'+
-    '<span style="color:var(--mut)">'+(shared
-      ? 'You and Embert work this one together. Everything you log is visible to both of you.'
-      : 'Only you can see these accounts, contacts and notes. Nobody else on the team does.')+'</span>'+
-    '<div style="margin-top:6px"><button class="btn sm gh" onclick="setBookPref('+(shared?"'own'":"'shared'")+')">'+
-    (shared?'Switch to my own private book':'Switch to the shared team book')+'</button></div>';
+  const cur=myBook(), list=myBooks();
+  const mates=Object.keys(BOOK_MEMBERS).filter(e=>(BOOK_MEMBERS[e]||[]).includes(cur));
+  b.innerHTML='<b>'+esc(bookName(cur))+'</b><br>'+
+    '<span style="color:var(--mut)">Everything on every tab — accounts, contacts, notes, Hot List, quota — is just this territory. '+
+    (mates.length>1?('Shared with '+mates.length+' people: '+esc(mates.join(', '))+'.'):'Only you can see it.')+'</span>'+
+    (list.length>1?('<div style="margin-top:6px">'+list.filter(r=>r!==cur).map(r=>
+      '<button class="btn sm gh" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">Switch to '+esc(bookName(r))+'</button>').join(' ')+'</div>'):'');
 }
 /* per-rep integration keys (Google) */
 function connectGoogle(){ toast('Gmail + Calendar connect finalizes once the app is hosted.'); }
@@ -1139,6 +1166,7 @@ function renderCounts(){
   const ps=el('p-seq'); if(ps){ try{ ps.textContent=contacts().filter(seqActive).length; }catch(e){ ps.textContent=0; } }
   const td=el('p-today'); if(td){ try{ const endToday=today0().getTime()+864e5; td.textContent=todayCountReady?(tasks().filter(taskMine).filter(t=>!t.done && +t.due<endToday).length):'…'; }catch(e){ td.textContent=todayCountReady?0:'…'; } }
   try{ renderBell(); }catch(e){}
+  try{ renderBookChip(); }catch(e){}
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
 function closedAccts(){ const s=new Set(deals().filter(d=>d.stage===WON).map(d=>d.accountId)); return accounts().filter(a=>a.isCustomer||s.has(a.id)); }
@@ -2948,6 +2976,27 @@ function repPick(n){ n=String(n||'').trim(); if(!n){ toast('Type a name first');
 }
 function renderRepChip(){ const b=el('rep-chip'); if(!b) return; const me=myRep();
   b.innerHTML=me?('👤 '+esc(me)):'👤 <b style="color:var(--hot)">Sign in</b>'; }
+/* Which territory you're in, on screen at all times. Everything in the app — the Hot List, the
+   counts, the quota, Team Activity — is scoped to one book, so a rep who's forgotten which one
+   they're looking at is reading numbers that mean something other than what they think. Hidden
+   entirely for anyone with a single book, since a chip you can't act on is just clutter. */
+function renderBookChip(){ const b=el('book-chip'); if(!b) return;
+  const list=myBooks();
+  if(!BOOK_SPLIT||list.length<2){ b.style.display='none'; return; }
+  b.style.display=''; b.textContent=bookName(myBook());
+  b.title='Working in '+bookName(myBook()).replace(/^\S+\s/,'')+' — click to switch territory';
+}
+function bookMenu(){
+  const list=myBooks(), cur=myBook();
+  let g=el('bookgate'); if(!g){ g=document.createElement('div'); g.id='bookgate'; document.body.appendChild(g); }
+  g.innerHTML='<div class="gatebox">'+
+    '<h1>Which <b>territory</b>?</h1>'+
+    '<p>Each territory is a separate book — its own accounts, contacts, notes and quota. Nothing you log in one ever shows up in the other.</p>'+
+    list.map(r=>'<button class="btn rbtn'+(r===cur?' pri':'')+'" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">'+esc(bookName(r))+
+      (r===cur?' <span style="float:right;font-size:11px;opacity:.8">you\'re here</span>':'')+'</button>').join('')+
+    '<button class="btn gh" style="width:100%;margin-top:8px" onclick="this.closest(\'#bookgate\').style.display=\'none\'">Cancel</button>';
+  g.style.display='flex';
+}
 function claimsReady(){ return !!sb && syncReady(); }
 function claimRecActive(r){ return !!r && (Date.now()-(+r.at||0)<CLAIM_TTL); }
 function claimOf(c){ const r=c&&claimsMap[c.id]; return claimRecActive(r)?r:null; }
@@ -6742,12 +6791,30 @@ async function gateInit(){
 // Nothing else in the app needs to know: syncCfg() reads TEAM.row, so pull, push, realtime and
 // claims all follow automatically.
 function useBook(user){
-  TEAM.row=bookRowFor(user);
-  store.__sbId=TEAM.row;
-  // A brand-new private book is legitimately empty, and an empty CRM is indistinguishable from
-  // a broken one. Say which it is, once, after the cloud pull has had a chance to land.
-  if(!onSharedBook()) setTimeout(()=>{ try{ if(!Object.keys(store.accounts||{}).length)
-    toast('This is your own private book — nobody else can see it. Use Import CSV to load your list.'); }catch(e){} },6000);
+  const row=bookRowFor(user);
+  const em=String((user&&user.email)||'').toLowerCase().trim();
+  TEAM.row=row;
+  // Remember who and where, so the next page load opens the right cache before auth resolves.
+  try{ localStorage.setItem('shipday_book_row',row); if(em) localStorage.setItem('shipday_book_email',em); }catch(e){}
+  // store was loaded at parse time from whatever book this browser used last. If sign-in resolves
+  // to a different one, re-open from that book's cache instead — never carry the old book's
+  // records across, because the first autosave would write them into the new row.
+  if(LS!==lsKey(row)){ LS=lsKey(row); store=load(); }
+  store.__sbId=row;
+  // A brand-new territory is legitimately empty, and an empty CRM is indistinguishable from a
+  // broken one. Say which it is, once, after the cloud pull has had a chance to land.
+  setTimeout(()=>{ try{ if(!Object.keys(store.accounts||{}).length)
+    toast(bookName(row)+' is empty so far — nothing here yet. Use Import CSV to load your list.'); }catch(e){} },6000);
+}
+/* Switching territories. Saves the current book first (an unsynced call log is not something to
+   lose to a UI click), then reloads — a reload is the honest way to do this, because half the app
+   holds derived state that was built for the old book. */
+async function switchBook(row){
+  if(row===myBook()) return;
+  if(!myBooks().includes(row)){ toast("You don't have access to that book"); return; }
+  try{ setSync('busy','Saving before switch…'); await pushCloudNow(); }catch(e){}
+  try{ localStorage.setItem('shipday_book_pref',row); }catch(e){}
+  location.reload();
 }
 async function doLogin(){
   el('g-err').textContent='';
