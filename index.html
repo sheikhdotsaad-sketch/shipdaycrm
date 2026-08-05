@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z129';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z130';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1308,9 +1308,14 @@ function sigGroups(){
     if(!g.name||/^\(no name\)$/i.test(g.name)) g.name=g.acct||(acct(c.accountId)||{}).name||c.email||'(no name)';
     return g; }).sort((a,b)=>b.last-a.last);
 }
+// 20 rows of opens was 1,206px — half the entire Today page, pushing everything else off-screen
+// for a list you can now get instantly from the 🔔. Show the freshest 8; the rest is one click.
+let sigShowAll=false;
+function toggleSigAll(){ sigShowAll=!sigShowAll; renderActive();
+  setTimeout(()=>{ const x=el('sigpanel'); if(x&&!sigShowAll) x.scrollIntoView({block:'center'}); },60); }
 function signalsPanel(){
   const now=Date.now(), all=sigGroups();
-  const groups=all.slice(0,20), hidden=all.length-groups.length;
+  const groups=sigShowAll?all.slice(0,50):all.slice(0,8), hidden=all.length-groups.length;
   if(!groups.length) return '';
   // Headline the number of PEOPLE, split by how fresh. Summing raw opens read "1,304 opens"
   // — technically true (the pixel fires on every re-open) and completely useless: it looks
@@ -1327,8 +1332,10 @@ function signalsPanel(){
       '<td style="text-align:right;white-space:nowrap">'+
       (p?'<a class="callbtn" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
       '<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('');
-  return '<div class="panel" id="sigpanel"><div class="ph"><h3>🔥 Opened your email</h3><span class="sub">'+all.length+' contact'+(all.length!==1?'s':'')+' opened your email in the last 30 days'+(nToday?' · <b style="color:var(--warm)">'+nToday+' today</b>':'')+' · '+nWeek+' this week'+(nRep?' · '+nRep+' repl'+(nRep===1?'y':'ies'):'')+' · newest first'+(hidden?' · top 20 shown':'')+'</span>'+
-    '<button class="btn sm gh" style="margin-left:auto" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table></div>';
+  return '<div class="panel" id="sigpanel"><div class="ph"><h3>🔥 Opened your email</h3><span class="sub">'+all.length+' contact'+(all.length!==1?'s':'')+' opened your email in the last 30 days'+(nToday?' · <b style="color:var(--warm)">'+nToday+' today</b>':'')+' · '+nWeek+' this week'+(nRep?' · '+nRep+' repl'+(nRep===1?'y':'ies'):'')+' · newest first</span>'+
+    '<button class="btn sm gh" style="margin-left:auto" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table>'+
+    ((hidden>0||sigShowAll)?'<div style="padding:9px 13px;text-align:center;border-top:1px solid var(--line)"><button class="btn sm gh" onclick="toggleSigAll()">'+(sigShowAll?'▴ Show less':'▾ Show all '+all.length)+'</button></div>':'')+
+    '</div>';
 }
 // Roll rep-name variants ("Embert" / "Embert Sy" / "Embert Rein Sy") into ONE row so Team
 // Activity shows one line per person. Same first name = same rep; canonical display is a matching
@@ -1726,8 +1733,24 @@ function tasks(){ store.__tasks=Array.isArray(store.__tasks)?store.__tasks:[]; r
 function taskLink(t){ if(t.contactId){ const c=contact(t.contactId); if(c) return {name:cname(c),go:"openContact('"+t.contactId+"')"}; }
   if(t.accountId){ const a=acct(t.accountId); if(a) return {name:a.name,go:"openAccount('"+t.accountId+"')"}; } return null; }
 function parseDueInput(v){ if(!v) return today0().getTime(); const d=new Date(v+'T09:00:00'); return isNaN(d)?today0().getTime():d.getTime(); }
+// Same person, same job, still not done? That's ONE task with a new date — not a second row.
+// Promising Joseph Hartnett a call back three times stacked three identical "Call back Joseph
+// Hartnett" lines on Do Now, so a list of 8 tasks was really 6 calls and the count lied to you.
+function taskKey(t){ return (t.contactId||'')+'|'+(t.accountId||'')+'|'+(t.type||'')+'|'+_dnorm(t.title||''); }
 function addTask(f){ const t=Object.assign({id:uid('t'),type:'call',title:'',due:today0().getTime(),done:false,createdAt:Date.now(),contactId:'',accountId:''},f);
+  const k=taskKey(t), dup=tasks().find(x=>!x.done&&taskKey(x)===k);
+  if(dup){ dup.due=t.due;                                   // the newest promise is the real one
+    ['promised','assignee','emailCad','cadStep'].forEach(p=>{ if(t[p]!==undefined&&t[p]!=='') dup[p]=t[p]; });
+    save(); return dup; }
   tasks().push(t); save(); return t; }
+// One-time cleanup of the copies already sitting in the book. Keeps the soonest due date.
+function dedupeTasks(){ const seen={}, keep=[]; let dropped=0;
+  tasks().forEach(t=>{ if(t.done){ keep.push(t); return; }
+    const k=taskKey(t), p=seen[k];
+    if(p){ if((+t.due||0)<(+p.due||0)) p.due=t.due; dropped++; return; }
+    seen[k]=t; keep.push(t); });
+  if(dropped){ store.__tasks=keep; stampU&&stampU(); save(); }
+  return dropped; }
 function quickAddTask(){ const ti=el('tk-title'),ty=el('tk-type'),du=el('tk-due'),as=el('tk-assignee'); const title=(ti&&ti.value.trim())||'';
   if(!title){ toast('Add a task title first'); if(ti)ti.focus(); return; }
   addTask({title,type:(ty&&ty.value)||'call',assignee:(as&&as.value)||'',due:parseDueInput(du&&du.value)}); toast('Task added'); renderActive(); renderTaskWidget(); }
@@ -1982,8 +2005,14 @@ function renderToday(){
   const gm=store.__gmail||{}; const cal=store.__cal||{};
   const cmap=byEmail(); const emailOf=s=>{ const m=String(s||'').match(/<([^>]+)>/); return (m?m[1]:s).trim().toLowerCase(); };
   const allReplies=gm.replies||[];
-  const replies=allReplies.filter(r=>cmap[emailOf(r.from)]).slice(0,20);
-  const NOISE=/(no-?reply|do-?not-?reply|notification|notifications|mailer|bounce|postmaster|@shipday\.com|google\.com|otter\.ai|calendar-|docusign|calendly|zoom\.us|linkedin\.com|slack\.com)/i;
+  // One row per conversation. Gmail hands back every message in a thread, so a single "Re: Shipday
+  // meeting recap" was filling three lines of a list whose whole job is "who still owes me an answer".
+  const seenRep={}; const replies=allReplies.filter(r=>{ if(!cmap[emailOf(r.from)]) return false;
+    const k=emailOf(r.from)+'|'+String(r.subject||'').replace(/^\s*(re|fwd?)\s*:\s*/i,'').toLowerCase().trim();
+    if(seenRep[k]) return false; seenRep[k]=1; return true; }).slice(0,20);
+  // Tracking pixels, invoicing and job boards all email you. "MailTracker update — Perfect time to
+  // follow up with Gabriela" is a robot, and it sat in Needs a Reply looking like a live prospect.
+  const NOISE=/(no-?reply|do-?not-?reply|notification|notifications|mailer|bounce|postmaster|@shipday\.com|google\.com|otter\.ai|calendar-|docusign|calendly|zoom\.us|linkedin\.com|slack\.com|mailtracker|mixmax|yesware|streak\.com|hubspot|mailchimp|sendgrid|intercom|@stripe\.|quickbooks|indeed\.com|ziprecruiter|yelp\.com|substack|@apollo\.io|zoominfo)/i;
   const ignInb=store.__inboundIgnore||{};
   const newInbound=allReplies.filter(r=>{ const e=emailOf(r.from); return e&&!cmap[e]&&!ignInb[e]&&!NOISE.test(e)&&!NOISE.test(r.from||''); }).slice(0,10);
   const upcoming=deals().filter(d=>d.demoDate&&new Date(d.demoDate)>=now&&!CLOSED.includes(d.stage))
@@ -6969,6 +6998,7 @@ function boot(){
   // Clean the duplicated history BEFORE the first paint, so the activity feed is readable on arrival.
   // Anything pulled from the cloud afterwards goes through mergeLogs(), which dedupes on its own.
   try{ if(dedupeLogs().recs) save(); }catch(e){}
+  try{ dedupeTasks(); }catch(e){}
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
   switchTab(t);
   syncRail(); checkBackupBanner();
