@@ -600,7 +600,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z127';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z128';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1255,7 +1255,7 @@ async function syncNow(){
   try{ await syncGmail(true); syncSeqTasks(); _lastAuto=Date.now();
     const added=(store.__signals||[]).length-before; save(); setSync('ok','Synced');
     if(UI.tab!=='today') switchTab('today'); else renderActive();
-    toast(added?'🔥 '+added+' new open'+(added>1?'s':'')+' — see Recent Signals up top':'Synced · no new opens since last check'); }
+    toast(added?'🔥 '+added+' new open'+(added>1?'s':'')+' — click the 🔔 up top to see who':'Synced · no new opens since last check'); }
   catch(e){ setSync('err','Sync failed'); toast('Sync failed'); }
 }
 function callSignal(cid){ const c=contact(cid); if(!c)return; markSignalsSeen(); openContact(cid); }
@@ -1309,7 +1309,7 @@ function signalsPanel(){
       '<td style="text-align:right;white-space:nowrap">'+
       (p?'<a class="callbtn" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
       '<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('');
-  return '<div class="panel"><div class="ph"><h3>🔥 Opened your email</h3><span class="sub">'+all.length+' contact'+(all.length!==1?'s':'')+' opened your email in the last 30 days'+(nToday?' · <b style="color:var(--warm)">'+nToday+' today</b>':'')+' · '+nWeek+' this week'+(nRep?' · '+nRep+' repl'+(nRep===1?'y':'ies'):'')+' · newest first'+(hidden?' · top 20 shown':'')+'</span>'+
+  return '<div class="panel" id="sigpanel"><div class="ph"><h3>🔥 Opened your email</h3><span class="sub">'+all.length+' contact'+(all.length!==1?'s':'')+' opened your email in the last 30 days'+(nToday?' · <b style="color:var(--warm)">'+nToday+' today</b>':'')+' · '+nWeek+' this week'+(nRep?' · '+nRep+' repl'+(nRep===1?'y':'ies'):'')+' · newest first'+(hidden?' · top 20 shown':'')+'</span>'+
     '<button class="btn sm gh" style="margin-left:auto" onclick="clearSignals()">Clear</button></div><table><tbody>'+rows+'</tbody></table></div>';
 }
 // Roll rep-name variants ("Embert" / "Embert Sy" / "Embert Rein Sy") into ONE row so Team
@@ -1378,7 +1378,7 @@ async function autoSyncTick(){
 }
 
 /* ---------- the bell ----------
-   Recent Signals only exists on the Today tab, and it hides itself entirely when empty, so
+   The opens panel only exists on the Today tab, and it hides itself entirely when empty, so
    from anywhere else in the app there was no way to know somebody had just opened your email.
    The header is the one thing on screen no matter which tab you're on, so the count lives there. */
 function sigUnseen(){ return (store.__signals||[]).filter(s=>!s.seen&&Date.now()-(+s.ts||0)<7*864e5&&contact(s.cid)); }
@@ -1389,12 +1389,19 @@ function renderBell(){ const b=el('bellN'), btn=el('bell'); if(!b||!btn) return;
   btn.title=n?(n+' new open'+(n>1?'s':'')+'/repl'+(n>1?'ies':'y')+' — click to see who'):'No new opens since the last check';
   document.title=(n?'('+n+') ':'')+'Shipday CRM';
 }
+// Clicking the bell did nothing you could see: it hunted for a heading called "Recent Signals",
+// which stopped existing when the panel was renamed "🔥 Opened your email". So it jumped to
+// Today, silently zeroed the badge and scrolled nowhere — the count vanished and no list ever
+// appeared. Scroll to the panel by ID, flash it so you can see where you landed, and only mark
+// the signals seen once they're actually on screen.
 function openSignals(){ if(UI.tab!=='today') switchTab('today'); else renderActive();
-  const n=sigUnseen().length;
-  if(!n) toast('No new opens since the last check');
-  markSignalsSeen(); renderBell();
-  setTimeout(()=>{ const p=[...document.querySelectorAll('#app h3')].find(h=>/Recent Signals/.test(h.textContent||''));
-    if(p) p.scrollIntoView({behavior:'smooth',block:'center'}); },120);
+  setTimeout(()=>{ const p=el('sigpanel');
+    if(!p){ toast('Nobody has opened or replied to your email in the last 30 days'); markSignalsSeen(); renderBell(); return; }
+    p.scrollIntoView({behavior:'smooth',block:'center'});
+    p.style.transition='box-shadow .25s'; p.style.boxShadow='0 0 0 2px var(--hot)';
+    setTimeout(()=>{ p.style.boxShadow=''; },1400);
+    markSignalsSeen(); renderBell();
+  },120);
 }
 /* A desktop pop-up is the only thing that reaches a rep who's in Gmail or on a call, which is
    exactly when an open happens. Permission is asked ONCE and only after a real signal arrives —
