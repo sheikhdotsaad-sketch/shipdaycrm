@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z132';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z133';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -795,7 +795,16 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
   // __cal.reviewed = meeting-review classifications. UNION across reps/pulls so an Ignore/Won/Lost
   // is never clobbered by a newer full-store sync (reviewed is monotonic — only ever added to).
   { const rA=(base.__cal&&base.__cal.reviewed)||{}, rB=(over.__cal&&over.__cal.reviewed)||{};
-    out.__cal=Object.assign({},m.__cal||{},{reviewed:Object.assign({},rA,rB)}); }
+    const uA=((base.__cal||{}).auto)||{}, uB=((over.__cal||{}).auto)||{};
+    out.__cal=Object.assign({},m.__cal||{},{reviewed:Object.assign({},rA,rB),
+      auto:{made:Object.assign({},uA.made||{},uB.made||{}),skip:Object.assign({},uA.skip||{},uB.skip||{})}}); }
+  // Per-rep mailbox/calendar/address. Union by REP so two reps syncing never overwrite each other;
+  // within a rep, the newer pull wins. This is what stops your inbox landing on someone else's dash.
+  ['__gmailBy','__calBy'].forEach(k=>{ const a=base[k]||{}, b=over[k]||{}, o={};
+    Object.keys(a).concat(Object.keys(b)).forEach(r=>{ const x=a[r], y=b[r];
+      o[r] = (!y)?x : (!x)?y : ((+(y.syncedAt||0))>=(+(x.syncedAt||0)) ? y : x); });
+    if(Object.keys(o).length) out[k]=o; });
+  { const e=Object.assign({},base.__emailBy||{},over.__emailBy||{}); if(Object.keys(e).length) out.__emailBy=e; }
   // __inboundIgnore = hidden inbound suggestions. UNION so an Ignore is never clobbered by a newer sync.
   out.__inboundIgnore=Object.assign({},base.__inboundIgnore||{},over.__inboundIgnore||{});
   // __dnc = Do-Not-Call registry keyed by 10-digit number → {by,at,reason,off?}. COMPLIANCE: must never be
@@ -881,12 +890,16 @@ async function initSync(){
         // (seed records carry different ids than the imported book → union would duplicate everything).
         const localRev=(store.__cal&&store.__cal.reviewed)||{};   // keep meeting classifications made offline
         const localIgn=store.__inboundIgnore||{};                 // keep inbound-ignore made offline
-        const localGm=store.__gmail;      // Gmail counts are live-fetched (below)
+        const localGm=myBox('gmail'), localCal=myBox('cal'), localEm=myBox('email');
         applyingRemote=true; store=norm(inc);
         store.__cal=store.__cal||{}; store.__cal.reviewed=Object.assign({},store.__cal.reviewed||{},localRev);
         store.__inboundIgnore=Object.assign({},store.__inboundIgnore||{},localIgn);
-        // Never let an OLDER cloud copy of the live Gmail sync revert a fresher local one (fixes 269→241 flap).
-        if(localGm && (+(localGm.syncedAt||0))>(+((store.__gmail&&store.__gmail.syncedAt)||0))) store.__gmail=localGm;
+        // Never let an OLDER cloud copy of the live Gmail/Calendar sync revert a fresher local one
+        // (fixes the 269→241 flap) — and only ever against YOUR OWN copy, never another rep's.
+        if(localEm&&!myBox('email')) setBox('email',localEm);
+        if(localGm && (+(localGm.syncedAt||0))>(+((myBox('gmail')||{}).syncedAt||0))) setBox('gmail',localGm);
+        if(localCal && (+(localCal.syncedAt||0))>(+((myBox('cal')||{}).syncedAt||0))) setBox('cal',localCal);
+        hydrateMine();
         try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
       }
     }
@@ -1250,7 +1263,7 @@ async function syncGmail(bg){
     const r=await fetch(SYNC_FN+'/gmail-replies?rep='+encodeURIComponent(senderName()||myRep()||''),{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     if(d&&d.needsConnect){ setGmailOk(false); if(!bg){ setSync('ok','Synced'); toast('No Gmail connected for '+esc(senderName()||'you')+' — click “🔗 Connect Gmail” in the top bar'); } return 0; }
     setGmailOk(true);
-    store.__gmail={syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]};
+    store.__gmail=setBox('gmail',{syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]});
     const n=applyContactUpdates(d.contacts); const rp=persistReplies(d.replies||[]);
     const mt=ingestMailTracker();          // his MailTracker notifications ARE opens — read them
     save();
@@ -1472,8 +1485,13 @@ async function syncCalendar(bg){
     const r=await fetch(SYNC_FN+'/calendar-sync?rep='+encodeURIComponent(senderName()||myRep()||''),{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
     if(d&&d.needsConnect){ setGmailOk(false); if(!bg){ setSync('ok','Synced'); toast('No Google Calendar connected for '+esc(senderName()||'you')+' — click “🔗 Connect Gmail” in the top bar'); } return 0; }
     if(d.error) throw new Error(d.error);
-    const prevRev=(store.__cal&&store.__cal.reviewed)||{};
-    store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[],reviewed:prevRev};
+    const prevRev=(store.__cal&&store.__cal.reviewed)||{}, prevAuto=(store.__cal&&store.__cal.auto)||null;
+    setBox('cal',{syncedAt:d.syncedAt||Date.now(),events:d.events||[]});
+    store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[],reviewed:prevRev,auto:prevAuto};
+    // Google marks YOU in your own invite list — that's the only reliable way to know which
+    // mailbox this calendar belongs to, and it's what keeps auto-capture off another rep's demos.
+    const meA=(d.events||[]).map(e=>(e.attendees||[]).find(a=>a&&a.self)).find(Boolean);
+    if(meA&&meA.email) setBox('email',String(meA.email).toLowerCase().trim());
     const cap=runAutoCapture();   // your own demos file themselves — account, contact and deal
     const nm=logPastMeetings();   // stamp every past meeting onto the matched account/contact
     save(); if(!bg){ renderActive(); setSync('ok','Synced'); toast('Calendar synced · '+(d.events||[]).length+' events'+(cap.n?' · '+cap.n+' demo'+(cap.n>1?'s':'')+' filed for you':'')+(nm?' · '+nm+' meeting'+(nm>1?'s':'')+' logged':'')); } return (d.events||[]).length; }
@@ -1513,7 +1531,23 @@ function authToken(){ try{ return (sb&&sb.auth&&sb.auth.session&&sb.auth.session
 /* ===== Meeting review: classify synced calendar events (since May) into outcomes ===== */
 const CAL_RED='11';                                   // Google "Tomato" colour = your no-show marker
 const MEET_NOISE=/(no-?reply|notification|mailer|bounce|postmaster|calendar-|@shipday\.com|group\.calendar|resource\.calendar|@google\.com|@calendly\.com|invitations@|@chilipiper\.com|@hubspot\.com)/i;
-function _selfEmail(){ return (store.__email||'').toLowerCase().trim(); }
+/* ===== YOUR inbox / YOUR calendar / YOUR address — not the team's =====
+   The book is shared on purpose; your mailbox is not. But the last Gmail pull and the last
+   calendar pull sat in ONE slot on that shared book, so whoever synced most recently handed
+   their inbox and their calendar to everybody else — Aime opened the CRM and was looking at
+   Saad's "Needs a Reply". Same for the rep email, which was a fixed value in the seed, so every
+   rep's CRM thought it WAS Saad. Everything personal now files under the rep who fetched it. */
+function meKey(){ return repCanon(myRep()||store.__rep||'')||'__me'; }
+function myBox(k){ return (store['__'+k+'By']||{})[meKey()]||null; }
+function setBox(k,v){ (store['__'+k+'By']=store['__'+k+'By']||{})[meKey()]=v; return v; }
+// Point store.__gmail / store.__cal at YOUR copy. Called after every load and cloud pull, so
+// the ~40 places that read them keep working untouched.
+function hydrateMine(){
+  const g=myBox('gmail'); store.__gmail=g?Object.assign({},g):{syncedAt:0,replies:[]};
+  const c=myBox('cal');
+  store.__cal=Object.assign({},store.__cal||{},{syncedAt:c?c.syncedAt:0,events:c?(c.events||[]):[]});
+}
+function _selfEmail(){ return String(myBox('email')||store.__email||'').toLowerCase().trim(); }
 // Your own company domain (from your rep email) — anyone on it is a colleague, not a lead.
 function selfDomain(){ const e=_selfEmail(); return (e.split('@')[1]||'').trim(); }
 function isInternalEmail(email){ email=String(email||'').toLowerCase().trim(); if(!email.includes('@')) return false;
@@ -3310,7 +3344,9 @@ function repPick(n){ n=String(n||'').trim(); if(!n){ toast('Type a name first');
   try{ localStorage.setItem('shipday_crm_rep',n); }catch(e){}
   if(!team().includes(n)){ team().push(n); save(); }
   const g=el('repgate'); if(g) g.style.display='none';
+  try{ hydrateMine(); }catch(e){}          // swap to this rep's inbox/calendar, not the last one's
   renderRepChip(); renderActive(); toast('Signed in as '+n);
+  if(SYNC_FN){ try{ syncGmail(true); syncCalendar(true); }catch(e){} }   // pull YOUR mail + calendar now
 }
 function renderRepChip(){ const b=el('rep-chip'); if(!b) return; const me=myRep();
   b.innerHTML=me?('👤 '+esc(me)):'👤 <b style="color:var(--hot)">Sign in</b>'; }
@@ -6367,7 +6403,13 @@ function exportBackup(){ store.__lastExport=Date.now(); const j=JSON.stringify(s
   const b=new Blob([j],{type:'application/json'}); const u=URL.createObjectURL(b);
   const a=document.createElement('a'); a.href=u; a.download='shipday_crm_backup_'+new Date().toISOString().slice(0,10)+'.json'; a.click(); URL.revokeObjectURL(u); toast('Backup downloaded'); save(); }
 function importBackupPrompt(){ el('fileimp').click(); }
-function onFile(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
+function onFile(e){ const f=e.target.files[0]; if(!f)return;
+  // An .xlsx/.numbers file is a zip, not text. It used to be read as text anyway, which turned
+  // the whole spreadsheet into gibberish rows — the import "ran" and nothing usable landed.
+  if(/\.(xlsx|xls|numbers|ods)$/i.test(f.name)){
+    alert('This is an Excel file, and the CRM reads plain sheets.\n\nOpen it, then File → Save As (or Download as) → CSV, and import that file instead.');
+    e.target.value=''; return; }
+  const r=new FileReader();
   r.onload=()=>{ try{
     if(f.name.endsWith('.json')){ const s=JSON.parse(r.result);
       if(!confirm('Replace all data with this backup?'))return; store=norm(s); save(); render(); toast('Backup restored'); }
@@ -6759,10 +6801,20 @@ function importOhioGroups(recs){
           'won\'t reach your call queue until one is added.':''));
   console.log('[groups] tiers:',tierCount);
 }
-function parseCSV(text){ const rows=[]; let row=[],cur='',q=false;
+// Which character separates the columns. A sheet saved from Excel, or one copied straight out of
+// Google Sheets, is tab- or semicolon-separated — and reading it as commas gave ONE giant column,
+// so every header lookup missed and the import quietly did nothing. Decide from the header line.
+function _delim(text){
+  const head=String(text||'').split(/\r?\n/)[0]||'';
+  const out=[',','\t',';','|'].map(d=>{ let n=0,q=false;
+    for(let i=0;i<head.length;i++){ const c=head[i]; if(c==='"') q=!q; else if(c===d&&!q) n++; }
+    return {d,n}; }).sort((a,b)=>b.n-a.n)[0];
+  return out&&out.n>0?out.d:',';
+}
+function parseCSV(text,d){ d=d||_delim(text); const rows=[]; let row=[],cur='',q=false;
   for(let i=0;i<text.length;i++){ const ch=text[i];
     if(q){ if(ch==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=ch; }
-    else { if(ch==='"')q=true; else if(ch===','){row.push(cur);cur='';} else if(ch==='\n'){row.push(cur);rows.push(row);row=[];cur='';} else if(ch==='\r'){} else cur+=ch; }
+    else { if(ch==='"')q=true; else if(ch===d){row.push(cur);cur='';} else if(ch==='\n'){row.push(cur);rows.push(row);row=[];cur='';} else if(ch==='\r'){} else cur+=ch; }
   } if(cur!==''||row.length){row.push(cur);rows.push(row);} return rows;
 }
 function importCSV(text){
@@ -6878,7 +6930,15 @@ function importCSV(text){
         const pv=(iPhone>=0?String(r[iPhone]||'').trim():'');
         if(pv&&!a1.phone){ a1.phone=pv; stampU(a1); } } }
   });
-  save(); render(); toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':''));
+  save(); render();
+  // "Imported 0 accounts, 0 contacts" told you nothing. If the sheet landed nothing, say what
+  // the top row actually looked like and what one column would fix it.
+  if(!na&&!nc&&!nsig){
+    alert('Nothing imported from that file.\n\nThe top row needs to be your column headings, and at least one of them has to say Account, Restaurant, Company, Name, Email or Phone.\n\nWhat the top row said:\n'+
+      rows[0].slice(0,12).map(h=>'  • '+(String(h||'').trim()||'(blank)')).join('\n')+
+      '\n\n'+(rows.length-1)+' row'+(rows.length===2?'':'s')+' under it were read but had nothing to file.');
+    return; }
+  toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':''));
 }
 /* ---- Universal CSV importer: auto-detect calls / emails / contacts ---- */
 function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10?d.slice(-10):''; }
@@ -7246,6 +7306,7 @@ function boot(){
   // Clean the duplicated history BEFORE the first paint, so the activity feed is readable on arrival.
   // Anything pulled from the cloud afterwards goes through mergeLogs(), which dedupes on its own.
   try{ if(dedupeLogs().recs) save(); }catch(e){}
+  try{ hydrateMine(); }catch(e){}   // show YOUR inbox and YOUR calendar, not whoever synced last
   try{ dedupeTasks(); }catch(e){}
   try{ ingestMailTracker(); }catch(e){}   // catch up on MailTracker opens already in the mailbox
   try{ runAutoCapture(); }catch(e){}      // file any calendar demo that isn't in the book yet
