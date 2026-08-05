@@ -592,7 +592,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z120';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z121';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4816,6 +4816,114 @@ let quotaMonth=new Date();
 function monthKey(d){ return d.getFullYear()+'-'+(d.getMonth()+1); }
 function inMonth(ts,ref){ if(!ts) return false; const d=new Date(ts); return d.getFullYear()===ref.getFullYear()&&d.getMonth()===ref.getMonth(); }
 function qTarget(ref){ const t=(store.__quota.targets||{})[monthKey(ref)]; return t!=null?(+t||0):(+store.__quota.monthly||0); }
+
+/* ====================== SCOREBOARD ======================
+   The Quota tab knew the DOLLARS and nothing about the WORK, so the only honest answer
+   to "am I going to hit it?" was a shrug. Attainment is a lagging number — by the time
+   it moves, the month is spent. This reads the activity that produces it: dials, emails,
+   conversations, demos — against how many selling days are actually left.
+   Everything here is derived from the rep's own logged history. Where the sample is too
+   small to mean anything it says so rather than quoting a made-up conversion rate. */
+
+// Reaching a human. Voicemail, no-answer, a bad number and a gatekeeper screen are all
+// dials that did NOT get you a decision-maker, and lumping them in flatters the number.
+const CONNECT_T=['✅ Interested','↩ Callback set','🕒 Not a good time','🤔 Thinking it over',
+  '💤 Not now / later Q','🙅 Not interested','🏳 Uses competitor','🏢 Already a Shipday customer'];
+const _isDialLine =x=>/^(📞|☎)/.test(x);
+// Only a dial logged through the call card carries an outcome ("☎ 📵 No answer"). Imported
+// rows ("📞 Called → 31s") are real dials but nobody recorded what happened, so they can't
+// tell us whether anyone picked up. Connect rate and best-hours are computed over OUTCOME
+// dials only — mixing the two would divide real conversations by a much bigger number and
+// report a connect rate of ~3% that says nothing about how the phone is actually going.
+const _isOutcomeDial=x=>/^☎/.test(x);
+const _isConnLine =x=>CONNECT_T.some(t=>x.indexOf(t)>=0);
+const _isMailLine =x=>/^(📧|📤)/.test(x)||/^🕒 Email/.test(x);
+// Rows carry `by` once a rep is signed in; anything imported before that is unattributed.
+// Counting unattributed rows as yours is the right call on a personal book — dropping them
+// would show a near-empty scoreboard for work that was really done.
+function _mine(e){ const me=(typeof myRep==='function'&&myRep())||''; if(!me||!e.by) return true;
+  return String(e.by).trim().toLowerCase().split(/\s+/)[0]===String(me).trim().toLowerCase().split(/\s+/)[0]; }
+// Mon–Fri remaining in `ref`'s month, today included when we're in it.
+function bizDaysLeft(ref){ const n=new Date(), y=ref.getFullYear(), m=ref.getMonth();
+  const last=new Date(y,m+1,0).getDate();
+  let d=(n.getFullYear()===y&&n.getMonth()===m)?n.getDate():1, out=0;
+  for(;d<=last;d++){ const w=new Date(y,m,d).getDay(); if(w>0&&w<6) out++; }
+  return out; }
+function scoreboard(ref){
+  const now=Date.now(), D=864e5;
+  const t0=new Date(); t0.setHours(0,0,0,0); const startToday=t0.getTime();
+  const o={dialsT:0,connT:0,mailT:0,outT:0, dials7:0,conn7:0,mail7:0,out7:0,
+           dials30:0,conn30:0,mail30:0,out30:0, dialsM:0,connM:0,mailM:0,
+           byHour:{}, lastDial:0,lastMail:0};
+  contacts().forEach(c=>(c.log||[]).forEach(e=>{
+    const ts=+e.ts||0, x=String(e.txt||''); if(!ts||!_mine(e)) return;
+    const dial=_isDialLine(x), mail=!dial&&_isMailLine(x); if(!dial&&!mail) return;
+    const out=dial&&_isOutcomeDial(x), conn=out&&_isConnLine(x);
+    if(dial&&ts>o.lastDial) o.lastDial=ts;
+    if(mail&&ts>o.lastMail) o.lastMail=ts;
+    if(ts>=startToday){ if(dial)o.dialsT++; if(out)o.outT++; if(conn)o.connT++; if(mail)o.mailT++; }
+    if(now-ts<7*D){ if(dial)o.dials7++; if(out)o.out7++; if(conn)o.conn7++; if(mail)o.mail7++; }
+    if(now-ts<30*D){ if(dial)o.dials30++; if(out)o.out30++; if(conn)o.conn30++; if(mail)o.mail30++; }
+    if(inMonth(ts,ref)){ if(dial)o.dialsM++; if(conn)o.connM++; if(mail)o.mailM++; }
+    if(out&&now-ts<90*D){ const h=new Date(ts).getHours();
+      const b=o.byHour[h]=o.byHour[h]||{d:0,c:0}; b.d++; if(conn)b.c++; }
+  }));
+  return o;
+}
+function scorePanel(ref,attained,target,remain,avgDeal){
+  const s=scoreboard(ref), isCur=inMonth(Date.now(),ref);
+  const left=isCur?bizDaysLeft(ref):0;
+  const perDay=left?Math.round(remain/left):0;
+  // Backwards from the goal using the rep's OWN funnel, but only where the sample is real.
+  const enoughDials=s.out30>=20, enoughDeals=avgDeal>0;
+  const connRate=s.out30?s.conn30/s.out30:0;
+  const dealsNeed=enoughDeals?Math.ceil(remain/avgDeal):0;
+  const dialsPerDay=Math.round(s.dials7/7), mailsPerDay=Math.round(s.mail7/7);
+  // Best calling hours from the rep's own 90 days of dispositioned dials. An hour where
+  // nobody ever answered is not a "best hour" — only hours that actually produced a
+  // conversation qualify, so this stays silent until the phone history says something.
+  const hrs=Object.entries(s.byHour).filter(([,b])=>b.d>=5&&b.c>0)
+    .map(([h,b])=>({h:+h,r:b.c/b.d,d:b.d})).sort((a,b)=>b.r-a.r).slice(0,3);
+  const hLbl=h=>((h%12)||12)+(h<12?'am':'pm');
+  const warn=v=>'<b style="color:var(--warm)">'+v+'</b>';
+  let h='<div class="panel"><div class="ph"><h3>📊 Scoreboard</h3>'+
+    '<span class="sub">the work behind the number'+(isCur?' · '+left+' selling day'+(left===1?'':'s')+' left this month':'')+'</span></div>'+
+    '<div style="padding:14px 16px">';
+  // --- what the goal demands
+  if(isCur){
+    h+='<div class="grid">'+
+      stat(money(remain),'Still to close',true)+
+      stat(left,'Selling days left')+
+      stat(money(perDay),'Needed per day')+
+      stat(enoughDeals?dealsNeed:'—',enoughDeals?'Deals to goal (avg '+money(avgDeal)+')':'Deals to goal — no won deals yet')+
+      '</div>';
+  }
+  // --- today
+  h+='<div class="tsub" style="margin:14px 0 4px;font-weight:700">Today</div><div class="grid">'+
+    stat(s.dialsT?s.dialsT:warn(0),'Dials')+
+    stat(s.mailT?s.mailT:warn(0),'Emails sent')+
+    stat(s.connT,'Conversations')+
+    stat(s.outT?Math.round(s.connT/s.outT*100)+'%':'—','Connect rate')+
+    '</div>';
+  // --- pace
+  h+='<div class="tsub" style="margin:14px 0 4px;font-weight:700">Pace · last 7 days</div><div class="grid">'+
+    stat(s.dials7,'Dials ('+dialsPerDay+'/day)')+
+    stat(s.mail7,'Emails ('+mailsPerDay+'/day)')+
+    stat(s.conn7,'Conversations')+
+    stat(enoughDials?Math.round(connRate*100)+'%':'—',enoughDials?'Connect rate · 30d':'Connect rate — need 20+ logged outcomes')+
+    '</div>';
+  // --- the honest sentence
+  const bits=[];
+  if(!s.dialsT&&!s.mailT) bits.push('Nothing logged today yet.');
+  if(s.lastMail&&Date.now()-s.lastMail>7*864e5) bits.push('Last email went out '+logWhen(s.lastMail)+'.');
+  if(s.lastDial&&Date.now()-s.lastDial>3*864e5) bits.push('Last dial was '+logWhen(s.lastDial)+'.');
+  if(isCur&&enoughDeals&&left) bits.push('At '+money(avgDeal)+' a deal you need '+dealsNeed+
+    ' more close'+(dealsNeed===1?'':'s')+' in '+left+' day'+(left===1?'':'s')+'.');
+  if(hrs.length) bits.push('Your best calling hours: '+hrs.map(x=>hLbl(x.h)+' ('+Math.round(x.r*100)+'%)').join(', ')+'.');
+  if(bits.length) h+='<div class="tsub" style="margin-top:12px;line-height:1.7">'+esc(bits.join(' ')).replace(/&amp;/g,'&')+'</div>';
+  h+='</div></div>';
+  return h;
+}
 function renderQuota(){
   const ref=quotaMonth;
   const won=deals().filter(d=>d.stage===WON&&inMonth(d.closedAt,ref)).sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt));
@@ -4861,6 +4969,8 @@ function renderQuota(){
      '</div>';
   h+='<div class="tsub" style="margin-top:8px">Each month keeps its own target — setting one won\'t change the others.</div>';
   h+='</div></div>';
+  // The work behind the dollars — dials, emails, conversations vs. selling days left.
+  h+=scorePanel(ref,attained,target,remain,avgDeal);
   h+='<div class="panel"><div class="ph"><h3>Closed-Won · '+esc(label)+'</h3><span class="sub">'+won.length+' deals</span>'+
      '<button class="btn sm gh" style="margin-left:auto" onclick="exportQuotaCSV()">Export CSV</button></div>'+
      '<table><thead><tr><th>Account</th><th>Contact</th><th>Plan</th><th>MRR</th><th>Closed</th></tr></thead><tbody>';
