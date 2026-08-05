@@ -478,7 +478,7 @@ small.hint{color:var(--dim);font-size:11px}
   <button class="on" data-v="today">Today <span class="pill" id="p-today">…</span></button>
   <button data-v="accounts">Accounts <span class="pill" id="p-accts">0</span></button>
   <button data-v="contacts">Contacts <span class="pill" id="p-cts">0</span></button>
-  <button data-v="intent">Intent <span class="pill" id="p-intent">0</span></button>
+  <button data-v="intent">📬 Opens <span class="pill" id="p-intent">0</span></button>
   <button data-v="sequences">Sequences <span class="pill" id="p-seq">0</span></button>
   <button data-v="hotlist">Hot List <span class="pill" id="p-hot">0</span></button>
   <button data-v="pipeline">Pipeline <span class="pill" id="p-pipe">0</span></button>
@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z136';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z137';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2525,7 +2525,12 @@ function isOwner(c){ return !!(c && OWNER_RX.test(c.title||'')); }
 function hasOpenCallCad(c){ if(!c) return false; return tasks().some(t=>t.cadence&&!t.done&&(t.contactId===c.id||(c.accountId&&t.accountId===c.accountId))); }
 function heat(c){ if(!c) return 0; const now=Date.now();
   const open=lastOpenTs(c), touch=lastTouchTs(c), opens=openCount(c); let p=0;
-  if(open && open>touch) p+=300;                             // opened email since last outreach = hottest
+  // WAS lastTouchTs, and that made the single biggest signal in this whole ranking DEAD. An open
+  // gets written into the contact's log as "👀 Opened: …", and lastTouchTs counts every log line
+  // that isn't a 📝 note — so the open WAS the touch and open>touch could never be true. Measured
+  // on the live book: 0 of 73 people who read an email scored this, 73 of 73 score it now.
+  // lastOutreachTs is the honest comparison: the last thing YOU did (call or email sent).
+  if(open && open>lastOutreachTs(c)) p+=300;                 // opened email since last outreach = hottest
   if(open) p+=Math.max(0,220-((now-open)/_DAY)*11);          // open recency (~20d decay)
   p+=Math.min(opens,25)*14;                                  // opens volume (repeat opens = real interest)
   p+=(+c.score||0)*4;                                        // intent score
@@ -5076,11 +5081,83 @@ function intentAction(r){
 }
 let intentFocus=null; /* null=all · 'trending' · 'opens' · 'replies' — click the summary cards to focus */
 function setIntentFocus(k){ intentFocus=(intentFocus===k)?null:k; TPAGE.intent=0; renderIntent(); }
+/* ===================== MAIL TRACKER — RECENT OPENS =====================
+   The Intent tab rolled everything up to the ACCOUNT, which answers "which restaurant is warm"
+   but never "who read my email and hasn't heard from me since" — the one list you actually work.
+   This is that list: a person per row, newest first, and the cut that matters is UNTOUCHED —
+   they opened it AFTER your last call/email, so the follow-up is still owed. */
+let opensFocus='new';           // 'new' = opened since your last touch · 'all' · 'unknown'
+function setOpensFocus(k){ opensFocus=k; renderIntent(); }
+function opensRows(){
+  const now=Date.now();
+  return sigGroups().filter(g=>g.opens>0).map(g=>{ const c=contact(g.cid);
+    const out=lastOutreachTs(c), call=lastCallTs(c);
+    return {g,c,phone:telNum(c),
+      // Owed = they opened it after the last thing YOU did. That's the whole point of a read
+      // receipt; once you've called them back the open is history, not a to-do.
+      // Deliberately lastOutreachTs (call or email sent) and NOT lastTouchTs — lastTouchTs counts
+      // the "👀 Opened" log line itself, so every single row came back "already followed up".
+      untouched: g.last>(out||0),
+      sinceCall: call?Math.floor((now-call)/864e5):null};
+  });
+}
+function opensReport(){
+  const rows=opensRows(), now=Date.now(), d0=today0().getTime();
+  const nNew=rows.filter(r=>r.untouched).length;
+  const nToday=rows.filter(r=>r.g.last>=d0).length;
+  const nWeek=rows.filter(r=>r.g.last>=now-7*864e5).length;
+  const unknown=(function(){ try{ return mailTrackerUnknown(null)||[]; }catch(e){ return []; } })();
+  let h='<div class="panel"><div class="ph"><h3>📬 Who opened your email</h3>'+
+    '<span class="sub">from your tracking pixel and your MailTracker mail, last 30 days · newest first</span>'+
+    '<button class="btn sm pri" style="margin-left:auto" onclick="syncGmail()">↻ Check for new opens</button></div>'+
+    '<div style="padding:14px 16px"><div class="grid">'+
+      stat(nNew,'🔥 Opened, not followed up',true,"setOpensFocus('new')",opensFocus==='new')+
+      stat(nToday,'Opened today',false,"setOpensFocus('all')",false)+
+      stat(nWeek,'People · 7 days',false,"setOpensFocus('all')",opensFocus==='all')+
+      stat(unknown.length,'Readers not in your CRM',false,"setOpensFocus('unknown')",opensFocus==='unknown')+
+    '</div></div></div>';
+  if(opensFocus==='unknown'){
+    if(!unknown.length) return h+'<div class="panel"><div class="qempty">Everyone who opened your email is already in the CRM.</div></div>';
+    h+='<div class="panel"><div class="ph"><h3>👤 Read your email — not in the CRM</h3><span class="sub">'+unknown.length+' · they opened something you sent but you have no record of them</span></div>'+
+      '<table><thead><tr><th>Who</th><th>Email</th><th>When</th><th></th></tr></thead><tbody>'+
+      unknown.slice(0,100).map(u=>'<tr><td class="tname">'+esc(u.name||'—')+
+        (u.subject?'<div class="tsub">'+esc(u.subject)+'</div>':'')+'</td>'+
+        '<td class="tsub">'+esc(u.email)+'</td><td class="tsub">'+esc(u.ts?fmtAgo(u.ts):'—')+'</td>'+
+        '<td style="text-align:right"><button class="btn sm pri" onclick="addInboundLead(\''+esc(u.email)+'\',\''+esc((u.name||'').replace(/'/g,''))+'\')">+ Add</button></td></tr>').join('')+
+      '</tbody></table></div>';
+    return h;
+  }
+  const list=(opensFocus==='new'?rows.filter(r=>r.untouched):rows).slice(0,200);
+  if(!list.length) return h+'<div class="panel"><div class="qempty">'+
+    (opensFocus==='new'?'Nothing outstanding — everyone who opened your email has heard from you since.':'No opens on record yet. Hit ↻ Check for new opens.')+'</div></div>';
+  h+='<div class="panel"><div class="ph"><h3>'+(opensFocus==='new'?'🔥 Owed a follow-up':'📖 Everyone who opened')+'</h3>'+
+    '<span class="sub">'+list.length+' '+(opensFocus==='new'?'opened your email after the last time you contacted them':'sorted by most recent open')+
+    ' · <a href="javascript:void(0)" onclick="setOpensFocus(\''+(opensFocus==='new'?'all':'new')+'\')" style="color:var(--acc)">'+
+    (opensFocus==='new'?'show everyone':'show only the ones owed a follow-up')+'</a></span></div>'+
+    '<table><thead><tr><th>Who</th><th>Opened</th><th>Last call</th><th></th></tr></thead><tbody>'+
+    list.map(r=>{ const g=r.g, c=r.c;
+      // Half these people came in from an email address and have no account, so the name is just
+      // the bit before the @ — "Rpavuk", "Reeb", "Dhaskins". Unidentifiable on its own. Show the
+      // restaurant when there is one, otherwise the email, which at least carries the domain.
+      const sub=(g.acct&&_dnorm(g.acct)!==_dnorm(g.name||''))?g.acct:((c.email&&_dnorm(c.email)!==_dnorm(g.name||''))?c.email:'');
+      const co=sub?'<div class="tsub">'+esc(sub)+'</div>':'';
+      return '<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')">'+
+        '<td class="tname">'+(r.untouched?'🔥 ':'')+esc(g.name||cname(c))+co+'</td>'+
+        '<td class="tsub">'+esc(fmtAgo(g.last))+(g.opens>1?' · <b>×'+g.opens+'</b>':'')+(g.replies?' · ↩️ replied':'')+'</td>'+
+        '<td class="tsub">'+(r.sinceCall===null?'never called':(r.sinceCall===0?'today':r.sinceCall+'d ago'))+'</td>'+
+        '<td style="text-align:right;white-space:nowrap">'+
+        (r.phone?'<a class="callbtn" href="tel:'+esc(r.phone)+'" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
+        '<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('')+
+    '</tbody></table></div>';
+  return h;
+}
 function renderIntent(){
   const rows=intentRows();
   const trending=rows.filter(r=>r.trending);
   const opens7=rows.reduce((a,r)=>a+r.opens7,0), reps=rows.reduce((a,r)=>a+r.replies,0);
-  let h='<div class="panel"><div class="ph"><h3>🎯 Intent Tracker</h3><span class="sub">accounts heating up — rolled up from every contact\'s opens, replies &amp; calls · click a card to filter</span>'+
+  // The opens report goes FIRST — it's the working list. Account roll-up sits under it.
+  let h=opensReport();
+  h+='<div class="panel"><div class="ph"><h3>🎯 Intent Tracker</h3><span class="sub">accounts heating up — rolled up from every contact\'s opens, replies &amp; calls · click a card to filter</span>'+
     '<button class="btn sm pri" style="margin-left:auto" onclick="recalcIntent()">↻ Resync &amp; recalc</button></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
       stat(trending.length,'🔥 Trending (2+ engaged)',true,"setIntentFocus('trending')",intentFocus==='trending')+
