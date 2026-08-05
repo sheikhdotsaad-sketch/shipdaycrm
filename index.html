@@ -592,7 +592,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug4·z119';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z120';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -664,6 +664,33 @@ function stampU(r){ if(r) r._u=Date.now(); return r; }
 function mergeLogs(a,b){ a=a||[]; b=b||[]; if(!a.length) return b.slice(); if(!b.length) return a.slice();
   const seen=new Set(), out=[]; a.concat(b).forEach(e=>{ const k=(e.ts||0)+'|'+(e.txt||''); if(seen.has(k)) return; seen.add(k); out.push(e); });
   out.sort((x,y)=>(x.ts||0)-(y.ts||0)); return out; }
+/* One-time repair, safe to re-run every boot.
+   83% of the stored history was byte-identical duplicate rows — the same "📧 Sent: Direct delivery
+   for Carsonie's" thirteen times, same text, same timestamp to the millisecond. It arrived with the
+   original import rather than being produced by the app, which is why the activity feed read as
+   noise: 12,853 entries of which only ~2,700 were real events. mergeLogs() above already dedupes on
+   ts|txt so nothing re-creates these; this only cleans what is already stored.
+   It was not just cosmetic — the Hot List reads the log. openCount() sums every 👀 row, so one
+   contact's 6 real opens counted as 62 and he rode the queue on engagement that never happened;
+   touchCount() counts every 📞/📧 row, so a lead contacted once looked worked ten times and the
+   fairness cooldown buried him. Cleaning the history re-ranks both back to the truth.
+   Only records that actually shrink get stamped, so a book that's already clean is a no-op and the
+   sync push stays exactly as small as the damage was. */
+function dedupeLogs(){
+  let recs=0, removed=0;
+  [store.accounts,store.contacts,store.deals].forEach(map=>{
+    for(const id in (map||{})){
+      const o=map[id], L=o&&o.log;
+      if(!Array.isArray(L)||L.length<2) continue;
+      const first={}, out=[];
+      L.forEach(e=>{ const k=(+e.ts||0)+'|'+(e.txt||''); const p=first[k];
+        // keep the first copy, but don't lose an attribution that only a later copy carried
+        if(p){ if(!p.by&&e.by) p.by=e.by; return; }
+        first[k]=e; out.push(e); });
+      if(out.length<L.length){ removed+=L.length-out.length; recs++; o.log=out; stampU(o); }
+    }});
+  return {recs,removed};
+}
 function mergeRecs(base,over,del){ const out=Object.assign({},base);
   for(const id in over){ const b=out[id], o=over[id];
     if(!b){ out[id]=o; continue; }
@@ -2731,6 +2758,20 @@ function fmtWhenAt(ts){ const d=new Date(ts), n=new Date();
   if(diff===1) return 'tomorrow '+t;
   if(diff>1&&diff<7) return d.toLocaleDateString('en-US',{weekday:'short'})+' '+t;
   return d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+t; }
+/* Same idea for history, but backwards. Every activity row used to print a raw
+   "6/17/2026, 1:48:46 AM" — the seconds are noise and the date is unreadable at a
+   glance, so a wall of them is what made the feed feel like a log file instead of
+   a story. Recent activity is what a rep actually reads, so recent rows get a
+   human day ("Today 1:48 PM", "Yesterday", "Tue"); older rows fall back to a date. */
+function logWhen(ts){ if(!ts) return ''; const d=new Date(ts), n=new Date();
+  const t=d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  const day0=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime();
+  const diff=Math.round((day0(n)-day0(d))/864e5);
+  if(diff===0) return 'Today '+t;
+  if(diff===1) return 'Yesterday '+t;
+  if(diff>1&&diff<7) return d.toLocaleDateString('en-US',{weekday:'short'})+' '+t;
+  const sameYear=d.getFullYear()===n.getFullYear();
+  return d.toLocaleDateString('en-US',sameYear?{month:'short',day:'numeric'}:{month:'short',day:'numeric',year:'numeric'})+' '+t; }
 // Priority score — higher = call sooner. Uses the composite heat() ranking
 // (opens recency & volume, replies, intent, decision-maker, staleness).
 const HOT_CAP=150;
@@ -4916,7 +4957,9 @@ function logList(o,t,id){ const v=t?logV(t,id):{sort:'new',f:'all',exp:true};
   // collapse repeat email opens: keep the 2 most recent 👀 rows, fold the rest into one toggle row
   const opens=L.filter(({x})=>_isOpenLog(x.txt)).sort((a,b)=>(+b.x.ts||0)-(+a.x.ts||0));
   const hideSet=new Set(); let folded=0;
-  if(!v.exp&&opens.length>2){ opens.slice(2).forEach(({i})=>hideSet.add(i)); folded=opens.length-2; }
+  // only worth folding if it actually hides something — a "+1 earlier opens" toggle
+  // takes up the same line it was hiding, so keep the row instead.
+  if(!v.exp&&opens.length>4){ opens.slice(2).forEach(({i})=>hideSet.add(i)); folded=opens.length-2; }
   const chip=(k,l)=>'<button class="btn sm '+(v.f===k?'pri':'gh')+'" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'f\',\''+k+'\')">'+l+'</button>';
   const bar=t?'<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin:2px 0 6px">'+
     chip('all','All')+chip('call','📞 Calls')+chip('mail','📧 Emails')+chip('note','📝 Notes')+
@@ -4929,12 +4972,12 @@ function logList(o,t,id){ const v=t?logV(t,id):{sort:'new',f:'all',exp:true};
       foldShown=true;
       return '<li style="cursor:pointer" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'exp\')"><span class="tsub">👀 +'+folded+' earlier opens — tap to show</span></li>';
     }
-    return '<li>'+esc(x.txt)+'<div class="t">'+new Date(x.ts).toLocaleString()+
+    return '<li>'+esc(x.txt)+'<div class="t">'+logWhen(x.ts)+
       (x.by?' · <b style="color:var(--mut)">'+esc(x.by)+'</b>':'')+
       (t?' · <span onclick="event.stopPropagation();delLog(\''+t+'\',\''+id+'\','+i+')" style="cursor:pointer;color:var(--mut)" title="Delete this log entry">✕</span>':'')+
       '</div></li>';
   }).join('');
-  const foldNote=(v.exp&&opens.length>2&&t)?'<li style="cursor:pointer" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'exp\')"><span class="tsub">Collapse repeat opens ▴</span></li>':'';
+  const foldNote=(v.exp&&opens.length>4&&t)?'<li style="cursor:pointer" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'exp\')"><span class="tsub">Collapse repeat opens ▴</span></li>':'';
   return bar+'<ul class="log">'+rows+foldNote+'</ul>'+
     (v.f!=='all'?'<div class="tsub" style="padding:2px 0">'+L.length+' of '+total+' entries · <span style="cursor:pointer;text-decoration:underline" onclick="event.stopPropagation();logSet(\''+t+'\',\''+id+'\',\'f\',\'all\')">show all</span></div>':'');
 }
@@ -5134,7 +5177,7 @@ function openAccount(id){
   // recent dials across every contact on the account
   { const rc=acctRecentCalls(id);
     b+='<div class="sec">Recent calls</div>';
-    b+= rc.length? rc.map(r=>'<div class="mini" onclick="openContact(\''+r.cid+'\')"><div class="mn">'+esc(r.txt)+'</div><div class="ms">'+esc(r.who)+' · '+new Date(r.ts).toLocaleString()+(r.by?' · '+esc(r.by):'')+'</div></div>').join('') : '<div class="tsub">No calls logged yet.</div>'; }
+    b+= rc.length? rc.map(r=>'<div class="mini" onclick="openContact(\''+r.cid+'\')"><div class="mn">'+esc(r.txt)+'</div><div class="ms">'+esc(r.who)+' · '+logWhen(r.ts)+(r.by?' · '+esc(r.by):'')+'</div></div>').join('') : '<div class="tsub">No calls logged yet.</div>'; }
   b+='<div class="sec">Activity</div>'+logBar('a',id)+'<div id="log-a'+id+'">'+logList(a,'a',id)+'</div>';
   el('drawer-body').innerHTML=b;
   el('drawer-foot').innerHTML='<button class="btn pri" onclick="saveNow()">💾 Save</button>'+
@@ -6466,6 +6509,9 @@ function boot(){
   let t='today'; try{ t=localStorage.getItem('shipday_crm_tab')||'today'; }catch(e){}
   const valid=['today','hotlist','pipeline','accounts','contacts','intent','closed','live','quota'];
   if(!valid.includes(t)) t='today';
+  // Clean the duplicated history BEFORE the first paint, so the activity feed is readable on arrival.
+  // Anything pulled from the cloud afterwards goes through mergeLogs(), which dedupes on its own.
+  try{ if(dedupeLogs().recs) save(); }catch(e){}
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
   switchTab(t);
   syncRail(); checkBackupBanner();
