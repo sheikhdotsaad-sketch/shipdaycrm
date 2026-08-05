@@ -508,6 +508,7 @@ small.hint{color:var(--dim);font-size:11px}
       </div>
       <label>Supabase URL</label><input id="sburl" placeholder="https://xxx.supabase.co">
       <label>Anon key</label><input id="sbkey" type="password" placeholder="eyJ…">
+      <div id="bookBox" style="margin:8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:7px;font-size:11px;line-height:1.6"></div>
       <label>Team row ID</label><input id="sbid" placeholder="shipday-team">
       <div class="row" style="margin-top:8px">
         <button class="btn sm" style="flex:1" onclick="saveSync()">Connect</button>
@@ -598,12 +599,53 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z122';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z123';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
 const AUTH_ON = true;
 const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aWRrd3FpbndjZm5mdm5kdWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5ODg1MjgsImV4cCI6MjA5OTU2NDUyOH0.ll9M5-KaMGRffaaig4rhj6QyLPL2iw6HxocoY0DIp3k', row:'shipday-team' };  // baked team creds (Phase 2)
+
+/* ====================== WHOSE BOOK ======================
+   Every sign-in used to land in the same row. That was fine while the only two people with a
+   login were working the same Ohio list — but it means a third rep signing in and importing
+   their own territory would merge thousands of their accounts straight into this book: into
+   these Hot List rankings, these counts, this quota. There is no clean undo for that.
+   So the book is now chosen by WHO signed in. The names below keep the original shared Ohio
+   book; anyone else gets a private row of their own, which simply doesn't exist until their
+   first sign-in and therefore starts empty — import your list, it's yours, nobody sees it.
+   Matching is on the login email, lowercased. Getting this list wrong is the one genuinely
+   costly mistake here (a listed rep dropped from it would sign in to an empty CRM — their
+   data is untouched in the shared row, but it would look like everything vanished), so it is
+   written out explicitly rather than inferred, and BOOK_SPLIT stays false until it's filled in. */
+const SHARED_BOOK='shipday-team';
+const SHARED_USERS=[ 'saad.sheikh@shipday.com', 'embert.sy@shipday.com' ]
+  .map(s=>String(s).toLowerCase().trim());
+// Safety catch: with no confirmed list, everyone stays on the shared book exactly as before.
+// This flips on in the same commit that fills SHARED_USERS in — never before it.
+const BOOK_SPLIT = SHARED_USERS.length>0;
+/* Manual override, per browser. The allowlist above is a hand-written list of email addresses,
+   which means the failure mode is a typo — and the symptom of a typo is a rep signing in to an
+   empty CRM, which reads as "all my data is gone". It isn't (their book is untouched in the
+   other row), but nobody believes that while staring at a blank screen. So the choice is
+   reversible from inside the app without waiting on a redeploy: Integrations shows which book
+   you're on and switches you to the other one. Kept in localStorage rather than the book
+   itself, because the whole point is to be readable before any book has loaded. */
+function bookPref(){ try{ return localStorage.getItem('shipday_book_pref')||''; }catch(e){ return ''; } }
+function setBookPref(v){ try{ v?localStorage.setItem('shipday_book_pref',v):localStorage.removeItem('shipday_book_pref'); }catch(e){}
+  location.reload(); }
+function bookRowFor(user){
+  if(!BOOK_SPLIT) return SHARED_BOOK;
+  const em=String((user&&user.email)||'').toLowerCase().trim();
+  const pref=bookPref();
+  if(pref==='shared') return SHARED_BOOK;
+  if(pref==='own'&&(user&&(user.id||em))) return 'book:'+(user.id||em);
+  if(!em) return SHARED_BOOK;                       // can't identify them — never risk a wrong book
+  if(SHARED_USERS.includes(em)) return SHARED_BOOK;
+  return 'book:'+(user.id||em);
+}
+function myBook(){ return (TEAM.row||SHARED_BOOK); }
+function onSharedBook(){ return myBook()===SHARED_BOOK; }
 
 /* ====================== CONSTANTS ====================== */
 const STAGES = ["Booked Demo","No Show","Follow Up","Closed Lost","Closed Deal"];
@@ -874,7 +916,20 @@ function syncRail(){
   const c=syncCfg();
   const u=document.getElementById('sburl'),k=document.getElementById('sbkey'),i=document.getElementById('sbid');
   if(u)u.value=store.__sbUrl||''; if(k)k.value=store.__sbKey||''; if(i)i.value=store.__sbId||'shipday-team';
+  bookRail();
   keysRail();
+}
+// Plain-language answer to "whose data am I looking at", plus the way out if it's the wrong one.
+function bookRail(){ const b=document.getElementById('bookBox'); if(!b) return;
+  if(!BOOK_SPLIT){ b.style.display='none'; return; }
+  b.style.display='block';
+  const shared=onSharedBook();
+  b.innerHTML='<b>'+(shared?'📚 Shared team book':'🔒 Your own private book')+'</b><br>'+
+    '<span style="color:var(--mut)">'+(shared
+      ? 'You and Embert work this one together. Everything you log is visible to both of you.'
+      : 'Only you can see these accounts, contacts and notes. Nobody else on the team does.')+'</span>'+
+    '<div style="margin-top:6px"><button class="btn sm gh" onclick="setBookPref('+(shared?"'own'":"'shared'")+')">'+
+    (shared?'Switch to my own private book':'Switch to the shared team book')+'</button></div>';
 }
 /* per-rep integration keys (Google) */
 function connectGoogle(){ toast('Gmail + Calendar connect finalizes once the app is hosted.'); }
@@ -2898,10 +2953,20 @@ function claimRecActive(r){ return !!r && (Date.now()-(+r.at||0)<CLAIM_TTL); }
 function claimOf(c){ const r=c&&claimsMap[c.id]; return claimRecActive(r)?r:null; }
 function claimedByOther(c){ const r=claimOf(c); return !!r && r.rep!==myRep(); }
 function claimMine(c){ const r=claimOf(c); return !!r && r.rep===myRep(); }
+/* Claims live in the same table as the books, keyed 'claim:<contactId>'. Once there is more
+   than one book that key is ambiguous — two reps on separate books can hold the same contact
+   id, and "who's on a call" would bleed between people who share nothing. So a private book
+   scopes its claims with its own row id. The shared book deliberately keeps the bare 'claim:'
+   prefix so every claim already out there keeps working with no migration; it just has to
+   ignore the scoped ones, hence the '|' check. */
+function claimPfx(){ return onSharedBook()?'claim:':('claim:'+myBook()+'|'); }
 async function loadClaims(){
   if(!claimsReady()) return;
-  try{ const {data}=await sb.from('crm_state').select('id,data').like('id','claim:%');
-    const m={}; (data||[]).forEach(r=>{ const cid=String(r.id).slice(6); const d=r.data||{}; if(d.at) m[cid]={rep:d.rep,at:+d.at}; });
+  const pfx=claimPfx();
+  try{ const {data}=await sb.from('crm_state').select('id,data').like('id',pfx+'%');
+    const m={}; (data||[]).forEach(r=>{ const id=String(r.id);
+      if(onSharedBook()&&id.indexOf('|')>=0) return;          // another book's claim
+      const cid=id.slice(pfx.length); const d=r.data||{}; if(d.at) m[cid]={rep:d.rep,at:+d.at}; });
     claimsMap=m;
   }catch(e){ console.warn('loadClaims',e); }
 }
@@ -2909,8 +2974,10 @@ function subscribeClaims(){
   if(!sb) return; if(claimSub) sb.removeChannel(claimSub);
   claimSub=sb.channel('crm-claims')
     .on('postgres_changes',{event:'*',schema:'public',table:'crm_state'},p=>{
-      const id=String((p.new&&p.new.id)||(p.old&&p.old.id)||''); if(!id.startsWith('claim:')) return;
-      const cid=id.slice(6); const d=(p.new&&p.new.data)||null;
+      const id=String((p.new&&p.new.id)||(p.old&&p.old.id)||''); const pfx=claimPfx();
+      if(!id.startsWith(pfx)) return;
+      if(onSharedBook()&&id.indexOf('|')>=0) return;          // a private book's claim, not ours
+      const cid=id.slice(pfx.length); const d=(p.new&&p.new.data)||null;
       if(!d||!d.at) delete claimsMap[cid]; else claimsMap[cid]={rep:d.rep,at:+d.at};
       // Only re-render for ANOTHER rep's claim. Your OWN claim (from dialing) must NOT
       // advance the card — that would drop the lead you're on before you can disposition it.
@@ -2921,12 +2988,12 @@ function subscribeClaims(){
 async function claimLead(c){ const me=myRep(); if(!me||!c||!claimsReady()) return;
   if(claimedByOther(c)) return;   // never steal a teammate's active lead — they saw it first
   const now=Date.now(); claimsMap[c.id]={rep:me,at:now};  // optimistic
-  try{ await sb.from('crm_state').upsert({id:'claim:'+c.id,data:{rep:me,at:now,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('claimLead',e); }
+  try{ await sb.from('crm_state').upsert({id:claimPfx()+c.id,data:{rep:me,at:now,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('claimLead',e); }
 }
 async function releaseClaim(c){ if(!c||!claimsReady()) return; const r=claimsMap[c.id]; if(r&&r.rep!==myRep()) return;
   delete claimsMap[c.id];  // optimistic
   // tombstone (at:0) rather than DELETE so anon key never needs delete grants
-  try{ await sb.from('crm_state').upsert({id:'claim:'+c.id,data:{rep:'',at:0,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('releaseClaim',e); }
+  try{ await sb.from('crm_state').upsert({id:claimPfx()+c.id,data:{rep:'',at:0,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('releaseClaim',e); }
 }
 function callPriority(c){ return heat(c); }
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
@@ -6669,12 +6736,23 @@ async function gateInit(){
   // instead of silently failing every cloud write.
   sb.auth.onAuthStateChange(ev=>{ if(ev==='SIGNED_OUT') location.reload(); });
   const {data}=await sb.auth.getSession();
-  if(data&&data.session){ enterApp(); } else { el('gate').classList.remove('hidden'); }
+  if(data&&data.session){ useBook(data.session.user); enterApp(); } else { el('gate').classList.remove('hidden'); }
+}
+// Point every cloud read/write at the signed-in person's own book BEFORE boot() pulls anything.
+// Nothing else in the app needs to know: syncCfg() reads TEAM.row, so pull, push, realtime and
+// claims all follow automatically.
+function useBook(user){
+  TEAM.row=bookRowFor(user);
+  store.__sbId=TEAM.row;
+  // A brand-new private book is legitimately empty, and an empty CRM is indistinguishable from
+  // a broken one. Say which it is, once, after the cloud pull has had a chance to land.
+  if(!onSharedBook()) setTimeout(()=>{ try{ if(!Object.keys(store.accounts||{}).length)
+    toast('This is your own private book — nobody else can see it. Use Import CSV to load your list.'); }catch(e){} },6000);
 }
 async function doLogin(){
   el('g-err').textContent='';
-  try{ const {error}=await sb.auth.signInWithPassword({email:el('g-email').value.trim(),password:el('g-pass').value});
-    if(error)throw error; enterApp();
+  try{ const {data,error}=await sb.auth.signInWithPassword({email:el('g-email').value.trim(),password:el('g-pass').value});
+    if(error)throw error; useBook(data&&data.user); enterApp();
   }catch(e){ el('g-err').textContent=e.message||'Sign-in failed'; }
 }
 async function doLogout(){ if(sb)await sb.auth.signOut(); location.reload(); }
