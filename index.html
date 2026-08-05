@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z135';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z136';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4933,7 +4933,11 @@ function onCallsHtml(){
   const locked=ids.map(id=>contact(id)).filter(Boolean).sort((a,b)=>claimsMap[b.id].at-claimsMap[a.id].at);
   if(!locked.length) return '';
   return '<div class="panel"><div class="ph"><h3>🔒 On calls now</h3><span class="sub"><span class="live-dot"></span>'+locked.length+' lead'+(locked.length>1?'s':'')+' a teammate is working — live · hidden from your queue</span></div><table><thead><tr><th>Contact</th><th>Account</th><th>Rep</th><th>On call</th></tr></thead><tbody>'+
-    locked.slice(0,50).map(c=>{const a=acct(c.accountId),r=claimsMap[c.id];return '<tr><td><span class="tname">'+esc(cname(c))+'</span></td><td>'+esc(a?a.name:'—')+'</td><td>🔒 '+esc(r.rep)+'</td><td class="tsub">'+elapsedMMSS(r.at)+'</td></tr>';}).join('')+
+    // Contacts stored as info@/orders@ have no first+last, and cname() prints "(no name)" — a row
+    // reading "(no name) · 🔒 Embert" tells you nothing. Fall back to the restaurant, then the address.
+    locked.slice(0,50).map(c=>{const a=acct(c.accountId),r=claimsMap[c.id];
+      let nm=cname(c); if(/^\(no name\)$/i.test(nm)) nm=(a&&a.name)||c.email||'(no name)';
+      return '<tr><td><span class="tname">'+esc(nm)+'</span></td><td>'+esc(a?a.name:'—')+'</td><td>🔒 '+esc(r.rep)+'</td><td class="tsub">'+elapsedMMSS(r.at)+'</td></tr>';}).join('')+
     '</tbody></table></div>';
 }
 // 1s ticker: repaint just the live box so the "On call" timers advance to the second.
