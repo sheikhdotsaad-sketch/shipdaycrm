@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z130';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z131';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1251,8 +1251,10 @@ async function syncGmail(bg){
     if(d&&d.needsConnect){ setGmailOk(false); if(!bg){ setSync('ok','Synced'); toast('No Gmail connected for '+esc(senderName()||'you')+' — click “🔗 Connect Gmail” in the top bar'); } return 0; }
     setGmailOk(true);
     store.__gmail={syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]};
-    const n=applyContactUpdates(d.contacts); const rp=persistReplies(d.replies||[]); save();
-    if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')); } return n; }
+    const n=applyContactUpdates(d.contacts); const rp=persistReplies(d.replies||[]);
+    const mt=ingestMailTracker();          // his MailTracker notifications ARE opens — read them
+    save();
+    if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')+(mt?' · '+mt+' MailTracker open'+(mt>1?'s':''):'')); } return n; }
   catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Gmail sync failed'); } return 0; }
 }
 // One-click header sync: pulls new opens/replies from Gmail, then shows what changed.
@@ -1988,13 +1990,24 @@ function teamTodayPanel(){
 function needsReplyPanel(replies,newInbound){
   const cmap=byEmail(); const emailOf=s=>{ const m=String(s||'').match(/<([^>]+)>/); return (m?m[1]:s).trim().toLowerCase(); };
   const gm=store.__gmail||{};
-  let h='<div class="panel" id="today-replies"><div class="ph"><h3>✉️ Needs a Reply</h3><span class="sub" style="margin-left:auto">'+replies.length+' from your book'+(newInbound.length?' · '+newInbound.length+' new inbound':'')+' · synced '+fmtAgo(gm.syncedAt)+'</span></div><table><tbody>';
-  if(!replies.length && !newInbound.length){ h+='<tr><td class="empty" colspan="3">No replies waiting — connect Gmail in the header sync.</td></tr>'; }
+  // Kyle and Lindsey were ALREADY on this panel as new inbound — listing them again underneath
+  // as "read your email, not in your CRM" is exactly the kind of double-entry that makes the
+  // page feel dumb. Only show the ones nothing else on the page already knows about.
+  const already={}; newInbound.forEach(r=>{ already[emailOf(r.from)]=1; });
+  const mtu=mailTrackerUnknown(already);
+  let h='<div class="panel" id="today-replies"><div class="ph"><h3>✉️ Needs a Reply</h3><span class="sub" style="margin-left:auto">'+replies.length+' from your book'+(newInbound.length?' · '+newInbound.length+' new inbound':'')+(mtu.length?' · '+mtu.length+' read you but not in the CRM':'')+' · synced '+fmtAgo(gm.syncedAt)+'</span></div><table><tbody>';
+  if(!replies.length && !newInbound.length && !mtu.length){ h+='<tr><td class="empty" colspan="3">No replies waiting — connect Gmail in the header sync.</td></tr>'; }
   else {
     h+=replies.map(r=>{ const c=cmap[emailOf(r.from)]; const nm=c?cname(c):(r.from||'');
       return '<tr'+(c?' onclick="openContact(\''+c.id+'\')" style="cursor:pointer"':'')+'><td class="tname">↩️ '+esc(nm)+'<div class="tsub">'+esc(r.subject||'')+'</div></td><td class="tsub" style="text-align:right;white-space:nowrap">'+esc(r.date||'')+'</td><td></td></tr>'; }).join('');
     h+=newInbound.map(r=>{ const e=emailOf(r.from); const nm=(r.from||'').replace(/<[^>]*>/,'').replace(/["']/g,'').trim()||e;
       return '<tr><td class="tname">🆕 '+esc(nm)+'<div class="tsub">'+esc(e)+' · '+esc(r.subject||'')+'</div></td><td></td><td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="addInboundLead(\''+esc(e)+'\',\''+esc(nm.replace(/'/g,""))+'\')">＋ Add</button> <button class="btn sm gh" title="Hide — not a lead" onclick="ignoreInbound(\''+esc(e)+'\')">Ignore</button></td></tr>'; }).join('');
+    // MailTracker says they read it, but they've never been in the book — usually the demos you
+    // ran straight out of Gmail. Warmest names on the page, and they were invisible until now.
+    h+=mtu.map(m=>'<tr><td class="tname">👀 '+esc(m.name||m.email)+'<div class="tsub">read your email '+fmtAgo(m.ts)+
+        ' · not in your CRM'+(m.subject?' · '+esc(m.subject):'')+'</div></td><td></td>'+
+      '<td style="text-align:right;white-space:nowrap"><button class="btn sm pri" onclick="addInboundLead(\''+esc(m.email)+'\',\''+esc((m.name||'').replace(/'/g,''))+'\')">＋ Add</button> '+
+      '<button class="btn sm gh" title="Hide — not a lead" onclick="ignoreInbound(\''+esc(m.email)+'\')">Ignore</button></td></tr>').join('');
   }
   h+='</tbody></table></div>';
   return h;
@@ -2230,6 +2243,52 @@ function touchCount(c){ if(!c) return 0; let n=0;
   return n||(+c.callCount||0); }
 function lastOpenTs(c){ let t=+c.lastEmailOpenTs||0; const l=logTsBy(c,/👀|opened/i); if(l>t) t=l; return t; }
 function openCount(c){ if(!c||!c.log||!c.log.length) return 0; let n=0; for(const l of c.log){ const tx=l.txt||''; if(/👀|opened/i.test(tx)){ const m=tx.match(/\((\d+)x\)/); n+=m?(+m[1]):1; } } return n; }
+// MailTracker (the add-on on his Gmail) emails him every time somebody opens, and every one of
+// those emails names the recipient: "To: kyle@coopersvillebrewing.com". They were sitting in
+// Needs a Reply pretending to be live prospects, so they got filtered out of that list — but the
+// information is real and it's the whole point of running MailTracker. Read them instead and
+// freshen that contact's last-open time, so the person surfaces in the 🔔 and the opens list.
+// Deliberately does NOT add to the open COUNT: his own tracking pixel already counts these, and
+// counting both would double every open. Two sources, one truth — recency.
+// Skips the "Perfect time to follow up with Gabriela …" nags (nobody opened anything there) and
+// anything addressed to a shipday.com inbox — that's us reading our own mail.
+function ingestMailTracker(){
+  const cmap=byEmail(); let n=0;
+  ((store.__gmail||{}).replies||[]).forEach(r=>{
+    if(!/getmailtracker\.com/i.test(r.from||'')) return;
+    const blob=(r.subject||'')+' '+(r.snippet||r.body||'');
+    if(!/(re)?opened|has just read/i.test(blob)) return;
+    const hit=(blob.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g)||[])
+      .map(e=>e.toLowerCase().replace(/[.,;]+$/,''))
+      .find(e=>!/@shipday\.com$/i.test(e)&&cmap[e]);
+    if(!hit) return;
+    const c=cmap[hit], ts=+r.ts||Date.parse(r.date||'')||0;
+    if(ts&&ts>(+c.lastEmailOpenTs||0)){ c.lastEmailOpenTs=ts; try{ stampU(c); }catch(e){} n++; }
+  });
+  if(n) save();
+  return n;
+}
+// The other half of the same mail: people who read an email you sent from Gmail but who were
+// never in the CRM at all (kyle@coopersvillebrewing.com, lindsey@nourishatbe.com). Nothing else
+// in the app can see them — they never wrote back, so they don't count as "inbound" either — and
+// they're some of the warmest names you've got. One click adds them.
+function mailTrackerUnknown(skip){
+  const cmap=byEmail(), ign=store.__inboundIgnore||{}, by={}, seen=skip||{};
+  ((store.__gmail||{}).replies||[]).forEach(r=>{
+    if(!/getmailtracker\.com/i.test(r.from||'')) return;
+    const blob=(r.subject||'')+' '+(r.snippet||r.body||'');
+    if(!/(re)?opened|has just read/i.test(blob)) return;
+    (blob.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g)||[]).map(e=>e.toLowerCase().replace(/[.,;]+$/,''))
+      .forEach(e=>{ if(/@(shipday|getmailtracker)\.com$/i.test(e)||cmap[e]||ign[e]||seen[e]) return;
+        const ts=+r.ts||Date.parse(r.date||'')||0;
+        // "To: Rita Pavuk, rpavuk@campfirebrewing.com" — grab the name sitting in front of it
+        const nm=((blob.match(new RegExp('To:\\s*([^,<\\n]{2,40}),\\s*'+e.replace(/[.+*?^$()[\]{}|\\\\]/g,'\\\\$&'),'i'))||[])[1]||'').trim();
+        const g=by[e]=by[e]||{email:e,name:'',ts:0,subject:''};
+        if(nm&&!g.name) g.name=nm;
+        if(ts>g.ts){ g.ts=ts; g.subject=(r.subject||'').replace(/^Your email\s*/i,'').slice(0,80); } });
+  });
+  return Object.values(by).sort((a,b)=>b.ts-a.ts).slice(0,8);
+}
 const OWNER_RX=/\b(owner|co-?founder|founder|ceo|president|proprietor|principal|partner|managing|gm|general manager)\b/i;
 function isOwner(c){ return !!(c && OWNER_RX.test(c.title||'')); }
 // Composite "heat" — the master Hot List ranking. Blends recency & volume of
@@ -6999,6 +7058,7 @@ function boot(){
   // Anything pulled from the cloud afterwards goes through mergeLogs(), which dedupes on its own.
   try{ if(dedupeLogs().recs) save(); }catch(e){}
   try{ dedupeTasks(); }catch(e){}
+  try{ ingestMailTracker(); }catch(e){}   // catch up on MailTracker opens already in the mailbox
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
   switchTab(t);
   syncRail(); checkBackupBanner();
