@@ -600,7 +600,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z124';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z125';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -959,7 +959,10 @@ function bookRail(){ const b=document.getElementById('bookBox'); if(!b) return;
       '<button class="btn sm gh" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">Switch to '+esc(bookName(r))+'</button>').join(' ')+'</div>'):'');
 }
 /* per-rep integration keys (Google) */
-function connectGoogle(){ toast('Gmail + Calendar connect finalizes once the app is hosted.'); }
+// The app IS hosted now, and the real self-serve OAuth flow shipped with connectGmail(). This
+// button was still showing a "coming soon" toast, which is the worst possible answer for the one
+// rep who goes looking for exactly this. Same flow, one place.
+function connectGoogle(){ connectGmail(); }
 function toggleCfg(){ const c=document.getElementById('cfg'); if(!c)return; const open=c.style.display==='none'; c.style.display=open?'block':'none'; const car=document.getElementById('cfg-caret'); if(car) car.textContent=open?'▾':'▸'; }
 function keysRail(){ const k=store.__keys||{}; const g=document.getElementById('gstat'); if(g) g.textContent=k.google?'Google connected ✓':'Connect Google'; const as=document.getElementById('autosync'); if(as) as.checked=autoOn(); }
 /* ====================== UI UTILS ====================== */
@@ -1232,7 +1235,11 @@ function persistReplies(replies){ if(!Array.isArray(replies)||!replies.length)re
 const RECENT_REPLY=7*864e5;
 async function syncGmail(bg){
   if(!SYNC_FN){ if(!bg)toast((store.__keys&&store.__keys.google)?'Gmail sync activates once hosted':'Connect Google in Integrations first'); return 0; }
-  try{ if(!bg)setSync('busy','Syncing Gmail…'); const r=await fetch(SYNC_FN+'/gmail-replies',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+  // Say WHO is asking. Without this the server reads one hardwired mailbox, so every rep pulled
+  // the SAME person's inbox — their replies, their sent mail — onto their own dashboard.
+  try{ if(!bg)setSync('busy','Syncing Gmail…');
+    const r=await fetch(SYNC_FN+'/gmail-replies?rep='+encodeURIComponent(senderName()||myRep()||''),{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+    if(d&&d.needsConnect){ if(!bg){ setSync('ok','Synced'); toast('No Gmail connected for '+esc(senderName()||'you')+' — open a sequence card and click “connect Gmail”'); } return 0; }
     store.__gmail={syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]};
     const n=applyContactUpdates(d.contacts); const rp=persistReplies(d.replies||[]); save();
     if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')); } return n; }
@@ -1404,7 +1411,9 @@ function notifyOpens(list){
 }
 async function syncCalendar(bg){
   if(!SYNC_FN){ if(!bg) toast('Connect Google in Integrations first'); return 0; }
-  try{ if(!bg) setSync('busy','Syncing Calendar…'); const r=await fetch(SYNC_FN+'/calendar-sync',{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+  try{ if(!bg) setSync('busy','Syncing Calendar…');
+    const r=await fetch(SYNC_FN+'/calendar-sync?rep='+encodeURIComponent(senderName()||myRep()||''),{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
+    if(d&&d.needsConnect){ if(!bg){ setSync('ok','Synced'); toast('No Google Calendar connected for '+esc(senderName()||'you')+' — open a sequence card and click “connect Gmail”'); } return 0; }
     if(d.error) throw new Error(d.error);
     const prevRev=(store.__cal&&store.__cal.reviewed)||{};
     store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[],reviewed:prevRev};
@@ -1431,8 +1440,12 @@ async function pushDemoToCalendar(id){ const d=deal(id); if(!d)return;
   const c=contact(d.contactId); const start=new Date(d.demoDate); const end=new Date(start.getTime()+30*60000);
   try{ setSync('busy','Adding to Calendar…');
     const r=await fetch(SYNC_FN+'/calendar-sync',{method:'POST',headers:{Authorization:'Bearer '+authToken(),'Content-Type':'application/json'},
-      body:JSON.stringify({summary:'Shipday Demo · '+(d.name||cname(c)),description:'Demo with '+(c?cname(c):'')+(c&&c.email?' <'+c.email+'>':''),startISO:start.toISOString(),endISO:end.toISOString(),attendees:c&&c.email?[c.email]:[]})});
-    const j=await r.json(); if(j.error||!j.id) throw new Error(j.error||'no id');
+      body:JSON.stringify({rep:senderName()||myRep()||'',summary:'Shipday Demo · '+(d.name||cname(c)),description:'Demo with '+(c?cname(c):'')+(c&&c.email?' <'+c.email+'>':''),startISO:start.toISOString(),endISO:end.toISOString(),attendees:c&&c.email?[c.email]:[]})});
+    const j=await r.json();
+    // Booking onto the wrong person's calendar is worse than not booking, so this refuses rather
+    // than falling back — say so plainly instead of the generic failure toast.
+    if(j&&j.needsConnect){ setSync('err','Not connected'); toast('Connect your Google account first — open a sequence card and click “connect Gmail”'); return; }
+    if(j.error||!j.id) throw new Error(j.error||'no id');
     d.calEventId=j.id; d.calLink=j.htmlLink||''; logAuto(d,'📅 Added to Google Calendar');
     save(); renderActive(); if(drawerOpen()) openDeal(id); setSync('ok','Synced'); toast('Added to Google Calendar'); }
   catch(e){ setSync('err','Sync failed'); toast('Calendar add failed'); }
@@ -4162,6 +4175,11 @@ async function sendSeqEmail(id){
       body:JSON.stringify({to:c.email,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
         threadId:(isReply&&withThread)?(s.threadId||''):'', inReplyTo:(isReply&&withThread)?(s.lastMsgId||''):''})});
     let r=await post(true); let d=await r.json();
+    // No mailbox connected for this rep. The server used to fall back to the original owner's
+    // Gmail, which sent prospecting from the wrong address and buried the replies in the wrong
+    // inbox; it now refuses. Point them at the one-click fix instead of a raw error.
+    if(d&&d.needsConnect){ setSync&&setSync('err','Not connected');
+      toast('No Gmail connected for '+esc(by||'you')+' — click “🔗 connect Gmail” just above, then send again'); return; }
     if((!r.ok||!d.ok) && isReply && (s.threadId||s.lastMsgId) && /not\s*found|404/i.test(JSON.stringify(d||''))){
       s.threadId=''; s.lastMsgId='';           // dead thread (wrong mailbox / deleted) — forget it and retry unthreaded
       r=await post(false); d=await r.json();
