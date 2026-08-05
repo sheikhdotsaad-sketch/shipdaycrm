@@ -126,6 +126,14 @@ header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var
 #bell.has{background:var(--warm,#e8590c);border-color:var(--warm,#e8590c);color:#fff;animation:bellpulse 2s ease-in-out 3}
 #bell.has #bellN{font-weight:800}
 @keyframes bellpulse{0%,100%{box-shadow:0 0 0 0 rgba(232,89,12,.55)}50%{box-shadow:0 0 0 6px rgba(232,89,12,0)}}
+/* The drop-down hangs off the bell itself and stays put on whatever tab you're on. Right-aligned
+   so it can't run off the edge of the window — the bell sits near the top-right corner. */
+#sigpop{position:absolute;top:calc(100% + 8px);right:0;z-index:900}
+.sigpop-in{width:340px;max-height:70vh;overflow:auto;background:var(--card,#16181d);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5);text-align:left}
+.sigpop-h{padding:10px 13px;border-bottom:1px solid var(--line);font-size:12px;font-weight:700;position:sticky;top:0;background:var(--card,#16181d)}
+.sigrow{display:flex;align-items:center;gap:10px;padding:9px 13px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12px}
+.sigrow:hover{background:var(--chip)}
+.sigpop-f{padding:9px 13px;text-align:center}
 .hbtn.pri{background:var(--sig);color:#fff;border-color:var(--sig)}
 .hbtn.pri:hover{background:var(--sig2);border-color:var(--sig2)}
 
@@ -456,7 +464,7 @@ small.hint{color:var(--dim);font-size:11px}
   </div>
   <div class="hspace"></div>
   <button class="hbtn" id="book-chip" style="display:none" onclick="bookMenu()" title="Which territory you're working in"></button>
-  <button class="hbtn" id="bell" onclick="openSignals()" title="New opens &amp; replies">🔔 <span id="bellN"></span></button>
+  <span style="position:relative"><button class="hbtn" id="bell" onclick="openSignals(event)" title="New opens &amp; replies">🔔 <span id="bellN"></span></button><div id="sigpop" style="display:none"></div></span>
   <button class="hbtn" id="gmail-chip" style="display:none" onclick="connectGmail()" title="Your Gmail and Calendar aren't linked yet — click to fix it"></button>
   <button class="hbtn" id="rep-chip" onclick="setMyRep()" title="Who's working in this browser — every call, email &amp; note you log is stamped with this name so Team Activity can tell reps apart">👤 …</button>
   <button class="hbtn" onclick="syncAll()" title="Universal sync — pulls Gmail &amp; Google Calendar, then refreshes every tab">↻ Sync</button>
@@ -600,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z128';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z129';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1261,7 +1269,9 @@ async function syncNow(){
 function callSignal(cid){ const c=contact(cid); if(!c)return; markSignalsSeen(); openContact(cid); }
 function markSignalsSeen(){ (store.__signals||[]).forEach(s=>s.seen=true); save(); }
 function clearSignals(){ store.__signals=[]; save(); renderActive(); toast('Signals cleared'); }
-function signalsPanel(){
+// One person per row, newest first — shared by the Today panel and the bell drop-down so the
+// two can never disagree about who's hot.
+function sigGroups(){
   // The signal feed is only ever written by a sync that catches an open as it lands, so it
   // knows nothing about opens already sitting in the book — and with auto-refresh off by
   // default, that was nearly all of them. 76 opens were on record and this panel rendered
@@ -1282,7 +1292,7 @@ function signalsPanel(){
     if(r&&now-r<WK) sig.push({...row,kind:'reply',ts:r});
     if(o&&now-o<WK) sig.push({...row,kind:'open',ts:o,n:openCount(c)||1});
   });
-  if(!sig.length) return '';
+  if(!sig.length) return [];
   // ONE row per contact, not per raw event — 6 opens by the same person read as one hot row
   // with a ×6 count, replies float to the top, and the row is click-to-open.
   const by={}; sig.forEach(s=>{ const k=s.cid||s.name||'?';
@@ -1291,7 +1301,15 @@ function signalsPanel(){
     if(+s.ts>g.last) g.last=+s.ts; if(!s.seen) g.seen=false; });
   // Newest first. Whoever read your email twenty minutes ago is the call to make right now, and
   // it was sorting replies-then-recency, which buried this morning under last Tuesday.
-  const all=Object.values(by).filter(g=>contact(g.cid)).sort((a,b)=>b.last-a.last);
+  // 14 of these people are stored as an inbox address with no first/last (info@, contact@), and
+  // cname() renders those "(no name)" — a notification reading "(no name) opened your email"
+  // tells you nothing and looks broken. Fall back to the restaurant, then the address itself.
+  return Object.values(by).filter(g=>contact(g.cid)).map(g=>{ const c=contact(g.cid);
+    if(!g.name||/^\(no name\)$/i.test(g.name)) g.name=g.acct||(acct(c.accountId)||{}).name||c.email||'(no name)';
+    return g; }).sort((a,b)=>b.last-a.last);
+}
+function signalsPanel(){
+  const now=Date.now(), all=sigGroups();
   const groups=all.slice(0,20), hidden=all.length-groups.length;
   if(!groups.length) return '';
   // Headline the number of PEOPLE, split by how fresh. Summing raw opens read "1,304 opens"
@@ -1389,19 +1407,40 @@ function renderBell(){ const b=el('bellN'), btn=el('bell'); if(!b||!btn) return;
   btn.title=n?(n+' new open'+(n>1?'s':'')+'/repl'+(n>1?'ies':'y')+' — click to see who'):'No new opens since the last check';
   document.title=(n?'('+n+') ':'')+'Shipday CRM';
 }
-// Clicking the bell did nothing you could see: it hunted for a heading called "Recent Signals",
-// which stopped existing when the panel was renamed "🔥 Opened your email". So it jumped to
-// Today, silently zeroed the badge and scrolled nowhere — the count vanished and no list ever
-// appeared. Scroll to the panel by ID, flash it so you can see where you landed, and only mark
-// the signals seen once they're actually on screen.
-function openSignals(){ if(UI.tab!=='today') switchTab('today'); else renderActive();
-  setTimeout(()=>{ const p=el('sigpanel');
-    if(!p){ toast('Nobody has opened or replied to your email in the last 30 days'); markSignalsSeen(); renderBell(); return; }
-    p.scrollIntoView({behavior:'smooth',block:'center'});
-    p.style.transition='box-shadow .25s'; p.style.boxShadow='0 0 0 2px var(--hot)';
-    setTimeout(()=>{ p.style.boxShadow=''; },1400);
-    markSignalsSeen(); renderBell();
-  },120);
+// Clicking the bell used to yank you to the Today tab and scroll — which meant it only worked
+// from Today, it threw away whatever you were looking at, and (because the panel had been
+// renamed) it usually scrolled nowhere at all: the badge just silently went to zero and no list
+// ever appeared. A notification should DROP DOWN where you clicked it and leave you where you
+// are. Top 8 by recency, phone number right there, "see all" for the rest.
+function closeSigPop(){ const p=el('sigpop'); if(p){ p.style.display='none'; p.innerHTML=''; } }
+function openSignals(ev){
+  if(ev&&ev.stopPropagation) ev.stopPropagation();
+  const p=el('sigpop'); if(!p) return;
+  if(p.style.display!=='none'){ closeSigPop(); return; }        // second click closes it
+  const all=sigGroups(), top=all.slice(0,8), hidden=all.length-top.length;
+  const rows=top.map(g=>{ const c=contact(g.cid); if(!c) return ''; const ph=telNum(c);
+    const what=[g.replies?('↩️ replied'+(g.replies>1?' ×'+g.replies:'')):'',
+                g.opens?('👀 opened'+(g.opens>1?' ×'+g.opens:'')):''].filter(Boolean).join(' · ');
+    return '<div class="sigrow" onclick="closeSigPop();openContact(\''+c.id+'\')">'+
+      '<div style="min-width:0;flex:1"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
+        (g.replies?'↩️':'🔥')+' '+esc(g.name||cname(c))+'</div>'+
+      '<div class="tsub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+what+' · '+fmtAgo(g.last)+
+        (g.acct&&_dnorm(g.acct)!==_dnorm(g.name||'')?' · '+esc(g.acct):'')+'</div></div>'+
+      (ph?'<a class="callbtn" href="tel:'+esc(ph)+'" onclick="event.stopPropagation();closeSigPop();logCall(\''+c.id+'\')"><span class="ph">📞</span>Call</a>':'')+
+      '</div>'; }).join('');
+  p.innerHTML='<div class="sigpop-in"><div class="sigpop-h">🔥 Opened your email'+
+      '<span class="tsub" style="font-weight:400"> · '+(all.length||'no')+' in the last 30 days</span></div>'+
+    (rows||'<div class="sigrow" style="cursor:default"><div class="tsub">Nobody has opened or replied yet. They show up here the moment they do.</div></div>')+
+    (all.length?'<div class="sigpop-f"><button class="btn sm gh" onclick="closeSigPop();switchTab(\'today\');setTimeout(()=>{const x=el(\'sigpanel\');if(x)x.scrollIntoView({behavior:\'smooth\',block:\'center\'});},200)">See all '+all.length+' ↗</button></div>':'')+
+    '</div>';
+  p.style.display='';
+  markSignalsSeen(); renderBell();
+  // Click anywhere else (or Esc) to dismiss — a notification you have to hunt for a close button
+  // on is worse than no notification.
+  setTimeout(()=>{ const away=e=>{ if(!p.contains(e.target)){ closeSigPop(); document.removeEventListener('mousedown',away); } };
+    document.addEventListener('mousedown',away);
+    const esckey=e=>{ if(e.key==='Escape'){ closeSigPop(); document.removeEventListener('keydown',esckey); } };
+    document.addEventListener('keydown',esckey); },0);
 }
 /* A desktop pop-up is the only thing that reaches a rep who's in Gmail or on a call, which is
    exactly when an open happens. Permission is asked ONCE and only after a real signal arrives —
