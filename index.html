@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z133';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z134';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -805,6 +805,11 @@ function mergeStores(base,over){ base=base||{}; over=over||{};
       o[r] = (!y)?x : (!x)?y : ((+(y.syncedAt||0))>=(+(x.syncedAt||0)) ? y : x); });
     if(Object.keys(o).length) out[k]=o; });
   { const e=Object.assign({},base.__emailBy||{},over.__emailBy||{}); if(Object.keys(e).length) out.__emailBy=e; }
+  // Your sequence edits and your pasted copy. Union by rep so another rep saving a play can never
+  // rewrite yours; if the same rep's entry differs, the newer store wins (same rule as everything else).
+  ['__seqLibBy','__cadenceBy'].forEach(k=>{ const a=base[k]||{}, b=over[k]||{}, o=Object.assign({},a);
+    Object.keys(b).forEach(r=>{ if(!(r in a)||overNewer) o[r]=b[r]; });
+    if(Object.keys(o).length) out[k]=o; });
   // __inboundIgnore = hidden inbound suggestions. UNION so an Ignore is never clobbered by a newer sync.
   out.__inboundIgnore=Object.assign({},base.__inboundIgnore||{},over.__inboundIgnore||{});
   // __dnc = Do-Not-Call registry keyed by 10-digit number → {by,at,reason,off?}. COMPLIANCE: must never be
@@ -4265,14 +4270,20 @@ function seqMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||'')
 // seqLib(): the live play library = built-in SEQ_LIB, with the team's edits/additions from
 // store.__seqLib layered on top (replace-by-id, else append). Everything that used to read SEQ_LIB
 // directly now reads seqLib() so custom + edited sequences flow everywhere (drawer, tab, editor).
-function seqLib(){ const ov=store&&store.__seqLib;
+// YOUR edits to a play, not the team's. These lived in one shared slot, so the moment another rep
+// rewrote an email the whole team's copy changed under them. Your own copy wins if you have one;
+// until you touch a play you still see the team's, so nothing disappears on the way in.
+function myLib(){ const b=myBox('seqLib'); return Array.isArray(b)?b:(store&&store.__seqLib); }
+function setMyLib(v){ setBox('seqLib',v); store.__updatedAt=Date.now(); return v; }
+function myCad(){ const b=myBox('cadence'); return Array.isArray(b)?b:(store&&store.__cadence); }
+function seqLib(){ const ov=myLib();
   let out;
   if(!Array.isArray(ov)||!ov.length) out=SEQ_LIB.slice();
   else { out=SEQ_LIB.slice(); const idx={}; out.forEach((q,i)=>{ idx[q.id]=i; });
     ov.forEach(q=>{ if(!q||!q.id) return; if(idx[q.id]!=null) out[idx[q.id]]=q; else { idx[q.id]=out.length; out.push(q); } }); }
   return out.map(q=>q.noAutoCall?Object.assign({},q,{steps:(q.steps||[]).slice()})   // email-only plays stay email-only
     :Object.assign({},q,{steps:withCallSteps(q.steps)})); }                          // every other play gets calls interleaved
-function seqById(id){ if(id==='custom'){ const cu=store&&store.__cadence; return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return seqLib().find(q=>q.id===id)||null; }
+function seqById(id){ if(id==='custom'){ const cu=myCad(); return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return seqLib().find(q=>q.id===id)||null; }
 // Suggest the play that matches the account's stack; rep can always override in the picker.
 function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'').toLowerCase(), dl=((a&&a.delivery)||'').toLowerCase();
   if(/square/.test(pos)) return 'square';
@@ -4283,11 +4294,11 @@ function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'')
 // The rep can paste their OWN sequence copy into store.__cadence (synced to the team),
 // so Embert sends Saad's exact steps. This is a one-time paste. When custom copy exists it
 // fully replaces the built-in templates below.
-function cadDef(){ const c=store&&store.__cadence; return (Array.isArray(c)&&c.length)?c:EMAIL_CADENCE; }
+function cadDef(){ const c=myCad(); return (Array.isArray(c)&&c.length)?c:EMAIL_CADENCE; }
 // Per-contact step set: the sequence the contact was enrolled in (SEQ_LIB), else custom paste, else default.
 function cadDefFor(c){ const s=c&&c.emailSeq; if(s&&s.seqId){ const q=seqById(s.seqId); if(q&&q.steps&&q.steps.length) return q.steps; } return cadDef(); }
 function cadNFor(c){ return cadDefFor(c).length; }
-function isCustomCad(){ const c=store&&store.__cadence; return !!(Array.isArray(c)&&c.length); }
+function isCustomCad(){ const c=myCad(); return !!(Array.isArray(c)&&c.length); }
 function cadN(){ return cadDef().length; }
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
   const _nm=String(cname(c)||'').trim();
@@ -4667,11 +4678,13 @@ function renderCadenceEditor(){ const m=el('cadModal'); if(!m||!cadEdit) return;
 function cadAddStep(){ cadSync(); cadEdit.push({label:'',d:cadEdit.length?7:0,subj:'',body:''}); renderCadenceEditor(); }
 function cadDelStep(i){ cadSync(); cadEdit.splice(i,1); if(!cadEdit.length) cadEdit=[{label:'',d:0,subj:'',body:''}]; renderCadenceEditor(); }
 function closeCadenceEditor(){ const m=el('cadModal'); if(m) m.style.display='none'; cadEdit=null; }
-function resetCadence(){ if(!confirm('Reset to the built-in templates? Your pasted copy will be removed.')) return; store.__cadence=null; store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); toast('Reverted to default templates'); }
+// Reverting stores an EMPTY list, not null — null is indistinguishable from "never set", which
+// would quietly fall back to the team's pasted copy instead of the built-in templates.
+function resetCadence(){ if(!confirm('Reset to the built-in templates? Your pasted copy will be removed.')) return; setBox('cadence',[]); store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); toast('Reverted to default templates'); }
 function saveCadence(){ cadSync();
   const steps=cadEdit.filter(s=>(s.subj&&s.subj.trim())||(s.body&&s.body.trim())).map(s=>({label:(s.label||'').trim(),d:+s.d||0,subj:(s.subj||'').trim(),body:s.body||''}));
-  if(!steps.length){ store.__cadence=null; toast('No copy entered — using default templates'); }
-  else { store.__cadence=steps; toast('Saved '+steps.length+'-step sequence — the team now sends your copy'); }
+  if(!steps.length){ setBox('cadence',[]); toast('No copy entered — using default templates'); }
+  else { setBox('cadence',steps); toast('Saved '+steps.length+'-step sequence — this is yours, nobody else\'s changes'); }
   store.__updatedAt=Date.now(); save(); closeCadenceEditor(); refreshDrawer(); }
 // Paused re-enroll: build the "resume at step" <option>s for a given play, defaulting to the step
 // RIGHT AFTER the email they were last on (find the pausedEmail-th email, suggest the next step —
@@ -5241,7 +5254,7 @@ function renderSeqEditor(){ const m=el('seqModal'); if(!m||!seqEdit) return;
 }
 function closeSeqEditor(){ const m=el('seqModal'); if(m) m.style.display='none'; seqEdit=null; }
 function resetBuiltinSeq(){ if(!seqEdit) return; if(!confirm('Discard your edits and revert to the built-in copy?')) return;
-  store.__seqLib=(store.__seqLib||[]).filter(q=>q.id!==seqEdit.id); store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Reverted to built-in sequence'); }
+  setMyLib((myLib()||[]).filter(q=>q.id!==seqEdit.id)); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Reverted to built-in sequence'); }
 function saveSeqEditor(){ seqEditSync(); if(!seqEdit) return;
   const name=(seqEdit.name||'').trim(); if(!name){ toast('Give the sequence a name'); return; }
   const steps=seqEdit.steps.map(s=>{ const k=stepKind(s); const o={type:s.type||'new',d:+s.d||0,label:(s.label||'').trim()};
@@ -5250,14 +5263,14 @@ function saveSeqEditor(){ seqEditSync(); if(!seqEdit) return;
   if(!steps.length){ toast('Add at least one step with content'); return; }
   const entry={id:seqEdit.id,name:name,match:'',steps:steps};
   if(seqEdit.noAutoCall) entry.noAutoCall=true;   // keep email-only plays email-only through edits
-  const lib=(store.__seqLib||[]).slice(); const i=lib.findIndex(q=>q.id===entry.id);
-  if(i>=0) lib[i]=entry; else lib.push(entry); store.__seqLib=lib;
-  store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer();
+  const lib=(myLib()||[]).slice(); const i=lib.findIndex(q=>q.id===entry.id);
+  if(i>=0) lib[i]=entry; else lib.push(entry); setMyLib(lib);
+  save(); closeSeqEditor(); renderSequences(); refreshDrawer();
   toast('Saved "'+name+'" — '+steps.length+' step'+(steps.length===1?'':'s')); }
 function deleteSeqEditor(){ if(!seqEdit) return;
   const enrolled=contacts().filter(c=>c.emailSeq&&c.emailSeq.seqId===seqEdit.id&&!c.emailSeq.done).length;
   if(!confirm('Delete this sequence?'+(enrolled?(' '+enrolled+' contact'+(enrolled===1?' is':'s are')+' still in it — they will fall back to the default cadence.'):''))) return;
-  store.__seqLib=(store.__seqLib||[]).filter(q=>q.id!==seqEdit.id); store.__updatedAt=Date.now(); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Sequence deleted'); }
+  setMyLib((myLib()||[]).filter(q=>q.id!==seqEdit.id)); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Sequence deleted'); }
 // Delete/reset a play straight from its library card (no need to open the editor). A built-in play
 // can't be truly deleted — this discards your custom override and reverts to the shipped copy.
 function deleteSeqPlay(id){ const q=seqById(id); if(!q) return; const builtin=isBuiltinSeq(id);
@@ -5265,7 +5278,7 @@ function deleteSeqPlay(id){ const q=seqById(id); if(!q) return; const builtin=is
   const msg=builtin?('Reset "'+q.name+'" to its built-in copy? Your custom edits will be discarded.')
     :('Delete "'+q.name+'"?'+(enrolled?(' '+enrolled+' contact'+(enrolled===1?' is':'s are')+' still in it — they fall back to the default cadence.'):''));
   if(!confirm(msg)) return;
-  store.__seqLib=(store.__seqLib||[]).filter(x=>x.id!==id); store.__updatedAt=Date.now(); save(); renderSequences(); refreshDrawer();
+  setMyLib((myLib()||[]).filter(x=>x.id!==id)); save(); renderSequences(); refreshDrawer();
   toast(builtin?'Reset to built-in':'Sequence deleted'); }
 // Add a direct line to a contact that has no dialable number (prefilled with the account's
 // corporate/direct line if we have one), so sequence contacts can still be called.
