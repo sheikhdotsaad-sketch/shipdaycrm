@@ -457,6 +457,7 @@ small.hint{color:var(--dim);font-size:11px}
   <div class="hspace"></div>
   <button class="hbtn" id="book-chip" style="display:none" onclick="bookMenu()" title="Which territory you're working in"></button>
   <button class="hbtn" id="bell" onclick="openSignals()" title="New opens &amp; replies">🔔 <span id="bellN"></span></button>
+  <button class="hbtn" id="gmail-chip" style="display:none" onclick="connectGmail()" title="Your Gmail and Calendar aren't linked yet — click to fix it"></button>
   <button class="hbtn" id="rep-chip" onclick="setMyRep()" title="Who's working in this browser — every call, email &amp; note you log is stamped with this name so Team Activity can tell reps apart">👤 …</button>
   <button class="hbtn" onclick="syncAll()" title="Universal sync — pulls Gmail &amp; Google Calendar, then refreshes every tab">↻ Sync</button>
   <button class="hbtn" onclick="exportCurrentTab()">Export CSV</button>
@@ -517,9 +518,8 @@ small.hint{color:var(--dim);font-size:11px}
     </div>
     <div class="card">
       <h4>Integrations</h4>
-      <button class="btn sm gh" style="width:100%" onclick="connectGoogle()"><span id="gstat">Connect Google</span></button>
+      <div id="gbox"></div>
       <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;cursor:pointer"><input type="checkbox" id="autosync" onchange="setAutoSync(this.checked)"> Auto-refresh opens every 15 min &amp; re-rank Hot List</label>
-      <div class="tsub" style="margin-top:6px;font-size:10px;line-height:1.4">Your own Gmail + Calendar. Live sync activates once the app is hosted.</div>
     </div>
     <div class="card">
       <h4>Data</h4>
@@ -600,7 +600,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z125';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z126';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1170,6 +1170,7 @@ function renderCounts(){
   const td=el('p-today'); if(td){ try{ const endToday=today0().getTime()+864e5; td.textContent=todayCountReady?(tasks().filter(taskMine).filter(t=>!t.done && +t.due<endToday).length):'…'; }catch(e){ td.textContent=todayCountReady?0:'…'; } }
   try{ renderBell(); }catch(e){}
   try{ renderBookChip(); }catch(e){}
+  try{ renderGmailChip(); renderGmailBox(); }catch(e){}
 }
 /* Closed Won = every account you've closed (superset). Live = the onboarded subset. */
 function closedAccts(){ const s=new Set(deals().filter(d=>d.stage===WON).map(d=>d.accountId)); return accounts().filter(a=>a.isCustomer||s.has(a.id)); }
@@ -1239,7 +1240,8 @@ async function syncGmail(bg){
   // the SAME person's inbox — their replies, their sent mail — onto their own dashboard.
   try{ if(!bg)setSync('busy','Syncing Gmail…');
     const r=await fetch(SYNC_FN+'/gmail-replies?rep='+encodeURIComponent(senderName()||myRep()||''),{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
-    if(d&&d.needsConnect){ if(!bg){ setSync('ok','Synced'); toast('No Gmail connected for '+esc(senderName()||'you')+' — open a sequence card and click “connect Gmail”'); } return 0; }
+    if(d&&d.needsConnect){ setGmailOk(false); if(!bg){ setSync('ok','Synced'); toast('No Gmail connected for '+esc(senderName()||'you')+' — click “🔗 Connect Gmail” in the top bar'); } return 0; }
+    setGmailOk(true);
     store.__gmail={syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]};
     const n=applyContactUpdates(d.contacts); const rp=persistReplies(d.replies||[]); save();
     if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')); } return n; }
@@ -1413,7 +1415,7 @@ async function syncCalendar(bg){
   if(!SYNC_FN){ if(!bg) toast('Connect Google in Integrations first'); return 0; }
   try{ if(!bg) setSync('busy','Syncing Calendar…');
     const r=await fetch(SYNC_FN+'/calendar-sync?rep='+encodeURIComponent(senderName()||myRep()||''),{headers:{Authorization:'Bearer '+authToken()}}); const d=await r.json();
-    if(d&&d.needsConnect){ if(!bg){ setSync('ok','Synced'); toast('No Google Calendar connected for '+esc(senderName()||'you')+' — open a sequence card and click “connect Gmail”'); } return 0; }
+    if(d&&d.needsConnect){ setGmailOk(false); if(!bg){ setSync('ok','Synced'); toast('No Google Calendar connected for '+esc(senderName()||'you')+' — click “🔗 Connect Gmail” in the top bar'); } return 0; }
     if(d.error) throw new Error(d.error);
     const prevRev=(store.__cal&&store.__cal.reviewed)||{};
     store.__cal={syncedAt:d.syncedAt||Date.now(),events:d.events||[],reviewed:prevRev};
@@ -1444,7 +1446,7 @@ async function pushDemoToCalendar(id){ const d=deal(id); if(!d)return;
     const j=await r.json();
     // Booking onto the wrong person's calendar is worse than not booking, so this refuses rather
     // than falling back — say so plainly instead of the generic failure toast.
-    if(j&&j.needsConnect){ setSync('err','Not connected'); toast('Connect your Google account first — open a sequence card and click “connect Gmail”'); return; }
+    if(j&&j.needsConnect){ setGmailOk(false); setSync('err','Not connected'); toast('Connect your Google account first — click “🔗 Connect Gmail” in the top bar'); return; }
     if(j.error||!j.id) throw new Error(j.error||'no id');
     d.calEventId=j.id; d.calLink=j.htmlLink||''; logAuto(d,'📅 Added to Google Calendar');
     save(); renderActive(); if(drawerOpen()) openDeal(id); setSync('ok','Synced'); toast('Added to Google Calendar'); }
@@ -2999,6 +3001,48 @@ function renderBookChip(){ const b=el('book-chip'); if(!b) return;
   b.style.display=''; b.textContent=bookName(myBook());
   b.title='Working in '+bookName(myBook()).replace(/^\S+\s/,'')+' — click to switch territory';
 }
+/* ============ GOOGLE CONNECTION, VISIBLE ============
+   Connecting your Gmail is the FIRST thing a new rep has to do and it used to be reachable only
+   from inside a sequence card — a screen you can't get to until you've already enrolled somebody,
+   which you can't sensibly do before you're connected. So: a status box in Integrations that
+   actually says whether you're linked, plus a hard-to-miss header chip that appears the moment we
+   learn you aren't. The chip hides itself once you're connected, so it's a to-do, not decoration.
+   State comes free from the syncs — they already ask the server, and the server already answers
+   needsConnect — so there's nothing extra to call. Cached per rep so it paints instantly on load
+   instead of flickering "unknown" for the two seconds the first sync takes. */
+let GMAIL_OK=null;                                  // null = haven't heard from the server yet
+function gmailFlagKey(){ return 'shipday_gmail_ok::'+String(senderName()||myRep()||'').toLowerCase(); }
+function loadGmailFlag(){ try{ const v=localStorage.getItem(gmailFlagKey()); return v===null?null:(v==='1'); }catch(e){ return null; } }
+function setGmailOk(ok){
+  GMAIL_OK=!!ok;
+  try{ localStorage.setItem(gmailFlagKey(),ok?'1':'0'); }catch(e){}
+  try{ renderGmailChip(); renderGmailBox(); }catch(e){}
+}
+function renderGmailChip(){ const b=el('gmail-chip'); if(!b) return;
+  if(GMAIL_OK===null) GMAIL_OK=loadGmailFlag();
+  // Only ever shown when we KNOW it's disconnected. Nagging someone we haven't checked yet is
+  // worse than saying nothing.
+  if(GMAIL_OK===false){ b.style.display=''; b.innerHTML='🔗 <b style="color:var(--hot)">Connect Gmail</b>'; }
+  else b.style.display='none';
+}
+function renderGmailBox(){ const g=el('gbox'); if(!g) return;
+  if(GMAIL_OK===null) GMAIL_OK=loadGmailFlag();
+  const who=esc(senderName()||myRep()||'you');
+  if(GMAIL_OK===true){
+    g.innerHTML='<div style="padding:8px 10px;border:1px solid var(--line);border-radius:7px;font-size:11px;line-height:1.6;margin-bottom:8px">'+
+      '<b style="color:var(--good,#3ba55d)">✅ Gmail &amp; Calendar connected</b><br>'+
+      '<span style="color:var(--mut)">Sending as <b>'+who+'</b>. Replies, opens and meetings all come from your own account.</span></div>'+
+      '<button class="btn sm gh" style="width:100%" onclick="connectGmail()">Reconnect / switch account</button>';
+  } else if(GMAIL_OK===false){
+    g.innerHTML='<div style="padding:8px 10px;border:1px solid var(--hot);border-radius:7px;font-size:11px;line-height:1.6;margin-bottom:8px">'+
+      '<b style="color:var(--hot)">⚠ Not connected</b><br>'+
+      '<span style="color:var(--mut)">Until you link it, you can\'t send email or book demos from the CRM, and Today stays empty.</span></div>'+
+      '<button class="btn sm" style="width:100%" onclick="connectGmail()">🔗 Connect Gmail &amp; Calendar</button>';
+  } else {
+    g.innerHTML='<button class="btn sm" style="width:100%" onclick="connectGmail()">🔗 Connect Gmail &amp; Calendar</button>'+
+      '<div class="tsub" style="margin-top:6px;font-size:10px;line-height:1.4">One click, signs you in with Google. Your own inbox and calendar — never anyone else\'s.</div>';
+  }
+}
 function bookMenu(){
   const list=myBooks(), cur=myBook();
   let g=el('bookgate'); if(!g){ g=document.createElement('div'); g.id='bookgate'; document.body.appendChild(g); }
@@ -4149,7 +4193,14 @@ function connectGmail(){
   if(!rep || rep==='Saad'){ if(!confirm('You\'re signed in as "'+rep+'". Connect Gmail for this name?\n\nTip: use “change” first if this isn\'t you.')){ return; } }
   const u=SYNC_FN+'/gmail-oauth?rep='+encodeURIComponent(rep);
   window.open(u,'_blank','noopener');
-  toast('Opening Google sign-in for '+rep+' — click Allow, then come back.');
+  toast('Opening Google sign-in for '+rep+' — click Allow, then come back to this tab.');
+  // Confirm it for them when they switch back. Otherwise the only way to find out whether Google
+  // actually saved the connection is to try to send an email and see if it fails.
+  const back=()=>{ window.removeEventListener('focus',back);
+    setTimeout(async()=>{ try{ await syncGmail(true);
+      toast(GMAIL_OK?('✅ Gmail & Calendar connected as '+rep):'Still not connected — try again, and make sure you click Allow');
+      renderActive(); }catch(e){} },1500); };
+  window.addEventListener('focus',back);
 }
 // ===== Native send: fire the current sequence step from YOUR Gmail (gmail-send edge fn) with a
 // tracking pixel, then advance the cadence exactly like a manual "Log sent". Reply-type steps
@@ -4178,8 +4229,8 @@ async function sendSeqEmail(id){
     // No mailbox connected for this rep. The server used to fall back to the original owner's
     // Gmail, which sent prospecting from the wrong address and buried the replies in the wrong
     // inbox; it now refuses. Point them at the one-click fix instead of a raw error.
-    if(d&&d.needsConnect){ setSync&&setSync('err','Not connected');
-      toast('No Gmail connected for '+esc(by||'you')+' — click “🔗 connect Gmail” just above, then send again'); return; }
+    if(d&&d.needsConnect){ setGmailOk(false); setSync&&setSync('err','Not connected');
+      toast('No Gmail connected for '+esc(by||'you')+' — click “🔗 Connect Gmail” in the top bar, then send again'); return; }
     if((!r.ok||!d.ok) && isReply && (s.threadId||s.lastMsgId) && /not\s*found|404/i.test(JSON.stringify(d||''))){
       s.threadId=''; s.lastMsgId='';           // dead thread (wrong mailbox / deleted) — forget it and retry unthreaded
       r=await post(false); d=await r.json();
