@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z134';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z135';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2939,7 +2939,13 @@ function cmWhenBar(c){
   // Confirmation line so the rep can see the committed time before saving.
   let note='';
   if(cmSel.req==='at'&&cmSel.at) note='<div class="cm-sub" style="margin:6px 0 0;color:var(--won)">📌 Calling back '+esc(fmtWhenAt(cmSel.at))+' — exact time, and a task lands on your dashboard.</div>';
-  else if(w) note='<div class="cm-sub" style="margin:6px 0 0">Found “'+esc(w.label)+'” in your note — tap it to lock that exact time.</div>';
+  else if(cmSel.req==='none') note='<div class="cm-sub" style="margin:6px 0 0">No call-back — they drop out of the queue.</div>';
+  else { // The buttons are windows, not times. Print where this one really lands.
+    const t=reqLandsAt(cmSel.req,c);
+    if(t) note='<div class="cm-sub" style="margin:6px 0 0">📞 Back in your queue <b>'+esc(fmtWhenAt(t))+'</b>'+
+      ((+c.callCount||0)>=2?' — spaced out, that\'s attempt '+((+c.callCount||0)+1):'')+'</div>';
+  }
+  if(!note&&w) note='<div class="cm-sub" style="margin:6px 0 0">Found “'+esc(w.label)+'” in your note — tap it to lock that exact time.</div>';
   return '<div class="cm-reqs">'+reqBtns+extra+'</div>'+pick+note;
 }
 function cmRefreshWhen(){ const b=el('cmWhenBar'); const c=contact(callModalId); if(b&&c) b.innerHTML=cmWhenBar(c); }
@@ -2997,7 +3003,7 @@ function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;
   const d=DISPO_BY[k];
   if(d&&d.gone){ cmSel.req='none'; cmSel.at=0; cmSel.showPick=false; }
   else if(cmSel.req==='at'&&cmSel.at>Date.now()){ /* keep the promised time */ }
-  else if(d) cmSel.req=d.req||cmSel.req||'none';
+  else if(d) cmSel.req=suggestReq(d,contact(callModalId))||cmSel.req||'none';
   renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
 function cmPickReq(k){ cmSyncNote(); cmSel.req=k; if(k!=='at'){ cmSel.at=0; cmSel.showPick=false; } cmRefreshWhen(); }
 function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
@@ -3121,8 +3127,11 @@ const _HR=36e5, _DAY=864e5;
 const DISPOS=[
   {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot',  pri:1, deal:'Follow Up'},
   {k:'callback',   t:'↩ Callback set',       req:'1d',  w:'Hot',  pri:1},
-  {k:'lvm',        t:'📩 Left voicemail',     req:'4h',           pri:1},
-  {k:'noanswer',   t:'📵 No answer',          req:'4h',           pri:1},
+  // Nobody picked up: calling back 4h later hits the SAME kind of moment — a 2pm dial comes back
+  // at 6pm, dead in dinner rush. Next day rotates you into a different part of their day, which is
+  // the only thing that actually changes the odds. 4h is still one click away in the picker.
+  {k:'lvm',        t:'📩 Left voicemail',     req:'2d',           pri:1},
+  {k:'noanswer',   t:'📵 No answer',          req:'1d',           pri:1},
   {k:'gatekeeper', t:'🛡 Gatekeeper',         req:'1d',           pri:1},
   {k:'wrongtime',  t:'🕒 Not a good time',    req:'1w',  w:'Warm', pri:1},
   {k:'thinking',   t:'🤔 Thinking it over',   req:'1w',  w:'Warm'},
@@ -3263,14 +3272,20 @@ function isGoodCallTime(d){ return callQuality(d).w>=0.55; }
 function nextGoodCallTime(from,avoid){
   const start=new Date(+from||Date.now());
   const good=CALL_BANDS.filter(b=>b.w>=0.8);
+  // Only dodge the failed band on the day the call actually happened. It used to key off `start`,
+  // which is already pushed forward by the chosen window — so a Wednesday no-answer refused
+  // Thursday afternoon too and "In a day" quietly became Friday.
+  const today=new Date().toDateString();
   for(let day=0;day<14;day++){
     const d=new Date(start); d.setDate(d.getDate()+day);
     if(CALL_DOW[d.getDay()]<0.6) continue;                 // skip Sun (and thin Sat)
     for(const b of good){
-      if(day===0&&avoid&&b.k===avoid) continue;            // rotate off the failed band
       const t=new Date(d); t.setHours(Math.floor(b.s),Math.round((b.s%1)*60),0,0);
-      if(day===0&&b.k===avoid) continue;
-      if(t.getTime()>+start+5*6e4) return t.getTime();     // must be at least 5m out
+      if(avoid&&b.k===avoid&&t.toDateString()===today) continue;   // rotate off the failed band
+      // First good band on or after the target DAY. Requiring a slot later than the target
+      // clock time threw the whole morning away — "in a day" from a 2:40pm call couldn't use
+      // tomorrow 9:30 and slid to the day after. The only hard floor is that it's still ahead.
+      if(t.getTime()>Date.now()+5*6e4) return t.getTime();
     }
   }
   return (+from||Date.now())+_DAY;
@@ -3281,6 +3296,26 @@ function attemptLadder(ms,attempts){
   const n=Math.max(0,+attempts||0);
   const mult=n<=1?1:n===2?1.5:n===3?2.5:n===4?4:6;
   return Math.round(ms*mult);
+}
+/* Where a call-back window ACTUALLY lands. applyDispo already widens the gap per attempt and
+   rotates into a real calling window, so "In 4 hours" was never 4 hours — pick it at 2pm and you
+   land tomorrow morning. The button lied, and there was no line showing the truth. Same maths,
+   read-only, so the modal can print the real time before you commit. */
+function reqLandsAt(reqKey,c){
+  const rq=REQUEUE_BY[reqKey]; if(!rq||rq.ms<0) return 0;
+  if(rq.ms===0) return Date.now();
+  const ladder=attemptLadder(rq.ms,((+((c||{}).callCount)||0)+1));
+  return nextGoodCallTime(Date.now()+ladder,callBand(new Date()).k);
+}
+/* A no-answer on a lead who opened your email this morning is not the same as a no-answer on row
+   4,000 of a cold list, and it shouldn't get the same call-back. Hot = try again today; everyone
+   else = tomorrow, because a same-day retry just burns the number. Any button still overrides. */
+function suggestReq(d,c){
+  if(!d) return 'none';
+  if(d.k!=='noanswer'&&d.k!=='lvm') return d.req||'none';
+  const hot=c&&(c.warmth==='Hot'||(Date.now()-lastOpenTs(c)<2*_DAY)||(Date.now()-(+c.lastReplyTs||0)<2*_DAY));
+  if(!hot) return d.req||'none';
+  return d.k==='lvm'?'1d':'4h';
 }
 function dtLocal(ts){ const d=new Date(+ts||Date.now()); const p=n=>(n<10?'0':'')+n;
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
