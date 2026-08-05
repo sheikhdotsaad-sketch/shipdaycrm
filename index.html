@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z137';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z138';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -852,7 +852,30 @@ function assignPicker(setter,cur){ return '<select onchange="'+setter+'"><option
 function setAssignee(ent,id,v){ if(v==='__add'){ const n=(prompt('Teammate name (SDR, AE, etc.):','')||'').trim(); if(n){ if(!team().includes(n)) team().push(n); v=n; } else v=''; }
   const rec= ent==='c'?contact(id):ent==='a'?acct(id):ent==='t'?tasks().find(t=>t.id===id):deal(id); if(!rec) return; rec.assignee=v; stampU(rec); save(); renderActive();
   if(drawerOpen()){ if(ent==='c')openContact(id); else if(ent==='a')openAccount(id); else if(ent==='d')openDeal(id); } }
-const cname=c=>c?((c.first||'')+' '+(c.last||'')).trim()||'(no name)':'—';
+/* A CSV import with an email but no name used to shove the bit before the @ into the FIRST NAME
+   field — that's where "Doublebarrelbng", "Sabacolumbus", "Compadresgrillohio", "Cardinalpizzashop"
+   came from. They read as people and they're businesses, and the row tells you nothing you can act
+   on. Detect it (first name is literally the email handle, no last name, too long to be a real
+   first name) and show something honest instead: the restaurant if we have one, otherwise the
+   address itself. Length guard is deliberate — "Laura", "Chef", "Mtrue", "Rpavuk" match their
+   handle too and those are worth keeping, so only 7+ characters counts as a handle. */
+function isHandleName(c){ if(!c||c.last||!c.email||!c.first) return false;
+  // Strip digits off the handle before comparing — dosakitchen23@gmail.com stores "Dosakitchen",
+  // which isn't a literal match and slipped through as a person.
+  const loc=(String(c.email).split('@')[0]||'').replace(/\d+/g,'');
+  return loc.length>=7 && _dnorm(c.first).replace(/\d+/g,'')===_dnorm(loc); }
+/* "james.schindler" and "rob_stanovsek" ARE names, just punctuated — title-case those rather than
+   throwing them away. A single unbroken blob has no reliable word boundaries, so don't guess. */
+function unHandle(loc){ const s=String(loc||'').replace(/\d+/g,'');
+  if(!/[._-]/.test(s)) return '';
+  const w=s.split(/[._-]+/).filter(x=>x.length>1);
+  return w.length>=2&&w.length<=3?w.map(x=>x[0].toUpperCase()+x.slice(1)).join(' '):''; }
+const cname=c=>{ if(!c) return '—';
+  let n=((c.first||'')+' '+(c.last||'')).trim();
+  if(isHandleName(c)) n=unHandle(String(c.email).split('@')[0])||'';   // "james.schindler" survives as a name
+  if(!n){ const a=(typeof acct==='function')?acct(c.accountId):null;
+    n=(a&&a.name)||c.email||''; }
+  return n||'(no name)'; };
 const aname=a=>a?a.name:'—';
 
 /* ====================== SAVE / BACKUP / SYNC ====================== */
@@ -7079,7 +7102,10 @@ function emailIndex(){ const m={}; contacts().forEach(c=>{ altAddrs(c).forEach(e
 function ensureCallContact(n){ const aid=newAccount(fmtPhone10(n)); const cid=uid('c');
   store.contacts[cid]={id:cid,accountId:aid,first:'Main',last:'Line',title:'',email:'',phone:'+1'+n,warmth:'Warm',status:'New',source:'CSV import',log:[]}; return cid; }
 function ensureEmailContact(email){ const aid=newAccount(email.split('@')[1]||'Imported'); const cid=uid('c');
-  store.contacts[cid]={id:cid,accountId:aid,first:email.split('@')[0],last:'',title:'',email:email,warmth:'Warm',status:'New',source:'CSV import',log:[]};
+  // Was `first: email.split('@')[0]` — that is what filled the book with fake people called
+  // "Doublebarrelbng". Only keep it if it actually parses as a name; otherwise leave it blank and
+  // let cname() show the restaurant or the address.
+  store.contacts[cid]={id:cid,accountId:aid,first:unHandle(email.split('@')[0]),last:'',title:'',email:email,warmth:'Warm',status:'New',source:'CSV import',log:[]};
   if(isInternalEmail(email)) store.contacts[cid].internal=true;   // colleague on our own domain
   return cid; }
 function findAccountByName(name){ const key=_dnorm(name); if(!key)return null;
@@ -7109,7 +7135,7 @@ function resolveEmailContact(email,company){
     const blank=kids.find(c=>!c.email);                            // 2) attach onto phone-only contact (e.g. Main Line)
     if(blank){ blank.email=em; if(isInternalEmail(em))blank.internal=true; return blank.id; }
     const cid=uid('c');                                            // 3) sibling email contact under the right account
-    store.contacts[cid]={id:cid,accountId:aid,first:em.split('@')[0],last:'',title:'',email:em,warmth:'Warm',status:'New',source:'CSV import',log:[]};
+    store.contacts[cid]={id:cid,accountId:aid,first:unHandle(em.split('@')[0]),last:'',title:'',email:em,warmth:'Warm',status:'New',source:'CSV import',log:[]};
     if(isInternalEmail(em)) store.contacts[cid].internal=true;
     return cid; }
   return ensureEmailContact(em);                                   // 4) no company match → domain fallback
