@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug6·z140';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug6·z141';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -654,8 +654,19 @@ const BOOK_SPLIT = Object.keys(BOOK_MEMBERS).length>0;
    book, because they have to be readable at parse time — before any sign-in resolves and before
    a single byte comes down from the cloud — so the right local cache can be opened straight away
    (see lsKey below). */
-function bookPref(){ try{ return localStorage.getItem('shipday_book_pref')||''; }catch(e){ return ''; } }
-function bookEmail(){ try{ return localStorage.getItem('shipday_book_email')||''; }catch(e){ return ''; } }
+function bookPref(){
+  // The URL wins. switchBook navigates with ?book=… rather than trusting localStorage alone,
+  // because a full territory is a couple of megabytes and localStorage DOES hit its quota on a big
+  // book — at which point the preference write throws, the reload lands back where it started, and
+  // the switch looks like it simply doesn't work. A query string can't fill up.
+  try{ const q=new URLSearchParams(location.search).get('book'); if(q) return q; }catch(e){}
+  try{ return localStorage.getItem('shipday_book_pref')||''; }catch(e){ return ''; }
+}
+let ME_EMAIL='';   // held in memory as well as storage, for the same quota reason
+function bookEmail(){
+  if(ME_EMAIL) return ME_EMAIL;
+  try{ return localStorage.getItem('shipday_book_email')||''; }catch(e){ return ''; }
+}
 function savedBookRow(){ try{ return localStorage.getItem('shipday_book_row')||SHARED_BOOK; }catch(e){ return SHARED_BOOK; } }
 function bookRowFor(user){
   if(!BOOK_SPLIT) return SHARED_BOOK;
@@ -7418,8 +7429,13 @@ function useBook(user){
   const row=bookRowFor(user);
   const em=String((user&&user.email)||'').toLowerCase().trim();
   TEAM.row=row;
+  if(em) ME_EMAIL=em;
   // Remember who and where, so the next page load opens the right cache before auth resolves.
-  try{ localStorage.setItem('shipday_book_row',row); if(em) localStorage.setItem('shipday_book_email',em); }catch(e){}
+  // Separate try blocks on purpose: if storage is full, failing to save the row must not also lose
+  // the email — that's what decides how many territories the switcher offers you.
+  try{ localStorage.setItem('shipday_book_row',row); }catch(e){}
+  try{ if(em) localStorage.setItem('shipday_book_email',em); }catch(e){}
+  try{ if(BOOK_MEMBERS[em]) localStorage.setItem('shipday_book_pref',row); }catch(e){}
   // store was loaded at parse time from whatever book this browser used last. If sign-in resolves
   // to a different one, re-open from that book's cache instead — never carry the old book's
   // records across, because the first autosave would write them into the new row.
@@ -7434,11 +7450,23 @@ function useBook(user){
    lose to a UI click), then reloads — a reload is the honest way to do this, because half the app
    holds derived state that was built for the old book. */
 async function switchBook(row){
-  if(row===myBook()) return;
+  const g=el('bookgate');
+  if(row===myBook()){ if(g) g.style.display='none'; return; }   // clicking the one you're in should close, not sit there
   if(!myBooks().includes(row)){ toast("You don't have access to that book"); return; }
-  try{ setSync('busy','Saving before switch…'); await pushCloudNow(); }catch(e){}
+  // Write the destination FIRST. Saving the current book below can take a while on a big
+  // territory, and if that save stalls — or the rep gives up and hits refresh — the switch has to
+  // stick anyway. This one line is what actually moves you; everything after it is just courtesy.
   try{ localStorage.setItem('shipday_book_pref',row); }catch(e){}
-  location.reload();
+  // Say something immediately. Ohio is a couple of megabytes; the old version awaited that upload
+  // with the menu still sitting there unchanged, so a click looked like it had done nothing at all.
+  if(g) g.innerHTML='<div class="gatebox"><h1>Switching to <b>'+esc(bookName(row))+'</b></h1>'+
+    '<p>Saving your current book first — one moment.</p></div>';
+  // Cap the wait. A save that hangs on a bad connection used to mean the reload never fired and
+  // you were simply stuck. After 8 seconds go anyway: the book is safe in this browser and the
+  // next sign-in pushes it.
+  try{ setSync('busy','Saving before switch…');
+       await Promise.race([ pushCloudNow(), new Promise(r=>setTimeout(r,8000)) ]); }catch(e){}
+  location.href=location.pathname+'?book='+encodeURIComponent(row);
 }
 async function doLogin(){
   el('g-err').textContent='';
