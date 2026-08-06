@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z139';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug6·z140';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -635,14 +635,19 @@ const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJI
 const SHARED_BOOK='shipday-team';                    // Ohio — the original row, never renamed
 const BOOKS=[
   { row:'shipday-team',  name:'Ohio',     icon:'🏠' },
-  { row:'book:michigan', name:'Michigan', icon:'🚗' }
+  { row:'book:michigan', name:'Michigan', icon:'🚗' },
+  // David runs his own territories and imports his own account list. Named explicitly rather than
+  // letting bookRowFor() hand him an anonymous 'book:<user-id>' — that would also isolate him, but
+  // the row would be keyed to an id nobody can look up, so it could never be shared with anyone.
+  { row:'book:david',    name:'David',    icon:'🗺️' }
 ];
 /* First book listed is that person's HOME — where they land at sign-in.
-   Aime has exactly one entry on purpose: Michigan is the only book he can reach. */
+   Aime and David have exactly one entry on purpose: that's the only book each can reach. */
 const BOOK_MEMBERS={
   'saad.sheikh@shipday.com': ['shipday-team'],                  // Saad runs Ohio, and only Ohio
   'embert.sy@shipday.com':   ['shipday-team','book:michigan'],  // SDR — dials in both territories
-  'aime.kamana@shipday.com': ['book:michigan']
+  'aime.kamana@shipday.com': ['book:michigan'],
+  'david.umana@shipday.com': ['book:david']                     // own territories, own account list
 };
 const BOOK_SPLIT = Object.keys(BOOK_MEMBERS).length>0;
 /* Which book this browser last chose, and who chose it. Both live in localStorage, not in the
