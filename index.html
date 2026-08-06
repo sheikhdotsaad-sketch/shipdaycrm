@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug6·z141';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug6·z142';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2006,6 +2006,10 @@ function parseDueInput(v){ if(!v) return today0().getTime(); const d=new Date(v+
 // Hartnett" lines on Do Now, so a list of 8 tasks was really 6 calls and the count lied to you.
 function taskKey(t){ return (t.contactId||'')+'|'+(t.accountId||'')+'|'+(t.type||'')+'|'+_dnorm(t.title||''); }
 function addTask(f){ const t=Object.assign({id:uid('t'),type:'call',title:'',due:today0().getTime(),done:false,createdAt:Date.now(),contactId:'',accountId:''},f);
+  // Stamp who made it. Ohio is ONE shared book, so without this an unassigned task shows on every
+  // rep's Do Now — which is why Embert's screen was full of Saad's follow-ups. A task you created
+  // is yours unless you deliberately hand it to someone with the assignee field.
+  if(!t.assignee&&!t.by){ try{ t.by=senderName()||''; }catch(e){} }
   const k=taskKey(t), dup=tasks().find(x=>!x.done&&taskKey(x)===k);
   if(dup){ dup.due=t.due;                                   // the newest promise is the real one
     ['promised','assignee','emailCad','cadStep'].forEach(p=>{ if(t[p]!==undefined&&t[p]!=='') dup[p]=t[p]; });
@@ -2062,7 +2066,7 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
     '<td style="width:26px;text-align:center"><input type="checkbox" '+(t.done?'checked':'')+' onclick="completeTask(\''+t.id+'\')"></td>'+
     '<td><span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span> '+esc(t.title)+
       (lk?'<div class="tsub"><a onclick="'+lk.go+'">'+esc(lk.name)+'</a></div>':'')+
-      (t.assignee?'<div class="tsub">👤 '+esc(t.assignee)+'</div>':'')+'</td>'+
+      (taskOwner(t)?'<div class="tsub">👤 '+esc(taskOwner(t))+'</div>':'')+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+badge+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+
       (tel?'<a class="btn sm gh" href="tel:'+esc(tel)+'">📞</a> ':'')+fireBtn+
@@ -2083,7 +2087,30 @@ function fireToMyHot(cid){ const c=contact(cid); if(!c) return; const me=myRep()
 // on the first name (small team, first names are unique) so ownership matches however it was entered.
 function repCanon(n){ return String(n||'').trim().toLowerCase().split(/\s+/)[0]; }
 function repSame(a,b){ const x=repCanon(a); return !!x && x===repCanon(b); }
-function taskMine(t){ const mr=repCanon((typeof myRep==='function'&&myRep())||''); return !mr || !t.assignee || repCanon(t.assignee)===mr; }
+// Who a task belongs to: whoever it was handed to, else whoever created it.
+function taskOwner(t){ return (t&&(t.assignee||t.by))||''; }
+function taskMine(t){ const mr=repCanon((typeof myRep==='function'&&myRep())||'');
+  const o=repCanon(taskOwner(t));
+  return !mr || !o || o===mr; }      // still no owner at all = genuinely shared, everyone sees it
+// Most recent person who actually did something with this contact — the best evidence of whose
+// task an old unstamped follow-up is.
+function lastLogBy(c){ const lg=(c&&c.log)||[];
+  for(let i=lg.length-1;i>=0;i--){ const b=lg[i]&&lg[i].by; if(b) return String(b); }
+  return ''; }
+/* Every task created before the stamp above existed has no owner, so it shows on everybody's Do
+   Now. Attribute them once from what the linked contact already knows: who started the sequence,
+   who the contact is assigned to, or who last worked them. Anything with no evidence at all stays
+   shared rather than being guessed at — a task nobody can see is worse than one two people see. */
+function claimLegacyTasks(){ let n=0;
+  tasks().forEach(t=>{ if(t.done||t.assignee||t.by) return;
+    const c=t.contactId?contact(t.contactId):null;
+    let own='';
+    if(c){ try{ own=seqOwner(c)||''; }catch(e){}
+           own=own||c.assignee||lastLogBy(c); }
+    if(!own&&t.accountId){ const a=acct(t.accountId); own=(a&&a.assignee)||''; }
+    if(own){ t.by=own; n++; } });
+  if(n){ try{ stampU&&stampU(); }catch(e){} save(); }
+  return n; }
 function openTaskCount(){ return tasks().filter(t=>!t.done&&taskMine(t)).length; }
 let twFilter='all';
 function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
@@ -7508,6 +7535,7 @@ function boot(){
   try{ if(dedupeLogs().recs) save(); }catch(e){}
   try{ hydrateMine(); }catch(e){}   // show YOUR inbox and YOUR calendar, not whoever synced last
   try{ dedupeTasks(); }catch(e){}
+  try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
   try{ ingestMailTracker(); }catch(e){}   // catch up on MailTracker opens already in the mailbox
   try{ runAutoCapture(); }catch(e){}      // file any calendar demo that isn't in the book yet
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
