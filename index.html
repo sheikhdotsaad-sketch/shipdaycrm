@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug5·z138';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug5·z139';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4364,12 +4364,24 @@ function cadNFor(c){ return cadDefFor(c).length; }
 function isCustomCad(){ const c=myCad(); return !!(Array.isArray(c)&&c.length); }
 function cadN(){ return cadDef().length; }
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
-  const _nm=String(cname(c)||'').trim();
   const _junk=s=>{s=String(s||'').trim().toLowerCase();return !s||/^(\(no name\)|unknown|n\/?a|none|no ?name|main ?line|mainline|main|line|front ?desk|front|desk|owner|manager|info|null|undefined|[-—.])$/.test(s);};
-  let fn=(c.first||'').trim(); if(_junk(fn)) fn='';
-  if(!fn && !_junk(_nm)) fn=_nm.split(' ')[0];
+  // A greeting may ONLY use a real human first name. cname() deliberately falls back to the
+  // restaurant or the email address so lists read properly — but "Hi Barrel & Boar," and
+  // "Hi doublebarrelbng@gmail.com," are worse than no name, so that fallback is walled off here:
+  // cname is consulted only when the record actually carries a first/last.
+  let fn=(c.first||'').trim();
+  // "Doublebarrelbng" is the bit before the @, not a person. "james.schindler" IS one — keep it.
+  if(isHandleName(c)) fn=(unHandle(String(c.email||'').split('@')[0])||'').split(' ')[0];
   if(_junk(fn)) fn='';
-  fn=fn||'there'; const an=aname(a);
+  if(!fn && ((c.first||'')+(c.last||'')).trim() && !isHandleName(c)){
+    const _nm=String(cname(c)||'').trim(); if(!_junk(_nm)) fn=_nm.split(' ')[0]; }
+  if(_junk(fn)||/[@\d]/.test(fn)) fn='';     // last resort: never put an address or a number in a greeting
+  fn=fn||'there';
+  // aname() returns an em-dash for a contact with no account — which is fine in a table and awful
+  // in an email: "Quick idea for — deliveries". A junk domain-named account ("gmail.com") is just
+  // as bad. Both fall back to wording that reads normally either way.
+  let an=a?String(a.name||'').trim():'';
+  if(!an||an==='—'||(typeof isJunkDomainAccount==='function'&&a&&isJunkDomainAccount(a))) an='your restaurant';
   const map={ first:fn, first_name:fn, account:an, company:an, rep:senderName(),
     apps:(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats',
     locs:String(acctLocs(a)) };
