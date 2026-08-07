@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z151';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z152';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2158,6 +2158,21 @@ function addTask(f){ const t=Object.assign({id:uid('t'),type:'call',title:'',due
     save(); return dup; }
   tasks().push(t); save(); return t; }
 // One-time cleanup of the copies already sitting in the book. Keeps the soonest due date.
+/* A previous build turned every "✅ Interested" into a Follow Up deal, so the pipeline filled with
+   opportunities Saad never opened ("i never asked for that"). This clears the ones that are provably
+   that machine's work and nothing more: still at Follow Up, still worth $0, no meeting attached, and
+   a history containing only the line the machine wrote. The moment anyone priced it, moved it,
+   booked on it or wrote on it, it's a real deal and we keep it. */
+function clearAutoInterestDeals(){ let n=0;
+  deals().forEach(d=>{
+    if(d.stage!=='Follow Up'||+d.value>0||d.demoDate||d.closedAt) return;
+    const lg=d.log||[]; if(lg.length!==1) return;
+    if(!/^Opened from a call with .* — marked interested$/.test(String(lg[0].txt||''))) return;
+    delete store.deals[d.id]; n++;
+  });
+  if(n) save();
+  return n;
+}
 function dedupeTasks(){ const seen={}, keep=[]; let dropped=0;
   tasks().forEach(t=>{ if(t.done){ keep.push(t); return; }
     const k=taskKey(t), p=seen[k];
@@ -3347,15 +3362,13 @@ function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) r
   }
   // Disposition + notes are purely a warmth signal: they set how hot the lead is; the Hot List re-ranks.
   if(d.w) c.warmth=d.w;
-  // "✅ Interested" used to do nothing but turn the row red — the opportunity existed only in the
-  // rep's head, so it never reached Pipeline and never got forecast. It now opens a real deal at
-  // FOLLOW UP. Deliberately not "Booked Demo": no meeting is set yet and the stage is what the
-  // forecast reads, so calling it a demo would inflate the number. The deal does NOT end the
-  // dialing — demoBooked() only parks a lead once a meeting is actually on the calendar — so the
-  // call-back you just promised still lands in the Hot List. Status goes to Working, not
-  // In Pipeline, for the same reason: In Pipeline is excluded from the queue everywhere.
-  // If this restaurant already has an open deal we leave it alone rather than stacking a second
-  // one on the same account.
+  // A lead you just marked Interested must not still read "Not Interested" from an old pass.
+  // "Working" only — that keeps them in the dialing queue. It is NOT "In Pipeline".
+  if(d.k==='interested'&&!['In Pipeline','Customer'].includes(c.status)) c.status='Working';
+  // NO DISPOSITION OPENS A DEAL ON ITS OWN any more (see DISPOS — none carry `deal`). A pipeline
+  // entry is a commitment the rep makes, not something a dropdown guesses. Deals come from booking
+  // a meeting. The hook stays here in case an outcome ever should create one, and it still refuses
+  // to stack a second deal on an account that already has one open.
   let newDealId=null;
   if(d.deal&&!hasOpenDeal(c)){
     newDealId=uid('d'); const ad=acct(c.accountId);
@@ -3449,7 +3462,11 @@ const _HR=36e5, _DAY=864e5;
 // rest sit behind "More" so Save stays on screen and a dial is 3 clicks, not 3 scrolls.
 // deal = the outcome opens a real opportunity at that stage (see applyDispo).
 const DISPOS=[
-  {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot',  pri:1, deal:'Follow Up'},
+  // "Interested" is a warmth signal, NOT an opportunity. It heats the lead and books the call-back,
+  // and that's all. Saad: "if a dispo is interested it shouldnt automatically go to pipeline /
+  // i never asked for that / maybe meeting booked ya." A deal is created when a MEETING is booked
+  // (📅 Book demo / a calendar event) — the rep decides what's real, the CRM doesn't guess.
+  {k:'interested', t:'✅ Interested',        req:'1d',  w:'Hot',  pri:1},
   {k:'callback',   t:'↩ Callback set',       req:'1d',  w:'Hot',  pri:1},
   // Nobody picked up: calling back 4h later hits the SAME kind of moment — a 2pm dial comes back
   // at 6pm, dead in dinner rush. Next day rotates you into a different part of their day, which is
@@ -7972,6 +7989,7 @@ function boot(){
   try{ hydrateMine(); }catch(e){}   // show YOUR inbox and YOUR calendar, not whoever synced last
   try{ dedupeTasks(); }catch(e){}
   try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
+  try{ clearAutoInterestDeals(); }catch(e){}   // pipeline entries nobody actually opened
   try{ ingestMailTracker(); }catch(e){}   // catch up on MailTracker opens already in the mailbox
   try{ runAutoCapture(); }catch(e){}      // file any calendar demo that isn't in the book yet
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
