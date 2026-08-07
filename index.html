@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug6·z142';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z143';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2800,7 +2800,14 @@ function prefilter(list){ return list.filter(c=>{
   return true; }); }
 const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
-const telNum=c=>{ const p=(c.phone||c.mobile||'').replace(/[^\d+]/g,''); return p; };
+/* The restaurant's main line counts as a phone number. Two thirds of an imported book is a business
+   with nobody named on it yet, and "no number" was really "the number is one level up, on the
+   account" — which is the line an SDR dials anyway, then asks for the owner. */
+const telNum=c=>{ if(!c) return '';
+  let p=(c.phone||c.mobile||'').replace(/[^\d+]/g,'');
+  if(!p&&c.accountId){ const a=(typeof acct==='function')?acct(c.accountId):null;
+    p=String((a&&a.phone)||'').replace(/[^\d+]/g,''); }
+  return p; };
 // ===== Do Not Call (DNC) — number-based compliance registry. Keyed by the last 10 digits of a phone
 // number so ANY contact carrying a flagged number is blocked (business lines are shared across contacts).
 // store.__dnc[key] = {by, at, reason, off?}. off:true = removed (kept as a tombstone for clean merges). =====
@@ -7034,7 +7041,17 @@ function importCSV(text){
     iCui=col('cuisine','food type','category'),iOrd=col('online ordering','ordering link','order link','ordering url','order url','ordering'),
     iAddr=col('address','street'),iDispo=col('call disposition','disposition','dispo'),iNote=col('notes','note'),
     iDel=col('delivery apps','delivery'),iLocs=col('# locs','# locations','locations'),
-    iHours=col('hours'),iParent=col('parent account','brand account','parent brand','parent');
+    iHours=col('hours'),iParent=col('parent account','brand account','parent brand','parent'),
+    // The restaurant's own number, as opposed to a named person's direct line.
+    iAPhone=col('restaurant phone','business phone','company phone','store phone','main line','main phone','account phone');
+  /* A row that lists a restaurant and a phone number but no person used to be thrown away whole —
+     the importer only looked at the phone column inside "if this row has an email or a first name".
+     That is how 1,354 of 2,066 accounts ended up with no way to contact them at all. If nobody is
+     named on the row, the number belongs to the business. */
+  const aPhoneOf=r=>{ const v=(iAPhone>=0?String(r[iAPhone]||'').trim():''); if(v) return v;
+    const person=(iEmail>=0&&String(r[iEmail]||'').trim())||(iFirst>=0&&String(r[iFirst]||'').trim())
+               ||(iName>=0&&String(r[iName]||'').trim());
+    return (!person&&iPhone>=0)?String(r[iPhone]||'').trim():''; };
   // ---- Engagement columns → intent signals (so an imported list shows up in Intent) ----
   const iOpens=col('opens','opened','pixel_visits','pixel visits','email opens'),
     iOpenAt=col('last opened','opened at','last_open','last open'),
@@ -7079,12 +7096,13 @@ function importCSV(text){
     let aid=byName[an.toLowerCase()];
     // "# Locs" > 1 = a multi-location group (sets locType + the # Locations field)
     const locsN=(iLocs>=0?parseInt(String(r[iLocs]||'').replace(/\.0$/,'')):0)||0;
-    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),hours:(iHours>=0?String(r[iHours]||'').trim():''),isCustomer:false};
+    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),phone:aPhoneOf(r),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),hours:(iHours>=0?String(r[iHours]||'').trim():''),isCustomer:false};
       if(locsN>1){ store.accounts[aid].employees=String(locsN); store.accounts[aid].locType='multi'; }
       byName[an.toLowerCase()]=aid; na++; }
     else { // account already in book — fill in blanks only (re-importing an enriched sheet enriches, never clobbers)
       const a0=acct(aid); if(a0){ let f=false; const fill=(k,i)=>{ const v=(i>=0?String(r[i]||''):'').trim(); if(v&&!a0[k]){ a0[k]=v; f=true; } };
         fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel); fill('hours',iHours);
+        const ap=aPhoneOf(r); if(ap&&!a0.phone){ a0.phone=ap; f=true; }   // re-importing the same sheet now backfills the main line
         if(locsN>1&&!a0.employees){ a0.employees=String(locsN); f=true; }
         if(locsN>1&&(!a0.locType||a0.locType==='single')&&!isLocation(a0)){ a0.locType='multi'; f=true; }
         if(f) stampU(a0); } }
