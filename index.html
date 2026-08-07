@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z147';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z148';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -5228,7 +5228,8 @@ function callCard(c,dueN,snoozedN){
     '<button class="btn sm pri" onclick="openCallModal(\''+c.id+'\')">📋 Log outcome & notes</button>'+
     '<button class="btn sm gh" onclick="bookDemo(\''+c.id+'\')">✅ Booked demo</button>'+
     '<button class="btn sm gh" onclick="parkLead(\''+c.id+'\')" title="Not interested right now — park for a month">💤 Not now</button>'+
-    '<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button></div></div>';
+    '<button class="btn sm gh" onclick="dropFromQueue(\''+c.id+'\')">✕ Remove</button>'+
+    '<button class="btn sm gh" onclick="nextLead()" title="Move on without logging anything">Next ▸</button></div></div>';
   return h;
 }
 function recalcQueue(){
@@ -5241,10 +5242,17 @@ function recalcQueue(){
     toast(n?('Queue re-ranked · '+n+' new open/reply'+(n>1?'s':'')):'Queue recalculated · no new signals'); })
    .catch(()=>{ renderHotList(); toast('Queue recalculated'); });
 }
-let pinnedLead=null;  // the Now-up lead, pinned until dispositioned — PERSISTED so following a
-// link (ordering page, Google) that reloads the tab never swaps the call out from under the rep
-try{ pinnedLead=localStorage.getItem('shipday_crm_pin')||null; }catch(e){}
-function setPin(id){ pinnedLead=id||null; try{ if(id)localStorage.setItem('shipday_crm_pin',id); else localStorage.removeItem('shipday_crm_pin'); }catch(e){} }
+let pinnedLead=null, pinnedAt=0;  // the Now-up lead, pinned until YOU finish with them — PERSISTED
+// so following a link (ordering page, Google) that reloads the tab never swaps the call out
+try{ pinnedLead=localStorage.getItem('shipday_crm_pin')||null; pinnedAt=+localStorage.getItem('shipday_crm_pin_at')||0; }catch(e){}
+function setPin(id){ pinnedLead=id||null; pinnedAt=id?Date.now():0;
+  try{ if(id){ localStorage.setItem('shipday_crm_pin',id); localStorage.setItem('shipday_crm_pin_at',String(pinnedAt)); }
+       else { localStorage.removeItem('shipday_crm_pin'); localStorage.removeItem('shipday_crm_pin_at'); } }catch(e){} }
+const PIN_HOLD=3*3600e3;   // one sitting. A pin from yesterday isn't a call in progress.
+// "Next ▸" — the deliberate way to move on when you didn't log anything (wrong number in your
+// hand, changed your mind, just browsing). Without this the only way past a held card would be
+// to disposition a call that never happened.
+function nextLead(){ setPin(null); renderHotList(); }
 function elapsedMMSS(ts){ let s=Math.max(0,Math.floor((Date.now()-(+ts||0))/1000)); const m=Math.floor(s/60); s=s%60; return m+':'+(s<10?'0':'')+s; }
 // "On calls now" — leads a teammate is actively working (claimed, within TTL), hidden from
 // your queue. Rendered into #onCallsBox and re-painted every second so the timers tick live.
@@ -5271,10 +5279,19 @@ function renderHotList(){
   // PIN the Now-up lead: once a lead surfaces to the top it STAYS the top card until
   // you disposition it (dialing lowers its heat, and any re-render — sync echo, claim
   // heartbeat, teammate change — would otherwise swap the card out mid-call). The pin
-  // only releases on setDispo/bookDemo/dropFromQueue, or if the lead drops out of the
-  // due queue entirely (e.g. a teammate claimed/worked it).
+  // releases on setDispo/bookDemo/parkLead/dropFromQueue, or on "Next ▸".
   let cur=null;
-  const pinC=pinnedLead?due.find(c=>c.id===pinnedLead):null;
+  let pinC=pinnedLead?due.find(c=>c.id===pinnedLead):null;
+  /* THE LEAD YOU ARE WORKING MUST NOT VANISH UNDERNEATH YOU.
+     The pin used to hold only while the lead stayed in `due` — so anything that took them out of
+     the due list read as "done, next please". Enrolling someone in a sequence does exactly that:
+     the play books its first call step for tomorrow, the lead stops being due, and the top card
+     jumped to a different person while the drawer was still open on the first one. Same for a task
+     landing on them, a snooze, a re-rank. Saad: "the hot list is leaving before i do anything with
+     the contact drawer / if i put someone in a sequence it already moves on to the next."
+     So the pin now holds the person until YOU finish them, in or out of the queue. A pin older
+     than PIN_HOLD is a different sitting, not a live call, and lets go on its own. */
+  if(!pinC && pinnedLead && Date.now()-pinnedAt<PIN_HOLD) pinC=contact(pinnedLead)||null;
   if(pinC){ cur=pinC; } else { cur=due[0]||null; setPin(cur?cur.id:null); }
   const rest=due.filter(c=>cur&&c.id!==cur.id);
   const me=myRep();
