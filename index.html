@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z146';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z147';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1413,17 +1413,62 @@ function lastEmailBy(c){ const lg=(c&&c.log)||[];
   for(let i=lg.length-1;i>=0;i--){ const l=lg[i];
     if(l&&l.by&&/^(📧 Sent|✉|Email\b)/.test(l.txt||'')) return String(l.by); }
   return ''; }
+/* WHOSE MAILBOX KNOWS THIS PERSON.
+   Every open from here on is stamped at send time, but the book already holds a month of them with
+   no sender on the record at all — and my first cut said "no sender on the record = show it to
+   everyone", which left Embert's bell full of people reading Saad's mail. There IS hard evidence
+   for those, it just isn't on the contact: a read receipt only ever arrives in ONE inbox, and each
+   rep's fetched mail is already filed separately under __gmailBy. An address that appears in one
+   rep's mail and nobody else's is proof of who was emailing them. (The MailTracker notifications
+   sit in that same feed and name the reader outright, so those attribute too.)
+   Built once per sync, not per row — the boxes hold a few hundred messages, not the whole book. */
+let _mbo=null,_mboAt='';
+function mailboxOwners(){
+  const boxes=store.__gmailBy||{};
+  const stamp=Object.keys(boxes).map(k=>k+':'+((boxes[k]&&boxes[k].syncedAt)||0)).join('|');
+  if(_mbo&&_mboAt===stamp) return _mbo;
+  const m={};
+  Object.keys(boxes).forEach(rep=>{
+    ((boxes[rep]||{}).replies||[]).forEach(r=>{
+      const blob=[r.from,r.to,r.subject,r.snippet,r.body].filter(Boolean).join(' ').toLowerCase();
+      (blob.match(_EMAIL_RX)||[]).forEach(e=>{
+        e=e.replace(/[.,;]+$/,'');
+        if(/@shipday\.com$/.test(e)||/mailtracker|@google|calendar|noreply|no-reply/.test(e)) return;
+        (m[e]=m[e]||{})[rep]=1; });
+    });
+  });
+  _mbo=m; _mboAt=stamp; return m;
+}
+// One rep's inbox and no other = that rep. Two mailboxes both know them = no evidence, not a guess.
+function mailboxOwner(c){ const m=mailboxOwners(), reps={};
+  altAddrs(c).forEach(e=>{ Object.keys(m[e]||{}).forEach(r=>{ reps[r]=1; }); });
+  const k=Object.keys(reps); return k.length===1?k[0]:''; }
+/* And when even that comes up empty: hand it to whoever demonstrably does the emailing in this
+   book. Ohio has one person sending sequences and one person dialling, so this is not a coin toss.
+   It self-corrects — every send from here on stamps its own owner, and anything still unattributed
+   falls out of the 30-day window within a month. */
+let _house=null,_houseAt=-1;
+function houseEmailer(){
+  const stamp=+store.__updatedAt||0; if(_house!==null&&_houseAt===stamp) return _house;
+  const tally={};
+  contacts().forEach(c=>{ let o=''; try{ o=seqOwner(c)||''; }catch(e){}
+    o=o||c.openBy||lastEmailBy(c); const k=repCanon(o); if(k) tally[k]=(tally[k]||0)+1; });
+  let best='',n=0; Object.keys(tally).forEach(k=>{ if(tally[k]>n){ n=tally[k]; best=k; } });
+  _house=best; _houseAt=stamp; return best;
+}
 function emailOwner(c){ if(!c) return '';
   // openBy is the authoritative answer and beats every guess below it: a read receipt is only ever
   // learned from ONE rep's mailbox — the one that sent the mail — so the sync that found it stamps
   // itself here. The rest are fallbacks for records that predate the stamp.
   if(c&&c.openBy) return String(c.openBy);
   let o=''; try{ o=seqOwner(c)||''; }catch(e){}
-  return o||c.assignee||lastEmailBy(c)||''; }
+  o=o||c.assignee||lastEmailBy(c);
+  return o||mailboxOwner(c)||''; }
 // Called by the Gmail sync as each open/reply lands: this mailbox sent it, so this rep owns it.
 function stampOpenOwner(c){ if(c&&!c.openBy){ const me=senderName(); if(me) c.openBy=me; } }
 function openMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); if(!me) return true;
-  const o=repCanon(emailOwner(c)); return !o||o===me; }
+  const o=repCanon(emailOwner(c)); if(o) return o===me;
+  const h=houseEmailer(); return !h||h===me; }   // nothing provable → the book's emailer, not everyone
 function sigGroups(){
   // The signal feed is only ever written by a sync that catches an open as it lands, so it
   // knows nothing about opens already sitting in the book — and with auto-refresh off by
