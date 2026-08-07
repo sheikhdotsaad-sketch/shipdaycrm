@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z145';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z146';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1008,10 +1008,31 @@ function subscribeRealtime(row){
                   ||Object.keys(merged.contacts).length!==Object.keys(before.contacts).length
                   ||Object.keys(merged.deals).length!==Object.keys(before.deals).length
                   ||(+merged.__updatedAt> +before.__updatedAt);
-      applyingRemote=true; store=merged; try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){}
+      applyingRemote=true; store=merged;
+      hydrateMine();   // the merge just pulled a teammate's __cal/__gmail in with the book — point these back at YOURS before anything paints
+      try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){}
       if(changed){ if(!drawerOpen()) render(); else { renderStats(); renderCounts(); } }
       applyingRemote=false;
     }).subscribe();
+}
+/* What goes UP to the shared book.
+   `store.__cal` and `store.__gmail` are not data — they are a WINDOW, pointed by hydrateMine() at
+   whichever rep is signed in on this browser. Uploading them put one rep's calendar and inbox into
+   the row every teammate reads, and the two merge paths repainted without re-pointing the window,
+   so Embert's Today showed Saad's meetings and Saad's opens. The real per-rep copies live in
+   __calBy / __gmailBy and travel normally; these two slots must never leave this browser.
+   __cal.reviewed (meeting outcomes) and __cal.auto (what's already been auto-filed) ARE shared
+   judgements about the book, so they stay.
+   __signals (the 🔔 feed) is the same story: it is written by YOUR Gmail sync about YOUR sent mail,
+   and it was one shared 80-slot array, so Embert's bell filled up with people reading Saad's
+   emails — and whoever synced last also pushed everyone else's alerts out of the list. */
+function shareable(s){
+  const out=Object.assign({},s);
+  const cal=s.__cal||{};
+  out.__cal={reviewed:cal.reviewed||{},auto:cal.auto||null};
+  delete out.__gmail;
+  delete out.__signals;
+  return out;
 }
 async function pushCloudNow(){
   if(!syncReady()||!syncPulled) return; const c=syncCfg();
@@ -1027,11 +1048,13 @@ async function pushCloudNow(){
         const grew=Object.keys(merged.accounts).length!==Object.keys(before.accounts).length
                  ||Object.keys(merged.contacts).length!==Object.keys(before.contacts).length
                  ||Object.keys(merged.deals).length!==Object.keys(before.deals).length;
-        store=merged; try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){}
+        store=merged;
+        hydrateMine();   // same as the realtime path — the merge brought a teammate's inbox/calendar in with the book
+        try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){}
         if(grew){ adopted=true; applyingRemote=true; if(!drawerOpen()) render(); else { renderStats(); renderCounts(); } applyingRemote=false; }
       }
     }catch(e){ console.warn('merge-before-push',e); }
-    const {error}=await sb.from('crm_state').upsert({id:c.row,data:store,updated_at:new Date().toISOString()});
+    const {error}=await sb.from('crm_state').upsert({id:c.row,data:shareable(store),updated_at:new Date().toISOString()});
     if(error) throw error; setSync('ok','Synced');
   }catch(e){ console.warn(e); setSync('err','Save failed'); }
 }
@@ -1315,16 +1338,20 @@ function addAltEmail(c,em){ em=String(em||'').toLowerCase().trim(); if(!c||!em||
   return true; }
 function byEmail(){ const m={}; contacts().forEach(c=>{ altAddrs(c).forEach(e=>{ m[e]=c; }); });
   contacts().forEach(c=>{ if(c.email) m[c.email.trim().toLowerCase()]=c; }); return m; }   // primary wins over an alt shared with someone
-function pushSignal(c,kind,ts,src){ store.__signals=Array.isArray(store.__signals)?store.__signals:[];
+/* An alert lands on the bell of the rep whose sync caught it — that is, the rep who sent the mail
+   being opened. This used to be one shared 80-slot array on the shared book, so every rep's bell
+   showed everyone else's read receipts and a busy mailbox pushed the other reps' alerts out. */
+function pushSignal(c,kind,ts,src){ const mine=Array.isArray(store.__signals)?store.__signals:[];
   // dedupe: drop any prior signal for same contact+kind, keep newest on top
-  store.__signals=store.__signals.filter(s=>!(s.cid===c.id&&s.kind===kind));
-  store.__signals.unshift({cid:c.id,kind,ts,src:src||'',name:cname(c),acct:(acct(c.accountId)?acct(c.accountId).name:''),seen:false});
-  store.__signals=store.__signals.slice(0,80); }
+  let out=mine.filter(s=>!(s.cid===c.id&&s.kind===kind));
+  out.unshift({cid:c.id,kind,ts,src:src||'',by:senderName(),name:cname(c),acct:(acct(c.accountId)?acct(c.accountId).name:''),seen:false});
+  out=out.slice(0,80);
+  store.__signals=setBox('signals',out); }
 function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=byEmail(); let n=0; const RECENT=7*864e5;
   list.forEach(u=>{ const c=u.email&&m[String(u.email).trim().toLowerCase()]; if(!c)return; n++;
     if(u.lastContactedTs){ c.lastContactedTs=u.lastContactedTs; c.lastContacted=fmtD(new Date(u.lastContactedTs)); }
-    if(u.lastEmailOpenTs){ const prev=+c.lastEmailOpenTs||0; if(u.lastEmailOpenTs>prev && Date.now()-u.lastEmailOpenTs<RECENT) pushSignal(c,'open',u.lastEmailOpenTs,''); c.lastEmailOpenTs=u.lastEmailOpenTs; }
-    if(u.replied){ const prev=+c.lastReplyTs||0; const ts=u.lastReplyTs||Date.now(); if(ts>prev && Date.now()-ts<RECENT) pushSignal(c,'reply',ts,''); c.lastReplyTs=ts; }
+    if(u.lastEmailOpenTs){ const prev=+c.lastEmailOpenTs||0; if(u.lastEmailOpenTs>prev){ stampOpenOwner(c); if(Date.now()-u.lastEmailOpenTs<RECENT) pushSignal(c,'open',u.lastEmailOpenTs,''); } c.lastEmailOpenTs=u.lastEmailOpenTs; }
+    if(u.replied){ const prev=+c.lastReplyTs||0; const ts=u.lastReplyTs||Date.now(); if(ts>prev){ stampOpenOwner(c); if(Date.now()-ts<RECENT) pushSignal(c,'reply',ts,''); } c.lastReplyTs=ts; }
   }); return n; }
 // Gmail replies used to be shown once on Today and then lost — never written to the record, so
 // they didn't set replied, didn't log, and didn't feed heat/Hot List. Persist each matched reply
@@ -1337,7 +1364,7 @@ function persistReplies(replies){ if(!Array.isArray(replies)||!replies.length)re
     c.log=c.log||[];
     if(c.log.some(l=>l.txt===txt && new Date(+l.ts||0).toDateString()===day)) return;  // already logged this reply today
     c.log.push({ts,txt,sys:true}); if(c.log.length>50){ c.log.sort((a,b)=>(+a.ts||0)-(+b.ts||0)); c.log=c.log.slice(-50); }
-    c.replied=true; if(ts>(+c.lastReplyTs||0))c.lastReplyTs=ts;
+    c.replied=true; stampOpenOwner(c); if(ts>(+c.lastReplyTs||0))c.lastReplyTs=ts;
     if(Date.now()-ts<RECENT_REPLY) pushSignal(c,'reply',ts,'');
     stampU(c); n++; });
   return n; }
@@ -1373,6 +1400,30 @@ function markSignalsSeen(){ (store.__signals||[]).forEach(s=>s.seen=true); save(
 function clearSignals(){ store.__signals=[]; save(); renderActive(); toast('Signals cleared'); }
 // One person per row, newest first — shared by the Today panel and the bell drop-down so the
 // two can never disagree about who's hot.
+/* WHOSE OPEN IS IT?
+   An open is a read receipt on an email somebody SENT. The email itself is personal; the contact
+   record it lands on is shared. So "👀 Opened" and "↩️ Replied" were written onto the shared record
+   with no sender on them, and both the 📬 Opens tab and the 🔔 bell showed every rep the whole
+   team's read receipts — Embert's notifications were full of people reading Saad's mail.
+   Ownership comes from the record itself, cheapest evidence first: the sequence that sent it, who
+   the contact is assigned to, or the last email-sent line in the log that carries a name. A contact
+   with no evidence at all stays visible to everyone — same call as tasks: an alert nobody sees is
+   worse than one two people see. */
+function lastEmailBy(c){ const lg=(c&&c.log)||[];
+  for(let i=lg.length-1;i>=0;i--){ const l=lg[i];
+    if(l&&l.by&&/^(📧 Sent|✉|Email\b)/.test(l.txt||'')) return String(l.by); }
+  return ''; }
+function emailOwner(c){ if(!c) return '';
+  // openBy is the authoritative answer and beats every guess below it: a read receipt is only ever
+  // learned from ONE rep's mailbox — the one that sent the mail — so the sync that found it stamps
+  // itself here. The rest are fallbacks for records that predate the stamp.
+  if(c&&c.openBy) return String(c.openBy);
+  let o=''; try{ o=seqOwner(c)||''; }catch(e){}
+  return o||c.assignee||lastEmailBy(c)||''; }
+// Called by the Gmail sync as each open/reply lands: this mailbox sent it, so this rep owns it.
+function stampOpenOwner(c){ if(c&&!c.openBy){ const me=senderName(); if(me) c.openBy=me; } }
+function openMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); if(!me) return true;
+  const o=repCanon(emailOwner(c)); return !o||o===me; }
 function sigGroups(){
   // The signal feed is only ever written by a sync that catches an open as it lands, so it
   // knows nothing about opens already sitting in the book — and with auto-refresh off by
@@ -1385,10 +1436,11 @@ function sigGroups(){
   // still a person who read your pitch and never heard from you — that's a call worth making,
   // and it's sorted newest-first anyway so today stays on top.
   const WK=30*864e5, now=Date.now();
-  const sig=(store.__signals||[]).filter(s=>now-(+s.ts||0)<WK).slice();
+  const sig=(store.__signals||[]).filter(s=>now-(+s.ts||0)<WK && (!s.by||repSame(s.by,myRep())||!myRep())).slice();
   const known=new Set(sig.map(s=>s.cid));
   contacts().forEach(c=>{
     if(known.has(c.id)) return;                 // the feed already speaks for this person
+    if(!openMine(c)) return;                    // somebody else sent that email — it's their read receipt
     const o=lastOpenTs(c), r=+c.lastReplyTs||0;
     const row={cid:c.id,ts:0,name:cname(c),acct:(acct(c.accountId)||{}).name||'',seen:true};
     if(r&&now-r<WK) sig.push({...row,kind:'reply',ts:r});
@@ -1633,6 +1685,8 @@ function hydrateMine(){
   const g=myBox('gmail'); store.__gmail=g?Object.assign({},g):{syncedAt:0,replies:[]};
   const c=myBox('cal');
   store.__cal=Object.assign({},store.__cal||{},{syncedAt:c?c.syncedAt:0,events:c?(c.events||[]):[]});
+  // The bell too. It's an alert about mail YOU sent, so it belongs to you and to nobody else.
+  store.__signals=myBox('signals')||[];
 }
 function _selfEmail(){ return String(myBox('email')||store.__email||'').toLowerCase().trim(); }
 // Your own company domain (from your rep email) — anyone on it is a colleague, not a lead.
@@ -2539,7 +2593,7 @@ const COL={
   cuisine:{k:'cuisine',t:'Cuisine',val:_acctCuisine},
   email:{k:'email',t:'Email',val:c=>((c.email||'')+' '+(c.email2||'')).trim(),cell:c=>'<span class="tsub">'+esc(c.email||'')+(c.email2?'<br><span style="opacity:.65">'+esc(c.email2)+'</span>':'')+'</span>'},
   phone:{k:'phone',t:'Phone',val:c=>c.phone||c.mobile||'',cell:c=>{ const pd=(c.phone||c.mobile||''), p=telNum(c);
-    return pd?'<a class="callbtn sm" href="tel:'+esc(p)+'" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')" title="Call &amp; log outcome"><span class="ph">📞</span>'+esc(pd)+'</a>':'<span class="tsub">—</span>'; }},
+    return pd?'<a class="callbtn sm" href="tel:'+esc(p)+'" onclick="event.stopPropagation();logCall(\''+c.id+'\')" title="Call &amp; log outcome"><span class="ph">📞</span>'+esc(pd)+'</a>':'<span class="tsub">—</span>'; }},
   mobile:{k:'mobile',t:'Mobile',val:c=>c.mobile||'',cell:c=>'<span class="tsub">'+esc(c.mobile||'')+'</span>'},
   status:{k:'status',t:'Status',val:c=>c.status||'New',cell:c=>'<span class="tag'+(c.status==='Customer'?' cust':'')+'">'+esc(c.status||'New')+'</span>'},
   score:{k:'score',t:'Score',num:true,val:c=>+c.score||0,cell:c=>c.score?esc(c.score):'—'},
@@ -2600,7 +2654,7 @@ function ingestMailTracker(){
       .find(e=>!/@shipday\.com$/i.test(e)&&cmap[e]);
     if(!hit) return;
     const c=cmap[hit], ts=+r.ts||Date.parse(r.date||'')||0;
-    if(ts&&ts>(+c.lastEmailOpenTs||0)){ c.lastEmailOpenTs=ts; try{ stampU(c); }catch(e){} n++; }
+    if(ts&&ts>(+c.lastEmailOpenTs||0)){ c.lastEmailOpenTs=ts; stampOpenOwner(c); try{ stampU(c); }catch(e){} n++; }
   });
   if(n) save();
   return n;
@@ -2879,7 +2933,7 @@ function unmarkDNC(cid){ const c=contact(cid); if(!c) return;
   toast('Removed from Do Not Call'); }
 const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;align-items:center">'+
   (isDNC(r)?'<span class="tag" style="background:#3a1414;color:#f2a3a3" title="Do Not Call — compliance flag. Click Log to view/remove.">🚫 DNC</span>'
-    :(telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>'))+
+    :(telNum(r)?'<a class="callbtn" href="tel:'+esc(telNum(r))+'" onclick="event.stopPropagation();logCall(\''+r.id+'\')"><span class="ph">📞</span>Call</a>':'<span class="tsub">no #</span>'))+
   '<button class="btn sm gh" title="Log call outcome" onclick="event.stopPropagation();openCallModal(\''+r.id+'\')">Log ▾</button>'+
   '<button class="btn sm gh" title="Not interested right now — park for a month" onclick="event.stopPropagation();parkLead(\''+r.id+'\')">💤</button></div>';
 // ===== Call & disposition modal =====
@@ -2919,7 +2973,7 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
     '<div class="cm-head"><div><div class="cm-name">'+esc(cname(c))+'</div><div class="cm-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>'+prior+cmSeqChip(c)+'</div>'+
       '<button class="cm-x" title="Cancel — nothing is logged" onclick="closeCallModal()">✕</button></div>'+dupWarn+clWarn+dncBanner+
     (dnc?'<div style="margin:8px 0"><button class="btn sm" style="background:var(--won);color:#04210f" onclick="unmarkDNC(\''+c.id+'\')" title="Remove this number from the Do Not Call list">✅ Remove from Do Not Call</button></div>'
-      :(p?'<a class="cm-dial" href="tel:'+esc(p)+'">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')
+      :(p?'<a class="cm-dial" href="tel:'+esc(p)+'" onclick="noteDial(\''+c.id+'\')">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')
         )+
     // Quick research right where the dial button is — Google the business while it rings.
     // DNC rides on the end of this row instead of owning a line of its own.
@@ -3226,7 +3280,35 @@ function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) r
       store.__tasks=tasks().filter(t=>!(t.emailCad&&t.contactId===c.id&&(+t.cadStep||0)>seqPrev.n));
       const st=tasks().find(t=>t.emailCad&&t.contactId===c.id&&(+t.cadStep||0)===seqPrev.n); if(st){ st.done=false; st.doneTs=0; } }
     stampU(c); save(); renderActive(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); }); }
-function logCall(cid){ openCallModal(cid); }   // legacy shim: any old dial hook now opens the modal
+/* A DIAL IS AN ATTEMPT.
+   The CRM only ever learned about a call if you came back to the modal and pressed Save. Tap the
+   number, get voicemail, hang up, move to the next row — and nothing was written down. The lead
+   kept its heat, stayed "due", and sat in exactly the same place on the list tomorrow morning.
+   That is why the Hot List kept serving the same faces while 483 numbers in the book had never
+   been rung once: "im literally calling the same people i called yesterday."
+   So the tap itself is now the record. Logging an outcome still overrides everything here — this
+   is the floor, not a replacement for it. */
+function noteDial(cid){ const c=contact(cid); if(!c) return;
+  // One dial, not two: hitting 📞 on the row opens the modal, and the modal has its own Dial
+  // button. Same attempt either way, so a second tap inside two minutes just refreshes the clock.
+  if(Date.now()-(+c.lastDialAt||0) < 2*60000){ c.lastDialAt=Date.now(); save(); return; }
+  c.lastDialAt=Date.now(); c.dialCount=(+c.dialCount||0)+1;
+  try{ stampU(c); }catch(e){}
+  save(); }
+/* How long a number rests before the queue offers it back.
+   Only applies to a dial whose outcome was never logged — the moment you record one, the
+   call-back time you chose governs instead and this steps out of the way. Ringing an unanswered
+   line three mornings running isn't persistence, it's the same dead air three times; spacing the
+   attempts is what raises the connect rate, and it's what lets a day's dialling actually advance
+   through the territory instead of circling the same hundred and fifty people. */
+function dialHold(c){ const d=+c.lastDialAt||0; if(!d) return 0;
+  if((+c.lastContactedTs||0)>=d) return 0;      // you logged this one — your own call-back time wins
+  const n=Math.max(1,+c.dialCount||1);
+  const wait=n<=1?3*_DAY:n===2?6*_DAY:n===3?12*_DAY:21*_DAY;
+  return d+wait; }
+// Has anyone ever actually worked this number? Used by the fresh lane below.
+function dialTouched(c){ return !!(+((c||{}).dialCount)||+((c||{}).callCount)||+((c||{}).lastDialAt)||+((c||{}).lastContactedTs)); }
+function logCall(cid){ noteDial(cid); openCallModal(cid); }   // every 📞 button: record the dial, then offer the outcome form
 function renderLeads(){
   const recs=prefilter(contacts().filter(c=>PROSPECT.includes(c.status||'New')&&!isCustC(c)));
   const t=dataTable('leads',chosenCols('leads'),recs,r=>"openContact('"+r.id+"')",bookCell);
@@ -3765,8 +3847,13 @@ function hotQueue(){ const now=Date.now();
   // cold call again by Thursday. heat() already ranks these at the top (+300), but ranking is
   // useless if the play clock is holding them out of the due list entirely. 24h window, and only
   // if the open is NEWER than our last outreach, so an old open doesn't hold a seat forever.
+  // ...and a dial you never logged an outcome for still counts as a dial. See dialHold(): the
+  // number rests, so tomorrow's list is made of people you haven't rung rather than yesterday's
+  // voicemails. A promised call-back outranks it (they asked you personally), and so does a fresh
+  // open that landed AFTER the dial — reading your email since you rang is a new reason to ring.
   const isDue=c=>{ if(+c.nextCallAt&&+c.nextCallAt>now) return false;
     if(+c.promisedCallAt) return true;
+    if(dialHold(c)>now){ const o=lastOpenTs(c); if(!(o&&o>+c.lastDialAt&&now-o<864e5)) return false; }
     if(+c.emailedByMeAt>=+today0()) return true;
     { const o=lastOpenTs(c); if(o&&now-o<864e5&&o>lastTouchTs(c)) return true; }
     const e=taskIndex()[c.id]; return !(e&&e.callDue>now); };
@@ -3804,6 +3891,30 @@ function hotQueue(){ const now=Date.now();
     .sort((x,y)=>grpLocs(acct(y.accountId))-grpLocs(acct(x.accountId)))
     .slice(0,GRP_LANE)
     .forEach(c=>{ due.push(c); inDue.add(c.id); });
+  /* FRESH LANE — the queue has to reach the book.
+     Heat is built almost entirely out of engagement history, and a lead nobody has spoken to has
+     none, so a purely heat-ranked list barely moves: the same names come back every morning while
+     hundreds of numbers no one has ever rung sit permanently below the cut. Half the seats are
+     reserved for people the team has never dialled, so a day at the phone advances through the
+     territory. They still compete on heat FOR those seats, and they leave the lane the moment
+     they're worked — this front-loads the untouched book, it doesn't shuffle it randomly. */
+  const FRESH_TARGET=Math.round(HOT_CAP*0.5);
+  const freshHave=due.filter(c=>!dialTouched(c)).length;
+  if(freshHave<FRESH_TARGET){
+    const fresh=prefilter(contacts().filter(c=>!inDue.has(c.id)&&!dialTouched(c)&&elig(c)&&isDue(c)))
+      .sort(byHeat).slice(0,FRESH_TARGET-freshHave);
+    if(fresh.length){
+      // If the ranked body already fills the cap, take the room from the bottom of the rows that
+      // have been worked before — never from a promised call-back or a sequence step.
+      const room=HOT_CAP-due.length;
+      if(fresh.length>room){
+        const worked=due.filter(c=>dialTouched(c)&&!+c.promisedCallAt&&!inSeq(c)).sort(byHeat);
+        const cut=new Set(worked.slice(-(fresh.length-room)).map(c=>c.id));
+        due=due.filter(c=>!cut.has(c.id));
+      }
+      fresh.forEach(c=>{ due.push(c); inDue.add(c.id); });
+    }
+  }
   if(due.length<HOT_CAP){                                    // auto-fill to 150 with next-best heat
     const have=inDue;
     const extra=prefilter(contacts().filter(c=>!have.has(c.id)&&elig(c)&&isDue(c))).sort(byHeat);
@@ -4809,6 +4920,9 @@ async function sendSeqEmail(id){
     // freshly-booked next call step file them under tomorrow — see isDue() in hotQueue.
     c.emailedByMeAt=Date.now();
     c.preEmailOutreachTs=preOutreach;
+    // You sent it, so the read receipt that comes back is yours — the most authoritative stamp
+    // there is, taken at the moment of sending rather than guessed at afterwards.
+    c.openBy=senderName();
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
     setSync&&setSync('ok','Sent');
     toast(c.emailSeq.done?('✅ Cadence complete — Email '+n+' sent to '+cname(c)):('✅ Email '+n+' sent to '+cname(c)+' · Email '+(n+1)+' queued'));
@@ -4970,7 +5084,7 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
       if(script) h+='<div class="cadbody">'+esc(script)+'</div>';
       else h+='<div class="tsub" style="margin-top:4px">Dial this contact, then mark the step done to advance the cadence.</div>';
       h+='<div class="logbar" style="margin-top:8px">'+
-         (p?'<a class="btn sm pri" href="tel:'+esc(p)+'" onclick="openCallModal(\''+id+'\')" title="Dial and log the call">📞 Call '+esc(p)+'</a>':'<button class="btn sm gh" onclick="promptDirectLine(\''+id+'\')" title="No number on file — add one">＋ Add direct line</button>')+
+         (p?'<a class="btn sm pri" href="tel:'+esc(p)+'" onclick="logCall(\''+id+'\')" title="Dial and log the call">📞 Call '+esc(p)+'</a>':'<button class="btn sm gh" onclick="promptDirectLine(\''+id+'\')" title="No number on file — add one">＋ Add direct line</button>')+
          '<button class="btn sm '+(p?'gh':'pri')+'" onclick="completeSeqStep(\''+id+'\')" title="Mark this call step done — advances the cadence">✓ Mark done</button>'+
          (n>1?'<button class="btn sm gh" onclick="revertEmailStep(\''+id+'\')" title="Go back a step">↩ Revert step</button>':'')+'</div>';
     } else {
@@ -5061,7 +5175,7 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-bits">'+bits.join(' · ')+'</div>';
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
-  h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="openCallModal(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<button class="btn cc-call gh" onclick="promptDirectLine(\''+c.id+'\')" title="No number on file — add a direct line">＋ Add direct line</button>';
+  h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="logCall(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<button class="btn cc-call gh" onclick="promptDirectLine(\''+c.id+'\')" title="No number on file — add a direct line">＋ Add direct line</button>';
   h+='<button class="btn cc-open" onclick="openContact(\''+c.id+'\')">👤 Open contact ↗</button>';
   h+='</div></div>';
   h+='<div style="padding:0 16px 4px">'+callBrief(c)+'</div>';
@@ -5303,7 +5417,7 @@ function opensReport(){
         '<td class="tsub">'+esc(fmtAgo(g.last))+(g.opens>1?' · <b>×'+g.opens+'</b>':'')+(g.replies?' · ↩️ replied':'')+'</td>'+
         '<td class="tsub">'+(r.sinceCall===null?'never called':(r.sinceCall===0?'today':r.sinceCall+'d ago'))+'</td>'+
         '<td style="text-align:right;white-space:nowrap">'+
-        (r.phone?'<a class="callbtn" href="tel:'+esc(r.phone)+'" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
+        (r.phone?'<a class="callbtn" href="tel:'+esc(r.phone)+'" onclick="event.stopPropagation();logCall(\''+c.id+'\')"><span class="ph">📞</span>Call</a> ':'')+
         '<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ↗</button></td></tr>'; }).join('')+
     '</tbody></table></div>';
   return h;
@@ -6064,7 +6178,7 @@ function openContact(id){
   // Inline call button beside a number: dials that specific line, opens the ONE dispo modal.
   // If a contact has both phone + mobile the SDR can call either; a single outcome (set after
   // the call) logs it and drives the requeue.
-  const callBtn=(num)=> num? (isDNC(c)?'<span class="callbtn sm" style="opacity:.55;cursor:not-allowed;color:var(--lost)" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Do Not Call — dialing blocked">🚫</span>':'<a class="callbtn sm" href="tel:'+esc(num)+'" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Call &amp; log outcome">📞</a>') : '';
+  const callBtn=(num)=> num? (isDNC(c)?'<span class="callbtn sm" style="opacity:.55;cursor:not-allowed;color:var(--lost)" onclick="event.stopPropagation();openCallModal(\''+id+'\')" title="Do Not Call — dialing blocked">🚫</span>':'<a class="callbtn sm" href="tel:'+esc(num)+'" onclick="event.stopPropagation();logCall(\''+id+'\')" title="Call &amp; log outcome">📞</a>') : '';
   const phoneFld=(lab,field,val)=> fld(lab,'<div style="display:flex;gap:6px;align-items:center"><div style="flex:1">'+inp("setC('"+id+"','"+field+"',this.value)",val)+'</div>'+callBtn(val)+'</div>');
   b+='<div class="f2">'+fld('First',inp("setC('"+id+"','first',this.value)",c.first))+fld('Last',inp("setC('"+id+"','last',this.value)",c.last))+'</div>';
   const sp=splitParts(c); if(sp) b+='<div class="tsub" style="margin:-4px 0 10px">Looks like two people — <a style="cursor:pointer;color:var(--sig)" onclick="splitContact(\''+id+'\')">✂️ split into '+esc(sp.a.first)+' + '+esc(sp.b.first)+'</a></div>';
@@ -7546,11 +7660,39 @@ async function gateInit(){
 // Point every cloud read/write at the signed-in person's own book BEFORE boot() pulls anything.
 // Nothing else in the app needs to know: syncCfg() reads TEAM.row, so pull, push, realtime and
 // claims all follow automatically.
+/* Your NAME, from the account you signed in with.
+   Two separate identities existed: the Supabase login (which decides your book) and a name typed
+   into a "who's working in this browser?" gate (which decides whose tasks, opens and calls these
+   are). Nothing tied them together, so a browser that never answered the gate had no name — and
+   every ownership check in the app treats "no name" as "show them everything", which is why the
+   task dashboard was full of somebody else's follow-ups no matter how many times it got scoped.
+   You already proved who you are when you logged in. Take the name from there. */
+const REP_BY_EMAIL={
+  'saad@shipday.com':'Saad Sheikh',
+  'saad.sheikh@shipday.com':'Saad Sheikh',
+  'embert@shipday.com':'Embert Rein Sy',
+  'embert.sy@shipday.com':'Embert Rein Sy',
+  'aime@shipday.com':'Aime',
+  'david.umana@shipday.com':'David Umana',
+};
+function repFromEmail(em){
+  em=String(em||'').toLowerCase().trim(); if(!em) return '';
+  if(REP_BY_EMAIL[em]) return REP_BY_EMAIL[em];
+  return (em.split('@')[0]||'').split(/[._-]+/).filter(Boolean)
+    .map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
+}
 function useBook(user){
   const row=bookRowFor(user);
   const em=String((user&&user.email)||'').toLowerCase().trim();
   TEAM.row=row;
   if(em) ME_EMAIL=em;
+  // Adopt the login's name unless this browser is deliberately signed in as somebody else with the
+  // SAME first name (repCanon) — that's the case the gate is still there for.
+  const want=repFromEmail(em);
+  if(want && !repSame(want,myRep())){
+    try{ localStorage.setItem('shipday_crm_rep',want); }catch(e){}
+    try{ if(!team().includes(want)) team().push(want); }catch(e){}
+  }
   // Remember who and where, so the next page load opens the right cache before auth resolves.
   // Separate try blocks on purpose: if storage is full, failing to save the row must not also lose
   // the email — that's what decides how many territories the switcher offers you.
