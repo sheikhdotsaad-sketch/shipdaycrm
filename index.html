@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z143';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z144';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -847,12 +847,35 @@ const deal   = id=>store.deals[id];
 const accounts=()=>Object.values(store.accounts);
 const contacts=()=>Object.values(store.contacts);
 const deals   =()=>Object.values(store.deals);
-const contactsOf=aid=>contacts().filter(c=>c.accountId===aid);
-const dealsOf   =aid=>deals().filter(d=>d.accountId===aid);
+/* ---- lookup indexes ----
+   These three used to be plain .filter() scans, which is fine once and lethal in a loop. Intent
+   scoring calls contactsOf for every account (2,066 × 1,082 = 2.2 MILLION comparisons, 178ms) and
+   the account tables call childLocs per row (2,066 × 2,066 = 4.3M, 363ms) — and renderCounts()
+   runs intentRows() just to print the number on the Intent pill, on EVERY save. So a single
+   keystroke in a drawer froze the screen for a third of a second. Grouping once first makes the
+   same work 1ms.
+   The cache lives for exactly one turn of the event loop: a render is synchronous, so nothing can
+   change underneath it, and by the time any click or edit runs the index has already been dropped.
+   save() busts it as well, for anything that mutates in a batch and paints later. */
+let _IDX=null;
+function idxBust(){ _IDX=null; }
+function _idx(){
+  if(_IDX) return _IDX;
+  const byA={}, dByA={}, kids={};
+  contacts().forEach(c=>{ const k=c.accountId; if(!k) return; (byA[k]=byA[k]||[]).push(c); });
+  deals().forEach(d=>{ const k=d.accountId; if(!k) return; (dByA[k]=dByA[k]||[]).push(d); });
+  accounts().forEach(a=>{ const k=a.parentId; if(!k) return; (kids[k]=kids[k]||[]).push(a); });
+  _IDX={byA,dByA,kids};
+  Promise.resolve().then(idxBust);
+  return _IDX;
+}
+const EMPTY=[];
+const contactsOf=aid=>_idx().byA[aid]||EMPTY;
+const dealsOf   =aid=>_idx().dByA[aid]||EMPTY;
 /* multi-location: a "multi" account is a brand; its locations are child accounts (parentId set) */
 const isLocation=a=>!!(a&&a.parentId);
 const isBrand=a=>!!(a&&(a.locType==='multi'||childLocs(a.id).length));
-const childLocs =bid=>accounts().filter(a=>a.parentId===bid);
+const childLocs =bid=>_idx().kids[bid]||EMPTY;
 const brandOf   =a=>a&&a.parentId?acct(a.parentId):null;
 /* How many stores this account really covers. A group imported from the market
    research knows its own count (locationCount) long before the individual
@@ -897,15 +920,30 @@ const aname=a=>a?a.name:'—';
 /* ====================== SAVE / BACKUP / SYNC ====================== */
 function save(){
   if(!canSave) return;
+  idxBust();
   store.__updatedAt=Date.now();
   try{ const json=JSON.stringify(store); localStorage.setItem(LS,json); rollingBackup(json); }catch(e){}
   if(!applyingRemote) pushCloud();
 }
-function rollingBackup(json){
+/* A backup every 5 minutes, not one per keystroke.
+   This used to write a SECOND full copy of the book — 1.9MB — on every single save, on top of the
+   main one, and keep five of them. That's 15MB sitting in a store whose quota is about 5–10MB, which
+   is both why saving felt heavy and why the territory switcher's preference write was silently
+   failing. Five snapshots spread over 25 minutes is a far better safety net than five copies of the
+   last twenty seconds anyway. */
+let _lastBak=0;
+function rollingBackup(json,force){
+  if(!force && Date.now()-_lastBak < 5*60000) return;
+  _lastBak=Date.now();
   try{ localStorage.setItem('shipday_crm_bak_'+Date.now(), json);
     const b=Object.keys(localStorage).filter(k=>k.startsWith('shipday_crm_bak_')).sort();
     while(b.length>5) localStorage.removeItem(b.shift());
-  }catch(e){}
+  }catch(e){
+    // Out of room: drop the oldest snapshots and let the next save try again. Never let a failed
+    // backup take the real save down with it.
+    try{ Object.keys(localStorage).filter(k=>k.startsWith('shipday_crm_bak_')).sort().slice(0,3)
+           .forEach(k=>localStorage.removeItem(k)); }catch(e2){}
+  }
 }
 /* Supabase blob sync (model-agnostic, whole store) */
 let sb=null, sbChan=null, pushTimer=null, syncPulled=false, todayCountReady=false;
@@ -1249,7 +1287,12 @@ function activeContacts(){ const s=closedAcctIds(); return contacts().filter(c=>
 let curDrawer=null;
 function drawerOpen(){ return el('drawer').classList.contains('on'); }
 function openDrawer(){ el('scrim').classList.add('on'); el('drawer').classList.add('on'); }
-function closeDrawer(){ el('scrim').classList.remove('on'); el('drawer').classList.remove('on'); curDrawer=null; }
+function closeDrawer(){ el('scrim').classList.remove('on'); el('drawer').classList.remove('on'); curDrawer=null;
+  // Repaint the list HERE rather than after every edit. touch() used to rebuild the whole tab 400ms
+  // after each keystroke, while the drawer was covering it — work nobody could see, on the one screen
+  // where you're actually typing.
+  if(_listStale){ _listStale=false; try{ renderStats(); renderCounts(); renderActive(); }catch(e){} } }
+let _listStale=false;
 function refreshDrawer(){ if(drawerOpen()&&curDrawer) reopenDrawer(curDrawer.ent,curDrawer.id); }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeDrawer(); });
 /* ====================== TODAY (live dashboard) ====================== */
@@ -5861,7 +5904,11 @@ function selN(setter,opts,cur,ph){ return '<select onchange="'+setter+'"><option
 
 /* setters — write field, debounced save, refresh header only (avoid re-render while typing) */
 let saveT;
-function touch(){ clearTimeout(saveT); saveT=setTimeout(()=>{ save(); renderStats(); renderCounts(); renderActive(); },400); }
+function touch(){ clearTimeout(saveT); saveT=setTimeout(()=>{ save();
+  // The drawer covers the list. Repainting behind it costs a couple of hundred milliseconds of
+  // frozen typing for a screen nobody is looking at — closeDrawer() catches up instead.
+  if(drawerOpen()){ _listStale=true; return; }
+  renderStats(); renderCounts(); renderActive(); },400); }
 // Explicit Save: flush pending edits, force an immediate cloud push, confirm it landed on every browser.
 function saveNow(){ clearTimeout(saveT); save(); renderStats(); renderCounts(); renderActive();
   if(syncReady()){ pushCloudNow().then(()=>toast('Saved & synced — visible on every browser')).catch(()=>toast('Saved on this device — cloud sync failed, retrying')); }
