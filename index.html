@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z144';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z145';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3621,7 +3621,32 @@ async function releaseClaim(c){ if(!c||!claimsReady()) return; const r=claimsMap
   // tombstone (at:0) rather than DELETE so anon key never needs delete grants
   try{ await sb.from('crm_state').upsert({id:claimPfx()+c.id,data:{rep:'',at:0,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('releaseClaim',e); }
 }
-function callPriority(c){ return heat(c); }
+/* Emailing is not dialing.
+   heat() treats any outreach as "this lead has just been worked": it withdraws the +300 for
+   "they've read something since you last reached out" (your brand-new email IS now the last
+   reach-out) and applies the full -180 just-worked dampener. Both are right for a lead you emailed
+   last Tuesday and wrong for the one you are looking at right now — sending from the drawer dropped
+   Lambros Paxos from the Now-up card to sixth in the queue, 1083 heat to 603, without anybody
+   dialing him. That is precisely backwards: you send from the queue to warm the line and ring
+   straight after.
+   So for the rest of the day, and only until a real call is logged, put this lead back exactly where
+   it stood a moment before you hit send — no better, no worse. preEmailOutreachTs is that moment,
+   recorded by sendSeqEmail. Tomorrow, or the second you dial, normal ranking resumes. */
+function callPriority(c){
+  const p=heat(c); if(!c) return p;
+  const em=+c.emailedByMeAt||0;
+  if(!(em>=+today0()) || (lastCallTs(c)||0)>=em) return p;
+  const now=Date.now(), pre=+c.preEmailOutreachTs||0, lo=lastOutreachTs(c);
+  let back=0;
+  // the open bonus, but only if it was genuinely theirs before the send and heat() didn't keep it
+  const o=lastOpenTs(c);
+  if(o && o>pre && !(o>lo)) back+=300;
+  // the difference between the dampener they carry now and the one they carried then
+  const penNow=lo?Math.max(0,180-((now-lo)/_DAY)*20):0;
+  const penWas=pre?Math.max(0,180-((now-pre)/_DAY)*20):0;
+  back+=Math.max(0,penNow-penWas);
+  return Math.round(p+back);
+}
 // a "real" phone = at least 10 digits — the call queue only holds people you can actually dial
 const hasRealPhone=c=>((c.phone||'')+' '+(c.mobile||'')).replace(/\D/g,'').length>=10;
 /* ===== DOUBLE-DIAL GUARD ==============================================
@@ -4776,10 +4801,14 @@ async function sendSeqEmail(id){
     if(!r.ok||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
     if(d.threadId) s.threadId=d.threadId;      // remember the thread for the next reply step
     if(d.messageId) s.lastMsgId=d.messageId;
+    // Where this lead stood BEFORE the send — see callPriority(). Captured first because
+    // markEmailStepSent writes the send into the log, and after that there's no way to recover it.
+    const preOutreach=lastOutreachTs(c);
     markEmailStepSent(c,n,by);                  // advances step, closes this task, spawns the next
     // You sent this one by hand, just now. Keep them in today's Hot List instead of letting the
     // freshly-booked next call step file them under tomorrow — see isDue() in hotQueue.
     c.emailedByMeAt=Date.now();
+    c.preEmailOutreachTs=preOutreach;
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
     setSync&&setSync('ok','Sent');
     toast(c.emailSeq.done?('✅ Cadence complete — Email '+n+' sent to '+cname(c)):('✅ Email '+n+' sent to '+cname(c)+' · Email '+(n+1)+' queued'));
