@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z149';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z150';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4686,6 +4686,15 @@ function brandName(a){
   }
   return n.trim()||String((a&&a.name)||'').trim();
 }
+/* The piece brandName trimmed off — the street or the suburb. Still worth SEEING (three High Banks
+   look identical without it); it just shouldn't read like part of the restaurant's name. The drawers
+   and the call card print the brand bold and this greyed out beside it. */
+function acctLoc(a){ const full=String((a&&a.name)||'').trim(), b=brandName(a);
+  if(!full||!b||b===full) return '';
+  const i=full.toLowerCase().indexOf(b.toLowerCase());
+  let rest=i<0?'':full.slice(i+b.length);
+  if(!rest.trim()) rest=full.slice(0,Math.max(0,i));
+  return rest.replace(/^[\s,|(\-–—]+/,'').replace(/[\s,|)\-–—]+$/,'').trim(); }
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
   const _junk=s=>{s=String(s||'').trim().toLowerCase();return !s||/^(\(no name\)|unknown|n\/?a|none|no ?name|main ?line|mainline|main|line|front ?desk|front|desk|owner|manager|info|null|undefined|[-—.])$/.test(s);};
   // A greeting may ONLY use a real human first name. cname() deliberately falls back to the
@@ -5265,7 +5274,7 @@ function callCard(c,dueN,snoozedN){
   let h='<div class="panel callcard"><div class="ph"><h3>🎧 Call Queue · Now up</h3><span class="sub">'+dueN+' due'+(snoozedN?' · '+snoozedN+' scheduled':'')+'</span></div>';
   h+='<div class="cc-body"><div class="cc-main">';
   h+='<div class="cc-name">'+esc(cname(c))+'</div>';
-  h+='<div class="cc-sub">'+esc(c.title||'')+(a?' · '+esc(a.name):'')+'</div>';
+  h+='<div class="cc-sub">'+esc(c.title||'')+(a?' · '+esc(brandName(a)||a.name)+(acctLoc(a)?' <span style="opacity:.5">'+esc(acctLoc(a))+'</span>':''):'')+'</div>';
   h+='<div class="cc-bits">'+bits.join(' · ')+'</div>';
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
@@ -6274,7 +6283,7 @@ function openContact(id){
   const c=contact(id); if(!c)return; const a=acct(c.accountId); curDrawer={ent:'c',id:id};
   el('drawer-head').innerHTML=(a?'<button class="back" title="Back to account: '+esc(a.name)+'" onclick="openAccount(\''+a.id+'\')">‹</button>':'')+
     '<div><div style="font-weight:800;font-size:16px">'+esc(cname(c))+'</div>'+
-    '<div class="tsub">'+esc(c.title||'')+(a?' · <a onclick="event.stopPropagation();openAccount(\''+a.id+'\')">'+esc(a.name)+'</a>':'')+'</div></div>'+
+    '<div class="tsub">'+esc(c.title||'')+(a?' · <a onclick="event.stopPropagation();openAccount(\''+a.id+'\')">'+esc(brandName(a)||a.name)+'</a>'+(acctLoc(a)?' <span style="opacity:.5">'+esc(acctLoc(a))+'</span>':''):'')+'</div></div>'+
     warmBadge(c.warmth)+'<button class="x" onclick="closeDrawer()">×</button>';
   let b='';
   // ---- at-a-glance: tier + both scores + freshness, then the plain-English read ----
@@ -6339,7 +6348,8 @@ function setDaccount(id,v){ const d=deal(id); if(!d)return;
 /* ====================== ACCOUNT DRAWER ====================== */
 function openAccount(id){
   const a=acct(id); if(!a)return; curDrawer={ent:'a',id:id};
-  el('drawer-head').innerHTML='<div><div style="font-weight:800;font-size:16px">'+esc(a.name)+'</div>'+
+  el('drawer-head').innerHTML='<div><div style="font-weight:800;font-size:16px">'+esc(brandName(a)||a.name)+
+    (acctLoc(a)?' <span style="font-weight:600;opacity:.5">'+esc(acctLoc(a))+'</span>':'')+'</div>'+
     '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+'</div></div>'+
     (isBrand(a)?'<span class="tag">🏢 '+childLocs(id).length+' loc</span>':isLocation(a)?'<span class="tag">📍 Location</span>':'')+
     (a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing customer</span>':a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
