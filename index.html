@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z148';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z149';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4637,6 +4637,55 @@ function cadDefFor(c){ const s=c&&c.emailSeq; if(s&&s.seqId){ const q=seqById(s.
 function cadNFor(c){ return cadDefFor(c).length; }
 function isCustomCad(){ const c=myCad(); return !!(Array.isArray(c)&&c.length); }
 function cadN(){ return cadDef().length; }
+/* THE NAME IN THE BOOK IS NOT THE NAME YOU SAY OUT LOUD.
+   Accounts are stored per LOCATION so a rep can tell three High Banks apart, which means the name
+   carries a street or a suburb: "Arch and Eddies - 181 E Main Street", "High Bank Gahanna",
+   "Nocterra Brewing Co. - Powell - 41 Depot St - Powell". Right in a list, wrong in a sentence —
+   "Quick idea for High Bank Gahanna deliveries" is not how anyone refers to their own restaurant.
+   Saad: "they have three locations / but saying high bank gahanna in an eamil ?"
+   This trims the location tail for EMAIL AND CALL SCRIPTS ONLY. The stored name never changes and
+   every screen keeps the detail — you still need it to know which door you're calling.
+   Two conservative signals:
+   • a " - "/" – "/" — "/" | " segment that reads like a street ("181 E Main Street", "Ste 4"), or
+     one that just repeats an earlier segment;
+   • a trailing word that IS this account's own city — authoritative, rather than guessing from a
+     list of suburbs. The first segment is never dropped and the result is never empty. */
+const _STREET_TAIL=/^(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|lane|way|hwy|highway|pkwy|parkway|ct|court|pl|place|cir|circle|ste|suite|unit)\.?$/i;
+function _isStreetish(s){ s=String(s||'').trim(); if(!s) return true;
+  if(/^\d/.test(s)) return true;                                  // "181 E Main Street", "41 Depot St"
+  if(/^(ste|suite|unit|#)\b/i.test(s)) return true;
+  const w=s.split(/\s+/); return _STREET_TAIL.test(w[w.length-1]); }
+function brandName(a){
+  let n=String((a&&a.name)||'').trim(); if(!n) return '';
+  const parts=n.split(/\s[-–—|]\s/).map(s=>s.trim()).filter(Boolean);
+  if(parts.length>1){
+    const seen={},keep=[];
+    parts.forEach((p,i)=>{ const k=p.toLowerCase();
+      if(i&&(_isStreetish(p)||seen[k])) return;                   // never drop the first segment
+      seen[k]=1; keep.push(p); });
+    // Only rewrite if something was actually dropped — otherwise "Ramyun EZ | K-Food Cafe" would
+    // come back as "Ramyun EZ - K-Food Cafe", a change nobody asked for.
+    if(keep.length&&keep.length<parts.length) n=keep.join(' - ');
+  }
+  // Some rows were imported address-FIRST: "2038 Madison Road Che Empanadas OBV". Cut everything up
+  // to and including the street word — but only if a real name is left. "31707 Urban Street Food"
+  // would be gutted down to "Food", so there we just drop the house number and keep the name.
+  if(/^\d/.test(n)){
+    const w=n.split(/\s+/);
+    let si=-1; for(let i=1;i<w.length-1;i++){ if(_STREET_TAIL.test(w[i])){ si=i; break; } }
+    if(si>0&&w.length-si-1>=2) n=w.slice(si+1).join(' ');
+    else if(w.length-1>=2) n=w.slice(1).join(' ');
+  }
+  const city=String((a&&a.city)||'').trim();
+  if(city){
+    const rx=new RegExp('[\\s,(|\\-]+'+city.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\)?$','i');
+    const cut=n.replace(rx,'').replace(/[-–—,(|\s]+$/,'').trim();
+    // "The Casual Pint of Hamilton" is one name, not a name plus a town — a trailing "of"/"at"/"&"
+    // proves the city word was part of the sentence. Leave those alone.
+    if(cut&&cut.toLowerCase()!==city.toLowerCase()&&!/\b(of|at|in|on|by|the|a|an|and|&|de|del|la|le)$/i.test(cut)) n=cut;
+  }
+  return n.trim()||String((a&&a.name)||'').trim();
+}
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
   const _junk=s=>{s=String(s||'').trim().toLowerCase();return !s||/^(\(no name\)|unknown|n\/?a|none|no ?name|main ?line|mainline|main|line|front ?desk|front|desk|owner|manager|info|null|undefined|[-—.])$/.test(s);};
   // A greeting may ONLY use a real human first name. cname() deliberately falls back to the
@@ -4654,7 +4703,7 @@ function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
   // aname() returns an em-dash for a contact with no account — which is fine in a table and awful
   // in an email: "Quick idea for — deliveries". A junk domain-named account ("gmail.com") is just
   // as bad. Both fall back to wording that reads normally either way.
-  let an=a?String(a.name||'').trim():'';
+  let an=a?String(brandName(a)||'').trim():'';
   if(!an||an==='—'||(typeof isJunkDomainAccount==='function'&&a&&isJunkDomainAccount(a))) an='your restaurant';
   const map={ first:fn, first_name:fn, account:an, company:an, rep:senderName(),
     apps:(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats',
