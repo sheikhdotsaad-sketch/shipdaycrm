@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z150';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug7·z151';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2986,7 +2986,14 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
 let callModalId=null, cmSel={dispo:'',req:'none',note:''};
 function openCallModal(cid){ const c=contact(cid); if(!c) return;
-  callModalId=cid; cmSel={dispo:'',req:'none',note:c.callNote||'',at:0,showPick:false,noteWhen:null,more:false,who:false,seq:false,hist:false};
+  // A NEW CALL GETS A NEW NOTE. This box used to open pre-filled with the last call's note, so
+  // every save re-logged the same sentence and the old text sat in the way of the new one. The
+  // previous note is still right there — read-only, above the box — as context, not as a draft.
+  callModalId=cid; cmSel={dispo:'',req:'none',note:'',at:0,showPick:false,noteWhen:null,more:false,who:false,seq:false,hist:false};
+  // ONE THING ON SCREEN AT A TIME. The dispo used to open on top of the contact drawer, so closing
+  // it dropped you back into the drawer and every call became a trip through two layers.
+  // Saad: "i want that dispo to show up… but its too many clicks going back and forth."
+  if(typeof drawerOpen==='function'&&drawerOpen()&&typeof closeDrawer==='function') closeDrawer();
   claimLead(c);  // opening to work the lead locks it to you (no log yet)
   let m=el('callModal'); if(!m){ m=document.createElement('div'); m.id='callModal'; m.className='cmodal-wrap';
     m.addEventListener('click',function(e){ if(e.target===m) closeCallModal(); }); document.body.appendChild(m); }
@@ -3042,7 +3049,8 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
         '<div class="cm-sub" style="margin:0 0 6px">Creates them under '+esc(a?a.name:'this account')+' — your outcome &amp; notes save to them.</div>'
       : '<div style="margin:8px 0 0"><button type="button" class="cm-link" onclick="cmToggleWho()">＋ Someone else answered?</button></div>')+
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
-    '<div class="cm-lbl">Notes</div><textarea id="cmNote" class="cm-note" placeholder="What happened on the call…  (type &quot;call back at 4&quot; and I&#39;ll set it)" oninput="cmNoteInput(this.value)">'+esc(cmSel.note)+'</textarea>'+
+    '<div class="cm-lbl">Notes</div>'+noteCard(lastNote(c)||acctLastNote(a),'Last note')+
+    '<textarea id="cmNote" class="cm-note" placeholder="What happened on the call…  type &quot;call back thursday&quot;, or &quot;bad number 740-577-8688 · restaurant number is 740-577-3048&quot; and I&#39;ll fix the record" oninput="cmNoteInput(this.value)">'+esc(cmSel.note)+'</textarea>'+
     '<div class="cm-lbl">Call back</div><div id="cmWhenBar">'+cmWhenBar(c)+'</div>'+
     '<div class="cm-foot"><button class="btn gh" onclick="closeCallModal()">Cancel</button>'+
       '<button class="btn" onclick="bookDemoFromModal()">✅ Booked demo</button>'+
@@ -3131,6 +3139,68 @@ function cmSeqChip(c){
     (own&&!mine?'<span class="cm-chip" title="This cadence belongs to another rep">👤 '+esc(own)+'</span>':'')+
     '</div>';
 }
+/* ===== SELF-CORRECTING CALL NOTES ==========================================================
+   Saad: "i want to be able to say this as a note, and the crm self correct itself" —
+       this is a bad number +17405778688
+       - this is the restaurant number +17405773048
+       back on thursday
+   The call-back half already worked (parseWhen). This is the phone half. It reads each LINE on its
+   own so "bad" on line 1 can't condemn the number on line 2, and it only ever touches a number the
+   rep gave a verdict on — a number typed with no wording is left exactly where it is. */
+const _NUM_BAD=/\b(bad|wrong|dead|old|former|previous|disconnected?|invalid|fax|no longer|not in service|out of service|doesn'?t work|does not work|don'?t use|no good)\b/i;
+const _NUM_GOOD=/\b(restaurant|store|shop|kitchen|bar|main|office|front|direct|correct|right|new|actual|good|better|works|working|use this|instead|cell|mobile|personal)\b/i;
+const _NUM_CELL=/\b(cell|mobile|personal)\b/i;
+function noteNumFixes(txt){
+  const out={bad:[],good:[]};
+  String(txt||'').split(/\n|;|\s[-–—]\s/).forEach(line=>{
+    const nums=[]; String(line).replace(/\+?\d[\d().\s-]{8,}\d/g,m=>{ const n=norm10(m); if(n&&nums.indexOf(n)<0) nums.push(n); return m; });
+    if(!nums.length) return;
+    const bad=_NUM_BAD.test(line), good=_NUM_GOOD.test(line), cell=_NUM_CELL.test(line);
+    nums.forEach(n=>{ if(bad){ if(out.bad.indexOf(n)<0) out.bad.push(n); } else if(good) out.good.push({n:n,cell:cell}); });
+  });
+  out.good=out.good.filter(g=>out.bad.indexOf(g.n)<0);       // a number can't be both
+  return out;
+}
+// Plain English, shown live under the note, so nothing ever changes behind your back.
+function noteFixLines(c,txt){ const f=noteNumFixes(txt), out=[];
+  f.bad.forEach(n=>{ const w=norm10(c.phone)===n?'direct number':norm10(c.mobile)===n?'mobile':'';
+    out.push(w?('clear '+fmtPhone10(n)+' from '+w):('flag '+fmtPhone10(n)+' as a bad number')); });
+  f.good.forEach(g=>{ if(norm10(g.cell?c.mobile:c.phone)!==g.n)
+    out.push('set '+(g.cell?'mobile':'direct number')+' to '+fmtPhone10(g.n)); });
+  return out; }
+function applyNoteFixes(c,txt){
+  const f=noteNumFixes(txt); if(!f.bad.length&&!f.good.length) return null;
+  const prev={phone:c.phone,mobile:c.mobile,badNums:(c.badNums||[]).slice()}, done=[];
+  f.bad.forEach(n=>{
+    if(norm10(c.phone)===n){ c.phone=''; done.push('🚫 '+fmtPhone10(n)+' removed — bad number'); }
+    if(norm10(c.mobile)===n){ c.mobile=''; done.push('🚫 '+fmtPhone10(n)+' removed — bad number'); }
+    c.badNums=c.badNums||[]; if(c.badNums.indexOf(n)<0) c.badNums.push(n);
+  });
+  f.good.forEach(g=>{ const k=g.cell?'mobile':'phone', other=k==='phone'?'mobile':'phone';
+    if(norm10(c[k])===g.n) return;
+    const had=c[k]; if(had&&!c[other]) c[other]=had;          // the rep named the line; what was there moves over if there's room
+    c[k]=fmtPhone10(g.n);
+    done.push('📞 '+(g.cell?'Mobile':'Direct number')+' set to '+fmtPhone10(g.n)); });
+  if(!done.length) return null;
+  done.forEach(t=>logAuto(c,t)); stampU(c);
+  return {prev:prev,done:done};
+}
+/* The last thing a human actually wrote about this lead — not the automatic "opened a deal"
+   chatter. The next person to pick up the phone should see what the last person learned. */
+function lastNote(ent){ const lg=(ent&&ent.log)||[];
+  for(let i=lg.length-1;i>=0;i--){ const l=lg[i]||{}, t=String(l.txt||'');
+    const m=t.match(/^📝\s*(.+)$/)||t.match(/^☎[^—]*—\s*(.+)$/);
+    if(m&&m[1].trim()) return {txt:m[1].trim(),ts:+l.ts||0,by:l.by||''}; }
+  return null; }
+function acctLastNote(a){ if(!a) return null; let best=null;
+  contacts().filter(c=>c.accountId===a.id).forEach(c=>{ const n=lastNote(c);
+    if(n&&(!best||n.ts>best.ts)){ n.who=cname(c); best=n; } });
+  const own=lastNote(a); if(own&&(!best||own.ts>best.ts)){ own.who=''; best=own; }
+  return best; }
+function noteCard(n,title){ if(!n) return '';
+  return '<div style="margin:10px 0 2px;padding:9px 11px;border:1px solid var(--line);border-left:3px solid var(--sig);border-radius:8px;background:var(--panel2)">'+
+    '<div class="cm-sub" style="margin:0 0 3px">'+esc(title)+(n.who?' · '+esc(n.who):'')+(n.by?' · '+esc(n.by):'')+(n.ts?' · '+esc(fmtAgo(n.ts)):'')+'</div>'+
+    '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">'+esc(n.txt)+'</div></div>'; }
 /* The call-back row. Re-rendered on its own as the rep types, so the textarea
    never loses focus or cursor position mid-sentence. */
 function cmWhenBar(c){
@@ -3166,6 +3236,9 @@ function cmWhenBar(c){
       ((+c.callCount||0)>=2?' — spaced out, that\'s attempt '+((+c.callCount||0)+1):'')+'</div>';
   }
   if(!note&&w) note='<div class="cm-sub" style="margin:6px 0 0">Found “'+esc(w.label)+'” in your note — tap it to lock that exact time.</div>';
+  // Everything the note is about to change to the record, in plain English, before you save it.
+  const fx=noteFixLines(c,cmSel.note||'');
+  if(fx.length) note+='<div class="cm-sub" style="margin:6px 0 0;color:var(--won)">🛠 On save I\'ll '+esc(fx.join(' · '))+'</div>';
   return '<div class="cm-reqs">'+reqBtns+extra+'</div>'+pick+note;
 }
 function cmRefreshWhen(){ const b=el('cmWhenBar'); const c=contact(callModalId); if(b&&c) b.innerHTML=cmWhenBar(c); }
@@ -3229,7 +3302,10 @@ function cmPickReq(k){ cmSyncNote(); cmSel.req=k; if(k!=='at'){ cmSel.at=0; cmSe
 function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
 function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal(); return; }
   cmSyncNote(); if(!cmSel.dispo){ toast('Pick an outcome first'); return; }
-  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req,cmSel.req==='at'?cmSel.at:0); closeCallModal(); }
+  const fx=applyNoteFixes(c,cmSel.note);   // the note fixes the record before the call is filed
+  applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req,cmSel.req==='at'?cmSel.at:0); closeCallModal();
+  if(fx) toast(fx.done.join(' · '),()=>{ c.phone=fx.prev.phone; c.mobile=fx.prev.mobile; c.badNums=fx.prev.badNums;
+    stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
   if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
 // applyDispo = the SINGLE place a call is recorded: bumps call count, stamps last-contacted,
@@ -6383,6 +6459,9 @@ function openAccount(id){
           sel("setTier('"+id+"',this.value)",['A','B','C','D','X'],tk)+
           (a.tierManual?'<span class="tsub" style="font-size:11px">set by you</span>':'')+
         '</div></div></div>'; } }
+  // The last thing anyone learned on the phone, up top — the whole account shares one story, so
+  // whoever calls next starts from what the last caller found out instead of from nothing.
+  b+=noteCard(acctLastNote(a),'Latest note');
   // Customer marker up front — customers stay OUT of the Accounts list (they live on Closed/Live) but still exist
   b+='<div class="f2">'+fld('Name',inp("setA('"+id+"','name',this.value)",a.name))+
      fld('Current customer?',sel("setAcustType('"+id+"',this.value)",['No','Yes — my customer','Existing — not mine'],a.existingCust?'Existing — not mine':a.isCustomer?'Yes — my customer':'No'))+'</div>';
