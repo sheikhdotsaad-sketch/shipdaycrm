@@ -609,7 +609,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug11·z154';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug11·z155';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2175,6 +2175,61 @@ function clearAutoInterestDeals(){ let n=0;
   if(n) save();
   return n;
 }
+/* ===== ORPHANED CONTACTS: people in the book who belong to nobody =====
+   The importer creates a contact from an email row even when nothing on that row names a business,
+   so the contact lands with accountId undefined. cname() then falls back to the raw address and the
+   Account column renders EMPTY — "info@jillysmusicroom.com · (blank)" while "Jilly's Music Room" is
+   sitting in the same book. Measured on the current data: 264 of 1,082 contacts, ~24% of the book.
+   Re-links ONLY on an exact, unambiguous match. Anything that resolves to two or more accounts is
+   left alone on purpose: a WRONG link is worse than a blank cell, because from then on the calls,
+   the notes and the revenue are quietly filed under the wrong restaurant. */
+const _FREEMAIL=/^(gmail|yahoo|hotmail|outlook|aol|icloud|me|msn|comcast|live|proton|protonmail|att|sbcglobal|verizon|ymail|mail|gmx|yandex)\./;
+const _nblob=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'').replace(/^the/,'');
+const _webHost=u=>String(u||'').toLowerCase().trim().replace(/^https?:\/\//,'').replace(/^www\./,'').split(/[\/?#]/)[0];
+function orphanIdx(){ const byWeb={},byName={};
+  accounts().forEach(a=>{ const w=_webHost(a.website); if(w&&w.indexOf('.')>0)(byWeb[w]=byWeb[w]||[]).push(a);
+    const n=_nblob(a.name); if(n.length>=5)(byName[n]=byName[n]||[]).push(a); });
+  return {byWeb,byName,names:Object.keys(byName)}; }
+function acctForOrphan(c,ix){
+  const e=String((c&&c.email)||'').toLowerCase().trim(), at=e.indexOf('@'); if(at<1) return null;
+  const dom=e.slice(at+1), loc=e.slice(0,at); if(dom.indexOf('.')<1) return null;
+  const one=arr=>(arr&&arr.length===1)?arr[0]:null;
+  const pick=(blob,min)=>{ const f=[]; ix.names.forEach(n=>{ if(n===blob||n.indexOf(blob)===0||(blob.indexOf(n)===0&&n.length>=min)) f.push.apply(f,ix.byName[n]); }); return one(f); };
+  if(!_FREEMAIL.test(dom)){
+    const w=one(ix.byWeb[dom]); if(w) return w;              // their own website — strongest evidence there is
+    const blob=_nblob(dom.replace(/\.[a-z.]+$/,'')); if(blob.length<5) return null;
+    return one(ix.byName[blob]) || (blob.length>=8?pick(blob,8):null);
+  }
+  // Freemail: the handle is usually the business ("rudyssmokehouse@gmail.com"). 6+ chars required so
+  // a personal handle like "joe" can't collide with a short account name.
+  const blob=_nblob(loc.replace(/\d+/g,''));
+  return blob.length>=6?pick(blob,6):null;
+}
+/* The near-misses. "ghostpeppercle.com" vs "Ghost Pepper Taqueria & Tequila" is obviously the same
+   restaurant to a human and NOT an exact match to a machine — but so is "goodfellaspizzeria.com" vs
+   "GoodFellas DraftHouse", which might be a different concept entirely. So these are OFFERED, never
+   applied: one click to confirm, and the link is yours, not a guess the CRM made behind your back. */
+let _sugIx=null, _sugN=-1;
+function orphanSuggest(c){
+  if(c&&c.accountId) return null;
+  if(_sugN!==accounts().length){ _sugN=accounts().length;
+    _sugIx=accounts().map(a=>({a,n:_nblob(a.name)})).filter(x=>x.n.length>=10); }
+  const e=String((c&&c.email)||'').toLowerCase(), at=e.indexOf('@'); if(at<1) return null;
+  const dom=e.slice(at+1), loc=e.slice(0,at);
+  const blob=_nblob(_FREEMAIL.test(dom)?loc.replace(/\d+/g,''):dom.replace(/\.[a-z.]+$/,''));
+  if(blob.length<10) return null;
+  const hits=_sugIx.filter(x=>{ let i=0; while(i<x.n.length&&i<blob.length&&x.n[i]===blob[i]) i++; return i>=10; });
+  return hits.length===1?hits[0].a:null;
+}
+function fileUnderAcct(cid,aid){ const c=contact(cid), a=acct(aid); if(!c||!a) return;
+  c.accountId=aid; stampU&&stampU(c); logAuto(c,'🏢 Filed under '+a.name);
+  save(); renderActive(); toast('Filed under '+a.name); }
+function linkOrphanContacts(){ const ix=orphanIdx(); let n=0;
+  contacts().forEach(c=>{ if(c.accountId) return; const a=acctForOrphan(c,ix); if(!a) return;
+    c.accountId=a.id; stampU&&stampU(c);
+    logAuto(c,'🏢 Filed under '+a.name+' — matched on their email address'); n++; });
+  if(n) save();
+  return n; }
 function dedupeTasks(){ const seen={}, keep=[]; let dropped=0;
   tasks().forEach(t=>{ if(t.done){ keep.push(t); return; }
     const k=taskKey(t), p=seen[k];
@@ -6047,6 +6102,13 @@ function setSeqFocus(id){ seqFocus=(seqFocus===id?null:id); seqStepFocus=null; s
 function setSeqStep(id,n){ if(seqFocus===id&&seqStepFocus===n){ seqStepFocus=null; }
   else { seqFocus=id; seqStepFocus=n; } renderSequences(); }
 function toggleSeqSteps(id){ seqStepsOpen[id]=!seqStepsOpen[id]; renderSequences(); }
+/* An empty Account cell reads as "the CRM is broken". It means the contact is attached to no
+   restaurant at all — say that, and show the domain so you can still tell who they are. */
+function noAcctCell(c){
+  const s=orphanSuggest(c);
+  if(s) return '<span style="color:var(--warm)">⚠ no account</span> · <a href="javascript:void(0)" onclick="event.stopPropagation();fileUnderAcct(\''+c.id+'\',\''+s.id+'\')" style="color:var(--acc)" title="File this contact under '+esc(s.name)+'">'+esc(s.name)+'?</a>';
+  const d=emailDomain(c&&c.email), shown=(d&&!_FREEMAIL.test(d))?d:'';
+  return '<span style="color:var(--warm)">⚠ no account</span>'+(shown?' <span style="opacity:.55">'+esc(shown)+'</span>':''); }
 function seqRowHtml(c){
   const s=c.emailSeq||{}; const q=seqById(s.seqId); const N=cadNFor(c); const step=Math.min(Math.max(+s.step||1,1),N);
   const done=!!s.done; const pct=Math.round((done?N:(step-1))/Math.max(N,1)*100);
@@ -6056,7 +6118,7 @@ function seqRowHtml(c){
   const owner=seqStarter(c);
   return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
     '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
-    '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
+    '<td class="tsub">'+(a?esc(aname(a)):noAcctCell(c))+'</td>'+
     '<td>'+(owner?('<span class="tag">'+esc(owner)+'</span>'):'<span class="tsub">—</span>')+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
     '<td>'+(done?'<span class="tag cust">✓ complete</span>':(noun+' '+step+'/'+N+(lbl?' · '+esc(lbl):'')))+'</td>'+
@@ -6067,7 +6129,7 @@ function pausedRowHtml(c){ const s=c.emailSeq||{}; const q=seqById(s.seqId); con
   const meta=seqStepMeta(c);
   return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
     '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
-    '<td class="tsub">'+esc(a?aname(a):'')+'</td>'+
+    '<td class="tsub">'+(a?esc(aname(a)):noAcctCell(c))+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
     '<td><span class="tag" style="background:#3a2f14;color:#e9c46a">⏸ '+esc(meta.label)+'</span></td>'+
     '<td class="tsub">'+esc(seqStarter(c)||'—')+'</td>'+
@@ -7924,6 +7986,9 @@ function importCSV(text){
         const pv=(iPhone>=0?String(r[iPhone]||'').trim():'');
         if(pv&&!a1.phone){ a1.phone=pv; stampU(a1); } } }
   });
+  // A sheet that names a restaurant on one row and only an address on another leaves the second row
+  // orphaned. Heal it here, while the accounts the import just created are fresh.
+  let nlink=0; try{ nlink=linkOrphanContacts(); }catch(e){}
   save(); render();
   // "Imported 0 accounts, 0 contacts" told you nothing. If the sheet landed nothing, say what
   // the top row actually looked like and what one column would fix it.
@@ -7932,7 +7997,7 @@ function importCSV(text){
       rows[0].slice(0,12).map(h=>'  • '+(String(h||'').trim()||'(blank)')).join('\n')+
       '\n\n'+(rows.length-1)+' row'+(rows.length===2?'':'s')+' under it were read but had nothing to file.');
     return; }
-  toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':''));
+  toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':'')+(nlink?' · '+nlink+' filed under a restaurant':''));
 }
 /* ---- Universal CSV importer: auto-detect calls / emails / contacts ---- */
 function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10?d.slice(-10):''; }
@@ -8352,6 +8417,7 @@ function boot(){
   try{ dedupeTasks(); }catch(e){}
   try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
   try{ clearAutoInterestDeals(); }catch(e){}   // pipeline entries nobody actually opened
+  try{ linkOrphanContacts(); }catch(e){}       // contacts the importer left with no restaurant attached
   try{ ingestMailTracker(); }catch(e){}   // catch up on MailTracker opens already in the mailbox
   try{ runAutoCapture(); }catch(e){}      // file any calendar demo that isn't in the book yet
   buildFilters(); renderStats(); renderCounts(); renderTaskWidget(); renderRepChip();
