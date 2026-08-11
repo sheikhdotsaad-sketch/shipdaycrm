@@ -33,6 +33,7 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cc-note input{width:100%}
 .cc-actions{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:4px}
 .cc-call{font-size:15px;padding:11px 18px;white-space:nowrap}
+.cc-email{margin-top:6px;white-space:nowrap;font-size:13px}
 .cc-open{margin-top:6px;white-space:nowrap;font-size:13px}
 .callbar{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 14px}
 .callbar .callbtn{font-size:14px;padding:10px 16px;white-space:nowrap}
@@ -608,7 +609,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug11·z153';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug11·z154';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2411,6 +2412,82 @@ function todayMeetingsPanel(days){
   h+='</tbody></table></div>';
   return h;
 }
+/* ===== NO-SHOWS: ask for the confirmation the day before =====
+   "people dont show up." A demo booked on a cold call is a promise made days ago by someone who
+   has since had four services and forgotten you exist. The single highest-yield fix is a short
+   note the day before that ASKS FOR A REPLY — it re-consents them, and a "can't make it, how about
+   Thursday" is a rebooked demo instead of an empty Zoom.
+   Deliberately not automatic. An unattended confirmation is just more mail; the reply is the point,
+   so it goes out from the rep, one click, and it's tracked so nobody gets confirmed twice. Never
+   carries an open pixel — this is a 1:1 transactional note and it must look like one. */
+function demoWhen(ts){
+  const dt=new Date(ts), n=new Date(), d0=today0().getTime(), day=Math.floor((new Date(dt).setHours(0,0,0,0)-d0)/864e5);
+  const tm=dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}).toLowerCase().replace(' ','');
+  const w=day===0?'today':day===1?'tomorrow':dt.toLocaleDateString('en-US',{weekday:'long'});
+  return {w,tm,label:w+' at '+tm};
+}
+// Booked, not closed, happening inside the window, with a contact we can actually email.
+function confirmDue(){
+  const now=Date.now(), end=now+48*3600e3;
+  return deals().filter(d=>{
+    if(!d.demoDate||CLOSED.includes(d.stage)) return false;
+    const t=new Date(d.demoDate).getTime(); if(!(t>=now&&t<end)) return false;
+    if(d.confirmSentAt) return false;
+    const c=contact(d.contactId); return !!(c&&c.email&&!undeliverable(c));
+  }).sort((a,b)=>new Date(a.demoDate)-new Date(b.demoDate));
+}
+async function sendDemoConfirm(dealId,quiet){
+  const d=deal(dealId); if(!d) return false;
+  const c=contact(d.contactId);
+  if(!c||!c.email){ if(!quiet) toast('No email on the contact for this demo'); return false; }
+  const blk=sendBlock(c); if(blk){ if(!quiet) toast('⛔ '+blk); return false; }
+  if(!SYNC_FN){ toast('Connect integrations first'); return false; }
+  const a=acct(d.accountId), W=demoWhen(d.demoDate), co=a?(brandName(a)||a.name):'';
+  const first=(c.first||cname(c)||'there').split(' ')[0];
+  const subj='Confirming '+W.w+' at '+W.tm;
+  const body='Hi '+first+',\n\nJust confirming we\'re still good for '+W.label+
+    (co?' to walk through Shipday for '+co:'')+'. It\'ll take about 20 minutes.\n\n'+
+    'Reply "yes" and I\'ll send the link over — or if something\'s come up, give me a day that works better and I\'ll move it, no problem.\n\n'+
+    (repSig?repSig():senderName());
+  if(!quiet && !confirm('Send this confirmation to '+cname(c)+' <'+c.email+'>?\n\nSubject: '+subj)) return false;
+  setSync&&setSync('busy','Sending confirmation…');
+  try{
+    const r=await fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
+      body:JSON.stringify({to:c.email,subject:subj,body:body,cid:c.id,rep:senderName(),html:false,track:false})});
+    const j=await r.json();
+    if(j&&j.needsConnect){ setGmailOk(false); setSync&&setSync('err','Not connected');
+      toast('No Gmail connected for '+esc(senderName())+' — click “🔗 Connect Gmail” in the top bar, then try again'); return false; }
+    if(!r.ok||!j.ok) throw new Error((j&&j.error)||('HTTP '+r.status));
+    d.confirmSentAt=Date.now(); stampU(d);
+    logAuto(d,'📨 Demo confirmation sent for '+W.label);
+    logAuto(c,'📨 Demo confirmation sent for '+W.label);
+    bumpEmail(); save(); setSync&&setSync('ok','Sent');
+    if(!quiet){ renderActive(); toast('Confirmation sent to '+cname(c)); }
+    return true;
+  }catch(e){ setSync&&setSync('err','Send failed'); if(!quiet) toast('Send failed — '+(e.message||e)); return false; }
+}
+async function confirmAllDemos(){
+  const list=confirmDue(); if(!list.length){ toast('Nothing to confirm'); return; }
+  if(!confirm('Send a confirmation to all '+list.length+' upcoming demo'+(list.length>1?'s':'')+'?\n\nEach one asks the prospect to reply — that reply is what stops the no-show.')) return;
+  let n=0; for(const d of list){ if(await sendDemoConfirm(d.id,true)) n++; }
+  renderActive(); toast(n?('📨 '+n+' confirmation'+(n===1?'':'s')+' sent'):'None sent — check Gmail is connected');
+}
+function skipDemoConfirm(dealId){ const d=deal(dealId); if(!d) return;
+  d.confirmSentAt=Date.now(); logAuto(d,'⏭ Demo confirmation skipped'); stampU(d); save(); renderActive(); toast('Skipped'); }
+function confirmDemosPanel(){
+  const list=confirmDue(); if(!list.length) return '';
+  return '<div class="panel" style="border-color:var(--warm)"><div class="ph"><h3>📨 Confirm before they no-show</h3>'+
+    '<span class="sub">'+list.length+' demo'+(list.length>1?'s':'')+' in the next 48h with no confirmation sent — a reply is what makes them show</span>'+
+    (list.length>1?'<button class="btn sm pri" style="margin-left:auto" onclick="confirmAllDemos()">Confirm all '+list.length+'</button>':'')+
+    '</div><table><tbody>'+
+    list.map(d=>{ const c=contact(d.contactId), a=acct(d.accountId), W=demoWhen(d.demoDate);
+      return '<tr><td class="tname" style="cursor:pointer" onclick="openDeal(\''+d.id+'\')">🎬 '+esc(d.name||aname(a))+
+        '<div class="tsub">'+esc(cname(c))+' · '+esc(W.label)+'</div></td>'+
+        '<td style="text-align:right;white-space:nowrap">'+
+        '<button class="btn sm pri" onclick="event.stopPropagation();sendDemoConfirm(\''+d.id+'\')">📨 Confirm</button> '+
+        '<button class="btn sm gh" onclick="event.stopPropagation();skipDemoConfirm(\''+d.id+'\')" title="Already confirmed some other way — stop asking">skip</button></td></tr>'; }).join('')+
+    '</tbody></table></div>';
+}
 // 👥 Team Today scoreboard — compact per-rep calls/emails/demos for the Team view (reuses the
 // same log scan as teamActivityPanel via mergeRepRows).
 function teamTodayPanel(){
@@ -2515,6 +2592,7 @@ function renderToday(){
   // 3) Team scoreboard first when Team view is on, then HERO queue → schedule → replies → signals.
   if(todayView==='team') h+=teamTodayPanel();
   h+=todayQueuePanel();
+  h+=confirmDemosPanel();
   h+=todayMeetingsPanel(todayView==='team'?7:1);
   h+=needsReplyPanel(replies,newInbound);
   h+=autoCapturePanel();
@@ -3423,11 +3501,28 @@ function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) r
    been rung once: "im literally calling the same people i called yesterday."
    So the tap itself is now the record. Logging an outcome still overrides everything here — this
    is the floor, not a replacement for it. */
+/* ===== DAILY ACTIVITY: you cannot run a number you cannot see =====
+   Saad works to 100 dials + 100 emails a day and had no way to know at 11am whether he was on
+   pace. Counting contacts touched today would undercount (two dials to one lead is two attempts,
+   one record), so activity is tallied as it happens instead.
+   Keyed by REP, because this is a personal number and z146's whole lesson was that anything
+   not explicitly scoped leaks across the team. Stored shared-but-keyed rather than in a per-rep
+   box so a manager view stays possible later without another migration. */
+const DAILY_GOAL={dials:100,emails:100};
+function dayKey(ts){ const d=new Date(ts||Date.now());
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function myDay(){ const b=(store.__daily=store.__daily||{}); const rb=b[myRep()||'_']=b[myRep()||'_']||{};
+  // 30 days is plenty for pace and trend, and caps a structure that would otherwise grow forever.
+  const keys=Object.keys(rb); if(keys.length>40) keys.sort().slice(0,keys.length-30).forEach(k=>delete rb[k]);
+  return rb[dayKey()]=rb[dayKey()]||{d:0,e:0}; }
+function bumpDial(){ myDay().d++; }
+function bumpEmail(){ myDay().e++; }
 function noteDial(cid){ const c=contact(cid); if(!c) return;
   // One dial, not two: hitting 📞 on the row opens the modal, and the modal has its own Dial
   // button. Same attempt either way, so a second tap inside two minutes just refreshes the clock.
   if(Date.now()-(+c.lastDialAt||0) < 2*60000){ c.lastDialAt=Date.now(); save(); return; }
   c.lastDialAt=Date.now(); c.dialCount=(+c.dialCount||0)+1;
+  bumpDial();                                  // counted here, inside the dedupe, so it matches real attempts
   try{ stampU(c); }catch(e){}
   save(); }
 /* How long a number rests before the queue offers it back.
@@ -5136,6 +5231,53 @@ function markUndeliverable(c,code,detail){
 function overrideUndeliverable(id){ const c=contact(id); if(!c) return;
   c.emailOverride=true; logAuto(c,'✅ Undeliverable flag overridden by '+(myRep()||'rep'));
   save(); refreshDrawer(); toast('Override on — this address can be emailed again'); }
+function reblockUndeliverable(id){ const c=contact(id); if(!c) return;
+  c.emailOverride=false; logAuto(c,'⛔ Override removed — address blocked again');
+  save(); refreshDrawer(); toast('Blocked again'); }
+/* ===== ONE-TIME SWEEP: find the dead addresses BEFORE they cost you bounces =====
+   Checking at send time protects the future, but the book already holds addresses that will bounce,
+   and every one of those is a mark against the sending domain — which is the thing actually pushing
+   good mail to junk. This walks the DISTINCT domains (≈400 for ~730 addresses, one lookup each,
+   cached a month) and flags the contacts behind any domain that cannot receive mail at all.
+   Nothing is deleted and nobody leaves the call queue — they just stop being emailed. */
+function sweepFlag(cs){ let n=0;
+  cs.forEach(c=>{ if(undeliverable(c)) return; const r=mxGet(emailDomain(c.email));
+    if(r&&(r.code==='NXDOMAIN'||r.code==='NOMX')){ markUndeliverable(c,r.code); n++; } });
+  return n; }
+let mxAuditRunning=false;
+async function auditAddresses(){
+  if(mxAuditRunning){ toast('Audit already running'); return; }
+  const cs=contacts().filter(c=>c.email&&emailDomain(c.email).indexOf('.')>0);
+  const doms=[...new Set(cs.map(c=>emailDomain(c.email)))].filter(d=>!mxGet(d));
+  if(!doms.length){ const n=sweepFlag(cs); if(n) save(); renderActive();
+    toast(n?('⛔ '+n+' undeliverable flagged'):'Every domain is already checked and reachable'); return; }
+  if(!confirm('Check '+doms.length+' email domain'+(doms.length>1?'s':'')+' behind '+cs.length+' contacts?\n\nAsks DNS whether each domain can receive mail at all, and flags the ones that cannot so you stop bouncing on them. Nothing is deleted — flagged contacts stay in the call queue.')) return;
+  mxAuditRunning=true;
+  let done=0; const q=doms.slice();
+  // Six at a time: fast enough to finish in a coffee, gentle enough that the DoH resolvers don't
+  // start rate-limiting us into UNKNOWNs (an UNKNOWN is never cached, so it just wastes the trip).
+  const worker=async()=>{ while(q.length){ const d=q.shift(); await mxVerdict(d,true); done++;
+    if(done%10===0||!q.length) setSync&&setSync('busy','Checking addresses '+done+'/'+doms.length+'…'); } };
+  try{ await Promise.all(Array.from({length:6},worker)); } finally{ mxAuditRunning=false; }
+  const n=sweepFlag(cs); save(); setSync&&setSync('ok','Audit done'); renderActive();
+  toast(n?('⛔ '+n+' undeliverable address'+(n===1?'':'es')+' flagged — they will no longer be emailed'):'✓ All '+cs.length+' addresses have a working mail server');
+}
+// Sequences-tab health strip: how much of the book is emailable, and the one button that finds out.
+function mailHealthHtml(){
+  const cs=contacts().filter(c=>c.email&&emailDomain(c.email).indexOf('.')>0);
+  if(!cs.length) return '';
+  const bad=cs.filter(c=>c.emailBad&&!c.emailOverride).length;
+  const unchecked=[...new Set(cs.map(c=>emailDomain(c.email)))].filter(d=>!mxGet(d)).length;
+  const line = bad
+    ? '⛔ <b>'+bad+'</b> address'+(bad===1?'':'es')+' flagged undeliverable — blocked from sending, so they stop costing you bounces.'
+    : '✓ No known-dead addresses in the book.';
+  const todo = unchecked
+    ? ' <b>'+unchecked+'</b> domain'+(unchecked===1?'':'s')+' not checked yet.'
+    : ' Every domain checked.';
+  return '<div class="panel"><div class="ph"><h3>📮 Deliverability</h3><span class="sub">bounces are what push the rest of your mail to junk — dead addresses get blocked, not deleted</span>'+
+    '<button class="btn sm '+(unchecked?'pri':'gh')+'" style="margin-left:auto" onclick="auditAddresses()" title="Ask DNS which domains can actually receive mail, and flag the ones that cannot">🔎 Audit addresses</button></div>'+
+    '<div style="padding:12px 16px;font-size:13px;line-height:1.5">'+line+todo+'</div></div>';
+}
 // ===== mailer-daemon tells you a MAILBOX is dead; DNS never can =====
 // The reply feed carries only {from,subject,snippet,ts}, and Gmail's snippet is where the failed
 // recipient is named ("Your message wasn't delivered to markg@barrybaegels.com because …"), so the
@@ -5236,6 +5378,7 @@ async function sendSeqEmail(id){
     // You sent it, so the read receipt that comes back is yours — the most authoritative stamp
     // there is, taken at the moment of sending rather than guessed at afterwards.
     c.openBy=senderName();
+    bumpEmail();                                // counts toward today's 100 — see the hot-list scoreboard
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
     setSync&&setSync('ok','Sent');
     toast(c.emailSeq.done?('✅ Cadence complete — Email '+n+' sent to '+cname(c)):('✅ Email '+n+' sent to '+cname(c)+' · Email '+(n+1)+' queued'));
@@ -5473,6 +5616,29 @@ function callBrief(c){ if(!c) return '';
 function showBrief(cid){ const c=contact(cid); const box=el('brief-c'+cid); if(!c||!box) return;
   if(box.style.display==='none'||!box.innerHTML){ box.innerHTML=callBrief(c); box.style.display='block'; }
   else { box.style.display='none'; } }
+/* ===== ONE PASS: email the lead you are already looking at =====
+   The target is 100 dials AND 100 emails, and until now the email half meant leaving the call card,
+   opening the drawer and scrolling to the cadence box. So a no-answer became a dial and nothing
+   else. This sends the lead's next email step from the card itself. It does NOT invent a new send
+   path: it lands the cadence pointer on a real email step and hands off to sendSeqEmail, so the
+   subject confirmation, the undeliverable block, the MX check, the open-tracking rule and the step
+   advance are all exactly the same as sending from the drawer. */
+function emailFromCard(id){
+  const c=contact(id); if(!c) return;
+  if(!c.email){ toast('No email address on this contact'); return; }
+  const blk=sendBlock(c);
+  if(blk){ toast('⛔ '+blk+'. Fix the address, or hit Override on the contact.'); return; }
+  const s0=c.emailSeq;
+  if(!s0||s0.done) startEmailCadence(id,(s0&&s0.seqId)||suggestSeq(c));
+  else if(s0.paused){ s0.paused=false; logAuto(c,'▶ Sequence resumed — emailing from the call queue'); }
+  // A play interleaves call steps between the emails. "Email now" sitting on a call step should
+  // send the next EMAIL, not the call step's copy — the dial is the thing you just did.
+  const def=cadDefFor(c), N=def.length; let n=Math.min(Math.max(1,+c.emailSeq.step||1),N);
+  while(n<=N && !isEmailStep(def[n-1])) n++;
+  if(n>N){ toast('No email steps left in this sequence — restart the cadence from the contact'); return; }
+  c.emailSeq.step=n;
+  sendSeqEmail(id);
+}
 function callCard(c,dueN,snoozedN){
   const a=acct(c.accountId), open=+c.lastEmailOpenTs||0, touch=lastTouchTs(c), p=telNum(c);
   const bits=[];
@@ -5489,6 +5655,14 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
   h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="logCall(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<button class="btn cc-call gh" onclick="promptDirectLine(\''+c.id+'\')" title="No number on file — add a direct line">＋ Add direct line</button>';
+  // Email in the same pass as the dial — no drawer, no scroll. Only offered when there's an
+  // address that isn't already known bad; a dead button that toasts an error is worse than none.
+  if(c.email&&!undeliverable(c)){
+    const es=c.emailSeq, sn=es&&!es.done?(' '+Math.min(+es.step||1,cadNFor(c))):'';
+    h+='<button class="btn cc-email gh" onclick="emailFromCard(\''+c.id+'\')" title="Send their next sequence email right now, from this card — enrolls them if they aren\'t in a play yet">✉️ Email'+esc(sn)+'</button>';
+  } else if(c.email&&undeliverable(c)){
+    h+='<button class="btn cc-email gh" style="border-color:var(--hot);color:var(--hot)" onclick="openContact(\''+c.id+'\')" title="'+esc(sendBlock(c))+'">⛔ Email dead</button>';
+  }
   h+='<button class="btn cc-open" onclick="openContact(\''+c.id+'\')">👤 Open contact ↗</button>';
   h+='</div></div>';
   h+='<div style="padding:0 16px 4px">'+callBrief(c)+'</div>';
@@ -5521,6 +5695,59 @@ const PIN_HOLD=3*3600e3;   // one sitting. A pin from yesterday isn't a call in 
 // hand, changed your mind, just browsing). Without this the only way past a held card would be
 // to disposition a call that never happened.
 function nextLead(){ setPin(null); renderHotList(); }
+/* ===== THE BLOCK: hold the ORDER so the list stops rearranging itself between calls =====
+   Every logged call, open, reply and sync re-ranks the queue, so the person who was 4th when you
+   started is 11th two dials later. That is correct for deciding who to call next and useless for
+   working a list: you lose your place constantly. Saad: "flow and queue".
+   So a calling block freezes the ORDER, never the membership. A lead you have not worked yet keeps
+   the slot it had when the block began; anything that earns its way in afterwards still appears,
+   just underneath the block you committed to. Worked leads leave on their own — they stop being
+   due — so the block drains as you go and "12 of 40 left" is a real number.
+   Order only. Nothing here decides WHO is callable; hotQueue still owns that entirely. */
+const SESSION_TTL=4*3600e3, SESSION_N=60;
+let sessionIds=[], sessionAt=0;
+try{ sessionIds=JSON.parse(localStorage.getItem('shipday_crm_sess')||'[]')||[]; sessionAt=+localStorage.getItem('shipday_crm_sess_at')||0; }catch(e){}
+function sessionLive(){ return !!(sessionAt && Date.now()-sessionAt<SESSION_TTL && sessionIds.length); }
+function startSession(ids){ sessionIds=ids.slice(0,SESSION_N); sessionAt=Date.now();
+  try{ localStorage.setItem('shipday_crm_sess',JSON.stringify(sessionIds)); localStorage.setItem('shipday_crm_sess_at',String(sessionAt)); }catch(e){} }
+function endSession(){ sessionIds=[]; sessionAt=0;
+  try{ localStorage.removeItem('shipday_crm_sess'); localStorage.removeItem('shipday_crm_sess_at'); }catch(e){} }
+function newBlock(){ endSession(); setPin(null); renderHotList(); toast('New block — queue re-ranked from scratch'); }
+function orderBySession(due){
+  if(!sessionLive()) startSession(due.map(c=>c.id));
+  const pos={}; sessionIds.forEach((id,i)=>{ pos[id]=i; });
+  const inS=[],outS=[];
+  due.forEach(c=>{ (pos[c.id]===undefined?outS:inS).push(c); });
+  inS.sort((a,b)=>pos[a.id]-pos[b.id]);
+  return {list:inS.concat(outS),left:inS.length,total:sessionIds.length};
+}
+/* ===== SCOREBOARD — 100 dials + 100 emails, and whether you're on pace right now =====
+   Pace is measured against an 8am-6pm working day rather than a flat fraction, so at 9am the bar
+   asks for a tenth of the target instead of shaming you for not having done half of it. */
+const _WD_START=8, _WD_END=18;
+function dayFrac(){ const n=new Date(), h=n.getHours()+n.getMinutes()/60;
+  return Math.max(0,Math.min(1,(h-_WD_START)/(_WD_END-_WD_START))); }
+function scoreHtml(sess){
+  const t=myDay(), f=dayFrac();
+  const bar=(lbl,n,goal)=>{
+    const pct=Math.min(100,Math.round(100*n/goal)), want=Math.round(goal*f), diff=n-want;
+    // Grey before the day starts — there is no such thing as behind at 7am.
+    const col=f<=0?'var(--sig)':diff>=0?'#3fb950':diff>-goal*0.12?'var(--warm)':'var(--hot)';
+    const note=f<=0?'not started':diff>=0?'on pace':diff+' behind';
+    return '<div style="flex:1;min-width:158px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:5px">'+
+        '<b>'+lbl+'</b><span><b style="font-size:14px">'+n+'</b><span style="opacity:.5"> / '+goal+'</span></span></div>'+
+      '<div style="height:7px;background:rgba(127,127,127,.18);border-radius:4px;overflow:hidden;position:relative">'+
+        '<div style="height:100%;width:'+pct+'%;background:'+col+';border-radius:4px"></div>'+
+        (f>0&&f<1?'<div style="position:absolute;top:-2px;bottom:-2px;left:'+Math.min(100,Math.round(f*100))+'%;width:2px;background:var(--fg,#fff);opacity:.45"></div>':'')+
+      '</div>'+
+      '<div style="font-size:11px;opacity:.6;margin-top:4px">'+note+'</div></div>'; };
+  const blk=sess&&sess.total
+    ? '<div style="font-size:12px;opacity:.72;white-space:nowrap"><b>'+sess.left+'</b> of '+sess.total+' left in this block'+
+      ' · <span onclick="newBlock()" style="cursor:pointer;color:var(--sig)">new block</span></div>' : '';
+  return '<div class="panel"><div style="padding:12px 16px;display:flex;gap:22px;align-items:center;flex-wrap:wrap">'+
+    bar('📞 Dials',t.d,DAILY_GOAL.dials)+bar('✉️ Emails',t.e,DAILY_GOAL.emails)+blk+'</div></div>';
+}
 function elapsedMMSS(ts){ let s=Math.max(0,Math.floor((Date.now()-(+ts||0))/1000)); const m=Math.floor(s/60); s=s%60; return m+':'+(s<10?'0':'')+s; }
 // "On calls now" — leads a teammate is actively working (claimed, within TTL), hidden from
 // your queue. Rendered into #onCallsBox and re-painted every second so the timers tick live.
@@ -5543,7 +5770,10 @@ setInterval(function(){ if(UI.tab!=='hotlist'||drawerOpen()) return; const box=e
 // a realtime claim event was missed. Skipped while you're typing so notes aren't wiped.
 setInterval(function(){ if(UI.tab!=='hotlist'||drawerOpen()) return; const ae=document.activeElement; if(ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName||'')) return; renderHotList(); },30000);
 function renderHotList(){
-  const {due,snoozed}=hotQueue();
+  let {due,snoozed}=hotQueue();
+  // Freeze the ORDER for this calling block (membership is still 100% hotQueue's call).
+  // Everything below — pin, cur, rest, the counts — reads the same list, just in a stable order.
+  const sess=orderBySession(due); due=sess.list;
   // PIN the Now-up lead: once a lead surfaces to the top it STAYS the top card until
   // you disposition it (dialing lowers its heat, and any re-render — sync echo, claim
   // heartbeat, teammate change — would otherwise swap the card out mid-call). The pin
@@ -5593,7 +5823,7 @@ function renderHotList(){
     winBar='<div class="panel" style="border-color:var(--sig)"><div style="padding:10px 16px;font-size:13px">'+
       '🎯 <b>Golden window</b> — between lunch and dinner rush. Best connect rate of the day. Dial hard.</div></div>';
   }
-  let h = idBar + winBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
+  let h = idBar + scoreHtml(sess) + winBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
     : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
   // Leads teammates are actively on — live box, ticks every second (see onCallsHtml + ticker below).
   h+='<div id="onCallsBox">'+onCallsHtml()+'</div>';
@@ -5871,7 +6101,7 @@ function renderSequences(){
       stat(done.length,'Completed cadences',false)+
       stat(seqLib().length,'Plays available',false)+'</div>'+
       (paused.length?'<div class="sub" style="margin-top:10px">⏸ '+paused.length+' contact'+(paused.length===1?' was':'s were')+' pulled out of their sequence. Open one and hit <b>▶ Resume</b> to put it back in at the step you choose.</div>':'')+
-    '</div></div>';
+    '</div></div>'+mailHealthHtml();
   // Play library — one card per sequence with enrollment + step histogram + copy preview.
   h+='<div class="panel"><div class="ph"><h3>📚 Play library</h3><span class="sub">click "steps" to preview the copy · ✎ edit a play · click a card to filter the list below</span><button class="btn sm pri" style="margin-left:auto" onclick="openSeqEditor(null)">＋ New sequence</button></div><div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
   seqLib().forEach(q=>{ const m=stats[q.id]; const N=q.steps.length; const sel=seqFocus===q.id;
@@ -6386,7 +6616,13 @@ function touch(){ clearTimeout(saveT); saveT=setTimeout(()=>{ save();
 function saveNow(){ clearTimeout(saveT); save(); renderStats(); renderCounts(); renderActive();
   if(syncReady()){ pushCloudNow().then(()=>toast('Saved & synced — visible on every browser')).catch(()=>toast('Saved on this device — cloud sync failed, retrying')); }
   else toast('Saved on this device (cloud sync not connected)'); }
-function setC(id,k,v){ const c=contact(id); if(!c)return; c[k]=v; stampU(c); touch(); }
+function setC(id,k,v){ const c=contact(id); if(!c)return;
+  // Typing a NEW address clears the undeliverable flag: the verdict belonged to the old address,
+  // and making the rep hunt for an Override button after they already fixed the problem is silly.
+  // The new address gets checked on its own merits at send time.
+  if(k==='email' && String(v||'').trim().toLowerCase()!==String(c.email||'').trim().toLowerCase() && (c.emailBad||c.emailOverride)){
+    c.emailBad=null; c.emailOverride=false; logAuto(c,'✉️ Address changed — undeliverable flag cleared'); }
+  c[k]=v; stampU(c); touch(); }
 function setA(id,k,v){ const a=acct(id); if(!a)return; a[k]=v; stampU(a); touch(); }
 function setD(id,k,v){ const d=deal(id); if(!d)return; d[k]=v; stampU(d); touch(); }
 function setDplan(id,v){ const d=deal(id); if(!d)return; d.plan=+v||0; d.mrr=+v||0; stampU(d); touch(); if(drawerOpen())openDeal(id); }
@@ -6514,6 +6750,15 @@ function openContact(id){
   const sp=splitParts(c); if(sp) b+='<div class="tsub" style="margin:-4px 0 10px">Looks like two people — <a style="cursor:pointer;color:var(--sig)" onclick="splitContact(\''+id+'\')">✂️ split into '+esc(sp.a.first)+' + '+esc(sp.b.first)+'</a></div>';
   b+=fld('Role / title',inp("setC('"+id+"','title',this.value)",c.title));
   b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+fld('Alt email',inp("setC('"+id+"','email2',this.value)",c.email2))+'</div>';
+  // UNDELIVERABLE BANNER. Every send to a dead address is a bounce, and bounces are what got the
+  // domain filtered in the first place — so say it here, where the address is, with the two ways
+  // out: type a good address (auto-clears above) or override if you know DNS is lying.
+  if(c.emailBad){
+    const bad=c.emailBad, why=bad.why||MX_WHY[bad.code]||'that address bounced';
+    b+= c.emailOverride
+      ? '<div class="tsub" style="margin:-4px 0 10px;color:var(--warm)">⚠️ <b>Override on</b> — flagged as undeliverable ('+esc(why)+') but sending anyway · <a style="cursor:pointer;color:var(--sig)" onclick="reblockUndeliverable(\''+id+'\')">re-block</a></div>'
+      : '<div class="tsub" style="margin:-4px 0 10px;color:#f2a3a3">⛔ <b>Undeliverable</b> — '+esc(why)+(bad.ts?(' · flagged '+esc(fmtAgo(bad.ts))):'')+'. Emails are blocked'+(c.emailSeq&&c.emailSeq.paused?' and the sequence is paused':'')+'. Fix the address above, or <a style="cursor:pointer;color:var(--sig)" onclick="overrideUndeliverable(\''+id+'\')">send anyway</a>.</div>';
+  }
   b+='<div class="f2">'+phoneFld('Direct number','phone',c.phone)+phoneFld('Mobile / other','mobile',c.mobile)+'</div>';
   b+=(isDNC(c)?('<div class="tsub" style="margin:-4px 0 10px;color:#f2a3a3">🚫 <b>Do Not Call</b>'+(function(){const e=dncEntry(c);return e?((e.reason?(' — '+esc(e.reason)):'')+(e.by?(' · by '+esc(e.by)):'')+(e.at?(' '+esc(fmtAgo(e.at))):'')):'';})()+' · <a style="cursor:pointer;color:var(--won)" onclick="unmarkDNC(\''+id+'\')">remove</a></div>')
     :(dncNums(c).length?('<div class="tsub" style="margin:-4px 0 10px"><a style="cursor:pointer;color:var(--lost)" onclick="markDNC(\''+id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Mark Do Not Call</a></div>'):''));
