@@ -608,7 +608,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug7·z152';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug11·z153';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1380,8 +1380,9 @@ async function syncGmail(bg){
     store.__gmail=setBox('gmail',{syncedAt:d.syncedAt||Date.now(),replies:d.replies||[]});
     const n=applyContactUpdates(d.contacts); const rp=persistReplies(d.replies||[]);
     const mt=ingestMailTracker();          // his MailTracker notifications ARE opens — read them
+    const bn=ingestBounces(d.replies||[]); // and mailer-daemon tells you which addresses are dead
     save();
-    if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')+(mt?' · '+mt+' MailTracker open'+(mt>1?'s':''):'')); } return n; }
+    if(!bg){ renderActive(); setSync('ok','Synced'); toast('Gmail synced'+(n?' · '+n+' contacts stamped':'')+(rp?' · '+rp+' repl'+(rp===1?'y':'ies')+' logged':'')+(mt?' · '+mt+' MailTracker open'+(mt>1?'s':''):'')+(bn?' · ⛔ '+bn+' undeliverable':'')); } return n; }
   catch(e){ if(!bg){ setSync('err','Sync failed'); toast('Gmail sync failed'); } return 0; }
 }
 // One-click header sync: pulls new opens/replies from Gmail, then shows what changed.
@@ -5072,6 +5073,102 @@ function connectGmail(){
       renderActive(); }catch(e){} },1500); };
   window.addEventListener('focus',back);
 }
+// ===== DELIVERABILITY: never spend a bounce finding out an address was always dead =====
+// Hard bounces are what get a sending domain throttled — Google starts squeezing around 2%. An
+// audit of this book found 46 of 410 custom domains (11%) publish no working mail server, which
+// is 6.3% of every emailable contact. Nothing here ever learned that, so a dead address stayed in
+// its cadence and bounced AGAIN at every step: one bad row costing five bounces instead of one.
+// That multiplier, not send volume, is what was burning the domain.
+// Two defences, in order of how far they can be trusted:
+//   1. mxVerdict     — DNS. The domain cannot receive mail at all. Deterministic, and it runs
+//                      BEFORE the send, so the bounce never happens.
+//   2. ingestBounces — mailer-daemon. A specific MAILBOX is dead on a domain that is otherwise
+//                      healthy. DNS can never see that, so this is the only way to learn it.
+// A DNS verdict is objective fact about a domain, not anything personal to a rep, so it lives in
+// the SHARED store (and survives shareable()) — one rep's lookup spares the whole team the bounce.
+//
+// On "no MX": RFC 5321 lets a domain with no MX fall back to its A record, so in theory these are
+// still sendable. In practice every one sampled out of this book resolves to Wix, Vercel,
+// Cloudflare or bare EC2 — web hosts with nothing listening on port 25. That is exactly the
+// alreddycafe.com notice ("did not accept our requests to connect … timed out"). So they're
+// treated as undeliverable, but kept under their own code so the drawer can say WHICH kind of
+// dead it is, and every verdict stays overridable per contact.
+const MX_TTL_OK=30*864e5, MX_TTL_BAD=7*864e5;   // a working server rarely vanishes; a broken one gets fixed
+function mxBox(){ return (store.__mx=store.__mx||{}); }
+function emailDomain(e){ return String(e||'').toLowerCase().trim().split('@')[1]||''; }
+function mxGet(dom){ const r=mxBox()[dom]; if(!r) return null;
+  return (Date.now()-(+r.ts||0) < (r.code==='OK'?MX_TTL_OK:MX_TTL_BAD)) ? r : null; }
+// DNS-over-HTTPS, Google first and Cloudflare as backup. Both send access-control-allow-origin:*
+// so this works straight from the browser on GitHub Pages — no edge function, nothing to deploy.
+async function _doh(name,type){
+  const q='?name='+encodeURIComponent(name)+'&type='+type;
+  for(const h of ['https://dns.google/resolve','https://cloudflare-dns.com/dns-query']){
+    try{ const r=await fetch(h+q,{headers:{accept:'application/dns-json'}}); if(r.ok) return await r.json(); }catch(e){}
+  }
+  return null;
+}
+// 'OK' | 'NXDOMAIN' | 'NOMX' | 'UNKNOWN'. UNKNOWN FAILS OPEN: a flaky network, an offline laptop
+// or a resolver hiccup must never block a legitimate send. We just learn nothing and the mail goes.
+async function mxVerdict(dom,force){
+  dom=String(dom||'').toLowerCase().trim();
+  if(!dom||dom.indexOf('.')<0) return 'UNKNOWN';
+  if(!force){ const c=mxGet(dom); if(c) return c.code; }
+  const d=await _doh(dom,'MX'); if(!d) return 'UNKNOWN';
+  let code;
+  if(d.Status===3) code='NXDOMAIN';                                   // domain does not exist
+  else if(d.Status===0) code=(d.Answer||[]).some(a=>a.type===15)?'OK':'NOMX';
+  else return 'UNKNOWN';                                              // SERVFAIL etc = resolver trouble, not a verdict
+  mxBox()[dom]={code,ts:Date.now()}; return code;
+}
+const MX_WHY={NXDOMAIN:'that domain does not exist',NOMX:'that domain has no mail server',BOUNCE:'a message to this address bounced'};
+// One place that decides whether an address may be mailed. '' = send, anything else = the reason not to.
+function sendBlock(c){ if(!c||c.emailOverride) return '';
+  const b=c.emailBad; return b?(b.why||MX_WHY[b.code]||'that address bounced'):''; }
+function undeliverable(c){ return !!sendBlock(c); }
+function markUndeliverable(c,code,detail){
+  if(!c) return; c.emailBad={code,ts:Date.now(),why:detail||MX_WHY[code]||''};
+  const s=c.emailSeq, wasLive=!!(s&&!s.done&&!s.paused);
+  if(wasLive) s.paused=true;      // the whole point: stop the cadence re-bouncing at every remaining step
+  logAuto(c,'⛔ Email undeliverable — '+(detail||MX_WHY[code]||code)+(wasLive?' · sequence paused':''));
+  stampU(c);
+}
+// Rep says the address is fine after all. Clears the block; a genuine bounce later overrules it.
+function overrideUndeliverable(id){ const c=contact(id); if(!c) return;
+  c.emailOverride=true; logAuto(c,'✅ Undeliverable flag overridden by '+(myRep()||'rep'));
+  save(); refreshDrawer(); toast('Override on — this address can be emailed again'); }
+// ===== mailer-daemon tells you a MAILBOX is dead; DNS never can =====
+// The reply feed carries only {from,subject,snippet,ts}, and Gmail's snippet is where the failed
+// recipient is named ("Your message wasn't delivered to markg@barrybaegels.com because …"), so the
+// snippet is what we read. Best-effort on purpose: this is additive on top of the DNS check, and a
+// bounce we can't parse costs nothing more than it already cost.
+// SOFT failures are deliberately IGNORED — "temporary problem", "will retry", a receiving server
+// that timed out. That is the far end being down, not a bad address, and suppressing those would
+// quietly delete live prospects. Only an unambiguous permanent failure suppresses anything.
+const BOUNCE_FROM=/mailer-daemon|postmaster/i;
+const HARD_BOUNCE=/address not found|couldn.t be found|does not exist|doesn.t exist|no such (user|address)|user unknown|unknown recipient|mailbox (unavailable|not found)|BadRcptDomain|NXDOMAIN|550[ -]?5\.1\.[12]/i;
+const SOFT_BOUNCE=/temporary|will retry|delivery incomplete|timed out|over quota|mailbox full|deferred|greylist/i;
+function ingestBounces(replies){
+  if(!Array.isArray(replies)||!replies.length) return 0;
+  const m=byEmail(); let n=0;
+  replies.forEach(r=>{
+    if(!BOUNCE_FROM.test(String(r.from||''))) return;
+    const blob=String(r.subject||'')+' '+String(r.snippet||'');
+    if(!HARD_BOUNCE.test(blob)) return;                    // unreadable, or explicitly temporary
+    if(SOFT_BOUNCE.test(blob)&&!/address not found|no such|user unknown|BadRcptDomain/i.test(blob)) return;
+    // Name the failed recipient, ignoring the daemon's own address and Google's own hostnames.
+    (blob.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)||[])
+      .map(x=>x.toLowerCase().replace(/[.,;:)]+$/,''))
+      .filter(x=>!BOUNCE_FROM.test(x)&&!/(^|@)(google|googlemail)\.com$/.test(x))
+      .forEach(e=>{ const c=m[e]; if(!c) return;
+        // Idempotent: the same 7-day feed is re-scanned on every sync. Skip only when this is
+        // already known AND STILL IN FORCE. If a rep overrode the flag and the address then
+        // bounced again, the bounce is hard evidence and the override was a guess — so it loses.
+        if(c.emailBad&&c.emailBad.code==='BOUNCE'&&!c.emailOverride) return;
+        c.emailOverride=false;
+        markUndeliverable(c,'BOUNCE'); n++; });
+  });
+  return n;
+}
 // ===== Native send: fire the current sequence step from YOUR Gmail (gmail-send edge fn) with a
 // tracking pixel, then advance the cadence exactly like a manual "Log sent". Reply-type steps
 // thread onto the prior message via the stored threadId + Message-ID so the conversation stays
@@ -5080,6 +5177,20 @@ async function sendSeqEmail(id){
   const c=contact(id); if(!c) return;
   if(!c.email){ toast('No email address on this contact'); return; }
   if(!SYNC_FN){ toast('Connect integrations first'); return; }
+  // Already known bad — don't re-learn it the expensive way.
+  const blk=sendBlock(c);
+  if(blk){ toast('⛔ Not sent — '+blk+'. Fix the address, or hit Override on the contact.'); return; }
+  // Ask DNS before spending a bounce on the answer. Cached per domain and shared with the team,
+  // so this is one lookup per domain per month, not one per send.
+  const dom=emailDomain(c.email);
+  if(!mxGet(dom)) setSync&&setSync('busy','Checking '+dom+'…');
+  const v=await mxVerdict(dom);
+  if(v==='NXDOMAIN'||v==='NOMX'){
+    markUndeliverable(c,v); save(); refreshDrawer(); renderActive();
+    setSync&&setSync('ok','Blocked');
+    toast('⛔ Not sent to '+c.email+' — '+MX_WHY[v]+'. Marked undeliverable'+(c.emailSeq&&c.emailSeq.paused?', sequence paused':'')+'.');
+    return;
+  }
   const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
   saveSeqEdit(id,true);
   const N=cadNFor(c); const n=Math.min(+s.step||1,N); const e=emailStep(c,n);
@@ -5094,6 +5205,12 @@ async function sendSeqEmail(id){
     // not found". In that case drop the dead thread and resend as a fresh email so the step still goes out.
     const post=(withThread)=>fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
       body:JSON.stringify({to:c.email,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
+        // Open tracking costs deliverability: a 1x1 remote image on a domain unrelated to
+        // shipday.com is the clearest "bulk mail" tell a filter can read, and it is byte-identical
+        // in every message the team sends. On a COLD step that trade is bad — the pixel measures an
+        // open that the pixel itself helped push to spam. Once they have opened or replied before,
+        // the thread has standing and the signal is worth more than the risk, so track from there on.
+        track:(n>=3||!!c.replied||!!c.lastEmailOpenTs),
         threadId:(isReply&&withThread)?(s.threadId||''):'', inReplyTo:(isReply&&withThread)?(s.lastMsgId||''):''})});
     let r=await post(true); let d=await r.json();
     // No mailbox connected for this rep. The server used to fall back to the original owner's
