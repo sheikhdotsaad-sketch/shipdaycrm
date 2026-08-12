@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z161';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z162';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -6850,6 +6850,7 @@ function logAuto(o,txt){ o.log=o.log||[]; const e={ts:Date.now(),txt:txt,sys:tru
 /* ---- custom fields (add any field to any record) ---- */
 function recOf(ent,id){ return ent==='c'?contact(id):ent==='a'?acct(id):deal(id); }
 function reopenDrawer(ent,id){ if(ent==='c')openContact(id); else if(ent==='a')openAccount(id); else openDeal(id); }
+function jumpToContacts(){ const s=el('acct-contacts'); if(s) s.scrollIntoView({behavior:'smooth',block:'start'}); }
 function keyAt(r,i){ return Object.keys(r.custom||{})[i]; }
 function customBlock(ent,id){
   const r=recOf(ent,id); if(!r) return '';
@@ -6947,9 +6948,18 @@ function setDaccount(id,v){ const d=deal(id); if(!d)return;
 /* ====================== ACCOUNT DRAWER ====================== */
 function openAccount(id){
   const a=acct(id); if(!a)return; curDrawer={ent:'a',id:id};
+  /* 🔑 THE TRIP HAS TO GO BOTH WAYS. The contact drawer has carried a ‹ back button to its account
+     since forever; the account drawer had nothing pointing at the person — its Contacts list is real,
+     but it sits nine sections down past heat, hours, POS, links and tasks, so from the Contacts tab it
+     reads as a dead end. One person → straight to them. Several → jump to the list rather than pick
+     for you, because guessing which of four owners you meant is the kind of silent wrong answer that
+     files a call under the wrong name. */
+  const _cs=contactsOf(id);
+  const _goC=_cs.length===1?' · <a onclick="event.stopPropagation();openContact(\''+_cs[0].id+'\')">👤 '+esc(cname(_cs[0]))+' ›</a>'
+    :_cs.length>1?' · <a onclick="event.stopPropagation();jumpToContacts()">👤 '+_cs.length+' contacts ›</a>':'';
   el('drawer-head').innerHTML='<div><div style="font-weight:800;font-size:16px">'+esc(brandName(a)||a.name)+
     (acctLoc(a)?' <span style="font-weight:600;opacity:.5">'+esc(acctLoc(a))+'</span>':'')+'</div>'+
-    '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+'</div></div>'+
+    '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+_goC+'</div></div>'+
     (isBrand(a)?'<span class="tag">🏢 '+childLocs(id).length+' loc</span>':isLocation(a)?'<span class="tag">📍 Location</span>':'')+
     (a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing customer</span>':a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
     '<button class="x" onclick="closeDrawer()">×</button>';
@@ -7032,8 +7042,8 @@ function openAccount(id){
   b+=customBlock('a',id);
   b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'a\',\''+id+'\')" title="Add a task due today or in N days">＋ Add task</button>'+(hasCadence('a',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'a\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+acctTasks(id);
   // contacts under account
-  b+='<div class="sec">Contacts <button class="btn sm gh" style="float:right" onclick="addContact(\''+id+'\')">+ Add</button></div>';
-  const cs=contactsOf(id);
+  b+='<div class="sec" id="acct-contacts">Contacts <button class="btn sm gh" style="float:right" onclick="addContact(\''+id+'\')">+ Add</button></div>';
+  const cs=_cs;
   b+= cs.length? cs.map(c=>'<div class="mini" onclick="openContact(\''+c.id+'\')"><div class="mn">'+esc(cname(c))+' '+warmBadge(c.warmth)+'</div><div class="ms">'+esc(c.title||'')+' · '+esc(c.email||c.phone||'')+' · '+esc(c.status||'New')+'</div></div>').join('') : '<div class="tsub">No contacts.</div>';
   // meetings & deals under account — open first, closed history below (tap any → deal drawer)
   b+='<div class="sec">Meetings &amp; deals <button class="btn sm gh" style="float:right" onclick="addDeal(\''+id+'\')">+ Add</button></div>';
@@ -7528,7 +7538,10 @@ function exportCurrentTab(){
 }
 
 /* ====================== BACKUP / IMPORT ====================== */
-function exportBackup(){ store.__lastExport=Date.now(); const j=JSON.stringify(store,null,0);
+function exportBackup(){ store.__lastExport=Date.now();
+  // Stamped, not stored: the name of the book it came out of rides in the file so the restore above can
+  // warn you before it overwrites a different one. Stripped again on the way back in.
+  const j=JSON.stringify(Object.assign({},store,{__book:bookName(myBook())}),null,0);
   const b=new Blob([j],{type:'application/json'}); const u=URL.createObjectURL(b);
   const a=document.createElement('a'); a.href=u; a.download='shipday_crm_backup_'+new Date().toISOString().slice(0,10)+'.json'; a.click(); URL.revokeObjectURL(u); toast('Backup downloaded'); save(); }
 function importBackupPrompt(){ el('fileimp').click(); }
@@ -7541,7 +7554,21 @@ function onFile(e){ const f=e.target.files[0]; if(!f)return;
   const r=new FileReader();
   r.onload=()=>{ try{
     if(f.name.endsWith('.json')){ const s=JSON.parse(r.result);
-      if(!confirm('Replace all data with this backup?'))return; store=norm(s); save(); render(); toast('Backup restored'); }
+      /* 🔑 A JSON RESTORE REPLACES THE WHOLE BOOK, and "Replace all data with this backup?" tells you
+         nothing about WHICH book you're standing in. Restoring a 2,741-account seed while you happen to
+         be in your own book quietly deletes 2,066 real accounts, and there is no undo — the CSV path
+         merges, this one overwrites. So say the numbers out loud, name both books, and if the file was
+         built for a different one, make that the first line. A backup written before z162 has no stamp;
+         it is still restorable, it just can't be checked. */
+      const cur=bookName(myBook());
+      const from=s.__book||'', n=o=>Object.keys(o||{}).length;
+      const msg=(from&&from!==cur?'⚠️ This file was built for the "'+from+'" book.\nYou are in "'+cur+'".\n\n':'')+
+        'Replace everything in "'+cur+'" with this file?\n\n'+
+        'Now:  '+n(store.accounts)+' accounts · '+n(store.contacts)+' contacts · '+n(store.deals)+' deals\n'+
+        'File: '+n(s.accounts)+' accounts · '+n(s.contacts)+' contacts · '+n(s.deals)+' deals\n\n'+
+        'This cannot be undone.';
+      if(!confirm(msg))return;
+      store=norm(s); delete store.__book; save(); render(); toast('Backup restored'); }
     else { smartImport(r.result); }
   }catch(err){ alert('Import failed: '+err.message); } e.target.value=''; };
   r.readAsText(f);
