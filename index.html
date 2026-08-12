@@ -29,6 +29,13 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cc-name{font-size:21px;font-weight:800;line-height:1.1}
 .cc-sub{color:var(--mut);margin:3px 0 9px;font-size:13px}
 .cc-bits{font-size:12px;color:var(--mut);margin-bottom:10px}
+.alts{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;margin:6px 0}
+.alts .altn-h{color:var(--mut)}
+.alts.stuck .altn-h{color:var(--hot)}
+.altn{display:inline-flex;gap:5px;align-items:center;padding:3px 8px;border:1px solid var(--bd);border-radius:999px;color:var(--sig);cursor:pointer;text-decoration:none;white-space:nowrap}
+.altn:hover{border-color:var(--sig)}
+.alts.stuck .altn{border-color:var(--hot)}
+.altn-l{color:var(--mut);max-width:150px;overflow:hidden;text-overflow:ellipsis}
 .sibs{font-size:12px;color:var(--mut);margin:4px 0 6px}
 .sibs a{color:var(--sig);cursor:pointer}
 .sibs a:hover{text-decoration:underline}
@@ -613,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z171';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z172';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3440,6 +3447,8 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
     (dnc?'<div style="margin:8px 0"><button class="btn sm" style="background:var(--won);color:#04210f" onclick="unmarkDNC(\''+c.id+'\')" title="Remove this number from the Do Not Call list">✅ Remove from Do Not Call</button></div>'
       :(p?'<a class="cm-dial" href="tel:'+esc(p)+'" onclick="noteDial(\''+c.id+'\')">📞 Dial '+esc(pd)+'</a>':'<div class="cm-sub" style="margin:8px 0">No phone on file</div>')
         )+
+    // Right where he is about to write "no answer" — the other ways into this restaurant.
+    (dnc?'':altNumsHtml(c,6))+
     // Quick research right where the dial button is — Google the business while it rings.
     // DNC rides on the end of this row instead of owning a line of its own.
     (function(){ const g=a||{name:cname(c)}; return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 2px;align-items:center">'+
@@ -5425,6 +5434,77 @@ function sibsHtml(a){
   if(maybe.length) h+='<div class="sibs" style="opacity:.75">🏢 Same brand? '+maybe.map(link).join(' · ')+'</div>';
   return h;
 }
+/* 🔴 "i dont feel like i get enough connects" / "if im not getting enogh connects why would i keep
+   calling the numbers in the cadence" / "obviously the answer would be to try more numbers".
+
+   The obvious answer was measured first, and it was WRONG. His connect rate by hour looked like it
+   fell off a cliff after 5pm — 11.9% against 51.7% at 4pm — and the tidy story was dinner rush. But
+   160 of those 202 late calls carry no disposition at all; he stops writing them up at the end of
+   the day. Of the late calls he DID label, 5pm connects at 57.1%, which is 3pm's rate exactly.
+   "Stop calling at 5pm" would have been advice invented out of a logging gap.
+
+   What is real: 646 of his contacts (26%) already have a SECOND number in the book, and the card
+   has never once shown it. telNum() resolves to exactly one line — the contact's, falling back to
+   the account's — so 253 restaurant main lines, 173 colleagues and 278 sister-location numbers sat
+   there unreachable. 211 accounts have two or more numbers AND logged calls against them, and not
+   one log line names which line was dialled, because the dialer is Quo and the number never comes
+   back. So the honest reading is not "he tried the alternates and they failed" — it is that he was
+   never offered them.
+
+   This only READS. It invents no number, dials nothing by itself, and writes no field. DNC and a
+   number the rep already condemned via a note (badNums) are filtered out — reach never outranks
+   compliance, and a number he has told us is dead must not come back as a suggestion. */
+const fmtPhoneAny=n=>{ const d=String(n||'').replace(/\D/g,''), t=d.length>10?d.slice(-10):d;
+  return t.length===10?fmtPhone10(t):String(n||''); };
+function altNums(c){
+  if(!c) return [];
+  const out=[],seen={},bad={};
+  (c.badNums||[]).forEach(n=>{ const k=_dnckey(n); if(k) bad[k]=1; });
+  const prim=_dnckey(telNum(c)); if(prim) seen[prim]=1;
+  const add=(num,label,src)=>{
+    const k=_dnckey(num); if(!k||k.length<10||seen[k]||bad[k]) return;
+    if(store.__dnc&&store.__dnc[k]&&!store.__dnc[k].off) return;
+    seen[k]=1; out.push({num:String(num),key:k,label:label,src:src});
+  };
+  add(c.phone,'direct','own'); add(c.mobile,'mobile','own');
+  const a=acct(c.accountId); if(!a) return out;
+  const bn=brandName(a)||a.name||'the restaurant';
+  /* Two thirds of an imported book names nobody, so a lot of "contacts" are called "Main Line" or
+     "Owner". Five pills all labelled "Main Line" tells him nothing about which one to press — a
+     placeholder name is not a person, so those fall back to the restaurant. */
+  const who=o=>{ const n=String(cname(o)||'').trim();
+    return (!n||/^(\(no name\)|unknown|n\/?a|none|no ?name|main ?line|mainline|main|line|front ?desk|front|desk|owner|manager|info|contact|store|restaurant|null|undefined|[-—.])$/i.test(n)||n.indexOf('@')>0)?'':n; };
+  add(a.phone,bn+' main','acct');
+  contactsOf(a.id).forEach(o=>{ if(o.id===c.id) return;
+    const w=who(o)||(bn+' line'); add(o.phone,w,'person'); add(o.mobile,w,'person'); });
+  /* A sister storefront's line reaches the same owner — this is the single biggest source on his
+     book (278 numbers) and it only became knowable when z171 worked out which rows are one brand.
+     'likely' siblings are included: dialling a wrong-but-similar restaurant costs one apology,
+     which is a different order of mistake from merging their records. */
+  sameBrand(a).forEach(s=>{
+    const nm=brandName(s.a)||s.a.name||'other location',lc=acctLoc(s.a),tag=nm+(lc?' · '+lc:'');
+    add(s.a.phone,tag,'sibling');
+    contactsOf(s.a.id).forEach(o=>{ const n=who(o),w=n?(n+' @ '+tag):tag;
+      add(o.phone,w,'sibling'); add(o.mobile,w,'sibling'); });
+  });
+  return out;
+}
+// A disposition that means nobody picked up. When the LAST outcome was one of these, the alternates
+// stop being a footnote and become the instruction — that is his whole question: why would he keep
+// calling the same number the cadence already failed on.
+const _NOCONN_D=/(no answer|voicemail|gatekeep|busy|left message)/i;
+function altNumsHtml(c,max){
+  const alts=altNums(c); if(!alts.length) return '';
+  const stuck=_NOCONN_D.test(String(c.dispo||''));
+  const show=alts.slice(0,max||4),more=alts.length-show.length;
+  const pill=x=>'<a class="altn" href="'+telHref(x.num)+'" title="'+esc(x.label)+'"'+
+    ' onclick="event.stopPropagation();logCall(\''+c.id+'\')">📞 '+esc(fmtPhoneAny(x.num))+
+    ' <span class="altn-l">'+esc(x.label)+'</span></a>';
+  return '<div class="alts'+(stuck?' stuck':'')+'">'+
+    (stuck?'<span class="altn-h"><b>'+esc(c.dispo)+' — try another line:</b></span>'
+          :'<span class="altn-h">Also on file:</span>')+
+    show.map(pill).join('')+(more?'<span class="altn-h">+'+more+' more</span>':'')+'</div>';
+}
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
   const _junk=s=>{s=String(s||'').trim().toLowerCase();return !s||/^(\(no name\)|unknown|n\/?a|none|no ?name|main ?line|mainline|main|line|front ?desk|front|desk|owner|manager|info|null|undefined|[-—.])$/.test(s);};
   // A greeting may ONLY use a real human first name. cname() deliberately falls back to the
@@ -6215,6 +6295,7 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-sub">'+esc(c.title||'')+(a?' · '+esc(brandName(a)||a.name)+(acctLoc(a)?' <span style="opacity:.5">'+esc(acctLoc(a))+'</span>':''):'')+'</div>';
   h+=sibsHtml(a);   // before you dial: this brand has other storefronts in your book
   h+='<div class="cc-bits">'+bits.join(' · ')+'</div>';
+  h+=altNumsHtml(c);   // the other lines into this restaurant, before he re-dials the one that failed
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
   h+= p?'<a class="btn pri cc-call" href="tel:'+esc(p)+'" onclick="logCall(\''+c.id+'\')">📞 Call '+esc(p)+'</a>':'<button class="btn cc-call gh" onclick="promptDirectLine(\''+c.id+'\')" title="No number on file — add a direct line">＋ Add direct line</button>';
@@ -7370,6 +7451,7 @@ function openContact(id){
       : '<div class="tsub" style="margin:-4px 0 10px;color:#f2a3a3">⛔ <b>Undeliverable</b> — '+esc(why)+(bad.ts?(' · flagged '+esc(fmtAgo(bad.ts))):'')+'. Emails are blocked'+(c.emailSeq&&c.emailSeq.paused?' and the sequence is paused':'')+'. Fix the address above, or <a style="cursor:pointer;color:var(--sig)" onclick="overrideUndeliverable(\''+id+'\')">send anyway</a>.</div>';
   }
   b+='<div class="f2">'+phoneFld('Direct number','phone',c.phone)+phoneFld('Mobile / other','mobile',c.mobile)+'</div>';
+  b+=altNumsHtml(c,8);
   b+=(isDNC(c)?('<div class="tsub" style="margin:-4px 0 10px;color:#f2a3a3">🚫 <b>Do Not Call</b>'+(function(){const e=dncEntry(c);return e?((e.reason?(' — '+esc(e.reason)):'')+(e.by?(' · by '+esc(e.by)):'')+(e.at?(' '+esc(fmtAgo(e.at))):'')):'';})()+' · <a style="cursor:pointer;color:var(--won)" onclick="unmarkDNC(\''+id+'\')">remove</a></div>')
     :(dncNums(c).length?('<div class="tsub" style="margin:-4px 0 10px"><a style="cursor:pointer;color:var(--lost)" onclick="markDNC(\''+id+'\')" title="Compliance: flag this number Do Not Call — blocks it from every call list">🚫 Mark Do Not Call</a></div>'):''));
   b+=fld('LinkedIn',inp("setC('"+id+"','linkedin',this.value)",c.linkedin));
