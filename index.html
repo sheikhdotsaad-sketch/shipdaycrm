@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z162';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z163';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -635,17 +635,30 @@ const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJI
    stranger and gets a private row of their own that starts empty, so an unexpected sign-in can
    never reach a real book. */
 const SHARED_BOOK='shipday-team';                    // Ohio — the original row, never renamed
+/* One book per AE, each named for the person AND the patch, because "Michigan" alone doesn't tell
+   you whose desk it is and "David" alone doesn't tell you what's in it. The ROWS are untouched and
+   must stay that way: a row id is the address of a couple of megabytes of somebody's work, and
+   renaming one doesn't move the data, it just points the app at an empty book. That is precisely
+   how Johnny's list went missing — he got a new row and his old one became unreachable — so from
+   here on, labels are free to change and rows are not. */
 const BOOKS=[
-  { row:'shipday-team',  name:'Ohio',     icon:'🏠' },
-  { row:'book:michigan', name:'Michigan', icon:'🚗' },
+  { row:'shipday-team',  name:'Saad · Ohio',    icon:'🏠' },   // the original row, never renamed
+  { row:'book:michigan', name:'Aime · Michigan',icon:'🚗' },
   // David runs his own territories and imports his own account list. Named explicitly rather than
   // letting bookRowFor() hand him an anonymous 'book:<user-id>' — that would also isolate him, but
   // the row would be keyed to an id nobody can look up, so it could never be shared with anyone.
-  { row:'book:david',    name:'David',    icon:'🗺️' },
-  { row:'book:johnny',   name:'Johnny',   icon:'🌮' }
+  { row:'book:david',    name:'David · Texas',  icon:'🗺️' },
+  { row:'book:johnny',   name:'Johnny · Boston',icon:'🌮' }
 ];
-/* First book listed is that person's HOME — where they land at sign-in.
-   Aime and David have exactly one entry on purpose: that's the only book each can reach. */
+/* 🔑 SEEING A BOOK AND CHANGING ONE ARE DIFFERENT PERMISSIONS, and this list is only the second.
+   Every book above is READABLE by the whole team: an AE covering someone's patch over a holiday,
+   or anyone checking why a list looks empty, shouldn't have to ask permission to look at a screen.
+   What stays narrow is WRITING. Standing in a book you're not listed for puts the app in view-only
+   — see canEdit(), enforced in save() — so the worst a visitor can do is look. That asymmetry is
+   the whole design: a wrong read costs nothing, a wrong write lands a call log, a stage change or
+   an import in someone else's territory, where they will never think to look for it.
+
+   First book listed is that person's HOME — where they land at sign-in. */
 const BOOK_MEMBERS={
   /* Ohio first = Saad's home, where he lands at sign-in. The other three are there so he can set a new
      rep's book UP for them — load their sheet, check the mapping, fix an import — instead of talking a
@@ -653,7 +666,15 @@ const BOOK_MEMBERS={
      per-rep boxes (__gmailBy / __calBy / signals) stay keyed to whoever is signed in, so this does NOT
      reopen z146: he still cannot see anyone's mailbox, calendar or notifications. */
   'saad.sheikh@shipday.com': ['shipday-team','book:michigan','book:david','book:johnny'],
-  'embert.sy@shipday.com':   ['shipday-team','book:michigan'],  // SDR — dials in both territories
+  /* 🔑 EMBERT IS THE SDR, AND AN SDR IS NOT A TERRITORY. He dials into the AEs' books and books
+     meetings for them, so giving him a book of his own would be exactly wrong twice over: it would
+     start empty, and every call he made would land somewhere the AE never looks. He writes into the
+     two patches he actually works — Ohio and Michigan — and he is the ONLY non-owner who can. Texas
+     and Boston he can open and read like anyone else; he just can't change them, because a dial
+     logged against a Boston account he isn't working is noise in Johnny's queue. Ownership stays
+     personal regardless: z146's per-rep boxes (__gmailBy / __calBy / signals) key to whoever is
+     signed in, so sitting in Aime's book never shows him Aime's mailbox, calendar or notifications. */
+  'embert.sy@shipday.com':   ['shipday-team','book:michigan'],
   'aime.kamana@shipday.com': ['book:michigan'],
   'david.umana@shipday.com': ['book:david'],                    // own territories, own account list
   'johnny.angulo@shipday.com': ['book:johnny']
@@ -681,16 +702,31 @@ function bookRowFor(user){
   if(!BOOK_SPLIT) return SHARED_BOOK;
   const em=String((user&&user.email)||'').toLowerCase().trim();
   if(!em) return SHARED_BOOK;                        // can't identify them — never risk a wrong book
-  const allowed=BOOK_MEMBERS[em];
-  if(!allowed||!allowed.length) return 'book:'+(user.id||em);   // stranger → their own empty book
+  const allowed=BOOK_MEMBERS[em]||[];
   const pref=bookPref();
-  // A saved preference is only ever honoured if they're still a member. That single check is what
-  // stops a stale localStorage entry — or a hand-edited one — from reaching a book they left.
-  return allowed.includes(pref)?pref:allowed[0];
+  // A saved preference is honoured for any book they may OPEN, which is now all of them — write
+  // access is a separate question, asked at save time by canEdit(). So landing in someone else's
+  // territory is a look and never a change, and a stale or hand-edited preference can't do harm.
+  if(pref && (allowed.includes(pref)||isTeamBook(pref))) return pref;
+  return allowed.length?allowed[0]:'book:'+(user.id||em);       // no write access anywhere → own empty book
 }
 function myBook(){ return (TEAM.row||SHARED_BOOK); }
 function onSharedBook(){ return myBook()===SHARED_BOOK; }
-function myBooks(){ const m=BOOK_MEMBERS[bookEmail()]; return (m&&m.length)?m.slice():[myBook()]; }
+function isTeamBook(row){ return BOOKS.some(b=>b.row===row); }
+function myWrite(){ const m=BOOK_MEMBERS[bookEmail()]; return (m&&m.length)?m.slice():[]; }
+/* Books you can OPEN: your own first, then everyone else's. */
+function myBooks(){ const out=myWrite();
+  BOOKS.forEach(b=>{ if(!out.includes(b.row)) out.push(b.row); });
+  const cur=myBook(); if(!out.includes(cur)) out.unshift(cur);   // a stranger's private row
+  return out; }
+/* Books you can CHANGE. Two deliberate escape hatches, both erring towards letting a real rep
+   work: if we can't identify who is signed in we never lock them out — being wrongly frozen out
+   of your own book is a far worse failure than a visitor being able to type — and someone with no
+   membership at all still owns their private row. */
+function canEdit(){ if(!BOOK_SPLIT) return true;
+  if(!bookEmail()) return true;
+  const w=myWrite(), cur=myBook();
+  return w.length ? w.includes(cur) : !isTeamBook(cur); }
 function bookName(row){ const b=BOOKS.find(x=>x.row===row); return b?(b.icon+' '+b.name):'🔒 My own book'; }
 
 /* ====================== CONSTANTS ====================== */
@@ -927,8 +963,23 @@ const cname=c=>{ if(!c) return '—';
 const aname=a=>a?a.name:'—';
 
 /* ====================== SAVE / BACKUP / SYNC ====================== */
+/* 🔑 VIEW-ONLY IS ENFORCED HERE, NOT ON THE BUTTONS. Several hundred places in this file can
+   change a record, and disabling them one at a time would leave a handful live forever — and the
+   one still live would be the one that writes a call log into someone else's territory. So: one
+   chokepoint. Nothing reaches localStorage or the cloud without write access, and the in-memory
+   edit is rolled back from the cache straight away, because a note you believe you saved is worse
+   than one you were told you couldn't. applyingRemote is exempt — that's the incoming cloud copy
+   being cached, which is a read no matter whose book it is. */
+let _roTs=0;
+function readOnlyBlocked(){
+  try{ store=load(); hydrateMine(); idxBust(); }catch(e){}
+  if(Date.now()-_roTs>1500){ _roTs=Date.now();
+    try{ toast('👁 View only — '+bookName(myBook())+" is someone else's book. Nothing was changed."); }catch(e){} }
+  try{ if(!drawerOpen()) render(); else { renderStats(); renderCounts(); } }catch(e){}
+}
 function save(){
   if(!canSave) return;
+  if(!applyingRemote && !canEdit()){ readOnlyBlocked(); return; }
   idxBust();
   store.__updatedAt=Date.now();
   try{ const json=JSON.stringify(store); localStorage.setItem(LS,json); rollingBackup(json); }catch(e){}
@@ -940,18 +991,28 @@ function save(){
    is both why saving felt heavy and why the territory switcher's preference write was silently
    failing. Five snapshots spread over 25 minutes is a far better safety net than five copies of the
    last twenty seconds anyway. */
+/* 🔑 AND ONE POOL PER BOOK, NOT ONE POOL. These snapshots were all filed under the same
+   shipday_crm_bak_ prefix no matter which book produced them. That was harmless while everyone
+   sat in one row, and became a live hazard the moment the switcher existed: work half an hour in
+   Michigan and the five newest snapshots are ALL Michigan, so "Restore auto-backup" over in Ohio
+   silently replaces Ohio with someone else's territory. The safety net was the thing that could
+   lose the book. Keyed by row, each book keeps its own five and can only ever restore its own. */
 let _lastBak=0;
+function bakPrefix(){ return 'shipday_crm_bak_'+(myBook()||SHARED_BOOK)+'_'; }
+function bakKeys(){ const p=bakPrefix();
+  return Object.keys(localStorage).filter(k=>k.startsWith(p)).sort((a,b)=>(+a.slice(p.length))-(+b.slice(p.length))); }
 function rollingBackup(json,force){
   if(!force && Date.now()-_lastBak < 5*60000) return;
   _lastBak=Date.now();
-  try{ localStorage.setItem('shipday_crm_bak_'+Date.now(), json);
-    const b=Object.keys(localStorage).filter(k=>k.startsWith('shipday_crm_bak_')).sort();
+  try{ localStorage.setItem(bakPrefix()+Date.now(), json);
+    const b=bakKeys();
     while(b.length>5) localStorage.removeItem(b.shift());
   }catch(e){
     // Out of room: drop the oldest snapshots and let the next save try again. Never let a failed
-    // backup take the real save down with it.
-    try{ Object.keys(localStorage).filter(k=>k.startsWith('shipday_crm_bak_')).sort().slice(0,3)
-           .forEach(k=>localStorage.removeItem(k)); }catch(e2){}
+    // backup take the real save down with it. Old un-keyed snapshots go first — they belong to no
+    // book in particular and can't be restored safely anyway.
+    try{ Object.keys(localStorage).filter(k=>/^shipday_crm_bak_\d+$/.test(k)).forEach(k=>localStorage.removeItem(k));
+         bakKeys().slice(0,3).forEach(k=>localStorage.removeItem(k)); }catch(e2){}
   }
 }
 /* Supabase blob sync (model-agnostic, whole store) */
@@ -1049,6 +1110,10 @@ async function pushCloudNow(){
   // the in-memory book and the target row ever disagree it would quietly copy one territory into
   // another — unrecoverable in practice. Refuse rather than risk it.
   if(store.__sbId&&c.row&&store.__sbId!==c.row){ console.warn('push blocked: store is',store.__sbId,'target is',c.row); setSync('err','Save blocked'); return; }
+  // And the same question again, because save() is not the only way in: switchBook awaits this
+  // function directly to flush before it reloads. A viewer leaving someone else's book must not
+  // upload their copy of it on the way out.
+  if(!canEdit()){ setSync('ok','View only'); return; }
   try{ setSync('busy','Saving…');
     // fetch the current cloud book and MERGE, so this push never clobbers a teammate's records
     let adopted=false;
@@ -1087,9 +1152,10 @@ function bookRail(){ const b=document.getElementById('bookBox'); if(!b) return;
   b.style.display='block';
   const cur=myBook(), list=myBooks();
   const mates=Object.keys(BOOK_MEMBERS).filter(e=>(BOOK_MEMBERS[e]||[]).includes(cur));
-  b.innerHTML='<b>'+esc(bookName(cur))+'</b><br>'+
+  b.innerHTML='<b>'+esc(bookName(cur))+(canEdit()?'':' <span style="color:var(--hot)">👁 view only</span>')+'</b><br>'+
     '<span style="color:var(--mut)">Everything on every tab — accounts, contacts, notes, Hot List, quota — is just this territory. '+
-    (mates.length>1?('Shared with '+mates.length+' people: '+esc(mates.join(', '))+'.'):'Only you can see it.')+'</span>'+
+    (canEdit()?'':"You can read it but not change it — nothing you edit here will save. ")+
+    (mates.length?('Only '+esc(mates.join(', '))+' can change it — everyone else can look.'):'')+'</span>'+
     (list.length>1?('<div style="margin-top:6px">'+list.filter(r=>r!==cur).map(r=>
       '<button class="btn sm gh" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">Switch to '+esc(bookName(r))+'</button>').join(' ')+'</div>'):'');
 }
@@ -3961,8 +4027,13 @@ function renderRepChip(){ const b=el('rep-chip'); if(!b) return; const me=myRep(
 function renderBookChip(){ const b=el('book-chip'); if(!b) return;
   const list=myBooks();
   if(!BOOK_SPLIT||list.length<2){ b.style.display='none'; return; }
-  b.style.display=''; b.textContent=bookName(myBook());
-  b.title='Working in '+bookName(myBook()).replace(/^\S+\s/,'')+' — click to switch territory';
+  b.style.display='';
+  // Say view-only up here, not only when a save is refused. Someone who spends ten minutes taking
+  // notes and finds out at the end has lost ten minutes and some trust in the app.
+  const ro=!canEdit();
+  b.innerHTML=(ro?'<span style="color:var(--hot)">👁 View only · </span>':'')+esc(bookName(myBook()));
+  b.title=(ro?"You're reading "+bookName(myBook()).replace(/^\S+\s/,'')+" — nothing you change here will be saved. "
+             :'Working in '+bookName(myBook()).replace(/^\S+\s/,'')+' — ')+'click to switch territory';
 }
 /* ============ GOOGLE CONNECTION, VISIBLE ============
    Connecting your Gmail is the FIRST thing a new rep has to do and it used to be reachable only
@@ -4011,9 +4082,11 @@ function bookMenu(){
   let g=el('bookgate'); if(!g){ g=document.createElement('div'); g.id='bookgate'; document.body.appendChild(g); }
   g.innerHTML='<div class="gatebox">'+
     '<h1>Which <b>territory</b>?</h1>'+
-    '<p>Each territory is a separate book — its own accounts, contacts, notes and quota. Nothing you log in one ever shows up in the other.</p>'+
-    list.map(r=>'<button class="btn rbtn'+(r===cur?' pri':'')+'" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">'+esc(bookName(r))+
-      (r===cur?' <span style="float:right;font-size:11px;opacity:.8">you\'re here</span>':'')+'</button>').join('')+
+    '<p>Each territory is a separate book — its own accounts, contacts, notes and quota. Nothing you log in one ever shows up in the other. You can open anyone\'s book to look; the ones marked 👁 you can read but not change.</p>'+
+    list.map(r=>{ const w=myWrite(), ro=w.length?!w.includes(r):isTeamBook(r);
+      return '<button class="btn rbtn'+(r===cur?' pri':'')+'" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">'+esc(bookName(r))+
+      (ro?' <span style="font-size:11px;opacity:.6">👁 view only</span>':'')+
+      (r===cur?' <span style="float:right;font-size:11px;opacity:.8">you\'re here</span>':'')+'</button>'; }).join('')+
     '<button class="btn gh" style="width:100%;margin-top:8px" onclick="this.closest(\'#bookgate\').style.display=\'none\'">Cancel</button>';
   g.style.display='flex';
 }
@@ -7543,8 +7616,10 @@ function exportBackup(){ store.__lastExport=Date.now();
   // warn you before it overwrites a different one. Stripped again on the way back in.
   const j=JSON.stringify(Object.assign({},store,{__book:bookName(myBook())}),null,0);
   const b=new Blob([j],{type:'application/json'}); const u=URL.createObjectURL(b);
-  const a=document.createElement('a'); a.href=u; a.download='shipday_crm_backup_'+new Date().toISOString().slice(0,10)+'.json'; a.click(); URL.revokeObjectURL(u); toast('Backup downloaded'); save(); }
-function importBackupPrompt(){ el('fileimp').click(); }
+  const a=document.createElement('a'); a.href=u; a.download='shipday_crm_backup_'+new Date().toISOString().slice(0,10)+'.json'; a.click(); URL.revokeObjectURL(u); toast('Backup downloaded'); if(canEdit()) save(); }
+/* Reading a book you don't own is fine; loading a file into it is not. Stop at the file picker
+   rather than at save(), so nobody maps forty columns before finding out. */
+function importBackupPrompt(){ if(!canEdit()){ readOnlyBlocked(); return; } el('fileimp').click(); }
 function onFile(e){ const f=e.target.files[0]; if(!f)return;
   // An .xlsx/.numbers file is a zip, not text. It used to be read as text anyway, which turned
   // the whole spreadsheet into gibberish rows — the import "ran" and nothing usable landed.
@@ -7560,6 +7635,7 @@ function onFile(e){ const f=e.target.files[0]; if(!f)return;
          merges, this one overwrites. So say the numbers out loud, name both books, and if the file was
          built for a different one, make that the first line. A backup written before z162 has no stamp;
          it is still restorable, it just can't be checked. */
+      if(!canEdit()){ readOnlyBlocked(); return; }
       const cur=bookName(myBook());
       const from=s.__book||'', n=o=>Object.keys(o||{}).length;
       const msg=(from&&from!==cur?'⚠️ This file was built for the "'+from+'" book.\nYou are in "'+cur+'".\n\n':'')+
@@ -8270,6 +8346,7 @@ function runMappedImport(){ const P=_impPending; if(!P) return;
     if(k===CUSTOM_COL) M[CUSTOM_COL].push([+i,P.H[i]||('Column '+(+i+1))]); else M[k]=+i; });
   const text=P.text; closeColMapper(); importCSV(text,M); }
 function importCSV(text,mapIn){
+  if(!canEdit()){ readOnlyBlocked(); return; }   // an import is the biggest write there is
   let rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
   rows=rows.slice(findHeaderRow(rows));                       // skip any banner/title rows above the headings
   const keep=bodyRowFilter(rows);
@@ -8668,10 +8745,16 @@ function applyLogImport(plan,kind){
   save(); render(); toast('Imported '+added+' '+kind+' log entries'+(skippedUnknown?' · '+skippedUnknown+' unknown-number calls skipped':''));
 }
 function restoreAutoBackup(){
-  const baks=Object.keys(localStorage).filter(k=>k.startsWith('shipday_crm_bak_')).sort().reverse();
-  if(!baks.length){alert('No auto-backups yet.');return;}
-  const list=baks.map((k,i)=>i+': '+new Date(+k.split('_').pop()).toLocaleString()).join('\n');
-  const pick=prompt('Restore which auto-backup?\n'+list+'\n\nEnter number:'); if(pick==null)return;
+  // Only ever this book's own snapshots — see bakPrefix(). Say which book, and say how big each
+  // one is, because "restore" here means "replace", and a snapshot taken before an import is a
+  // very different thing from one taken after it.
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const here=bookName(myBook());
+  const baks=bakKeys().reverse();
+  if(!baks.length){alert('No auto-backups yet for '+here+'.');return;}
+  const list=baks.map((k,i)=>{ let n='?'; try{ const s=JSON.parse(localStorage.getItem(k)); n=Object.keys(s.accounts||{}).length+' accounts'; }catch(e){}
+    return i+': '+new Date(+k.slice(bakPrefix().length)).toLocaleString()+'  ('+n+')'; }).join('\n');
+  const pick=prompt('Restore which auto-backup of '+here+'?\n\nNow: '+accounts().length+' accounts\n\n'+list+'\n\nEnter number:'); if(pick==null)return;
   const k=baks[+pick]; if(!k)return; try{ store=norm(JSON.parse(localStorage.getItem(k))); save(); render(); toast('Restored'); }catch(e){alert('Failed');}
 }
 function checkBackupBanner(){
