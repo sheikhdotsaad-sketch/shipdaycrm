@@ -609,7 +609,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug11·z155';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z156';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -7862,19 +7862,155 @@ function parseCSV(text,d){ d=d||_delim(text); const rows=[]; let row=[],cur='',q
     else { if(ch==='"')q=true; else if(ch===d){row.push(cur);cur='';} else if(ch==='\n'){row.push(cur);rows.push(row);row=[];cur='';} else if(ch==='\r'){} else cur+=ch; }
   } if(cur!==''||row.length){row.push(cur);rows.push(row);} return rows;
 }
-function importCSV(text){
+/* ===== COLUMN MAPPING =====
+   Every field below used to be found by guessing at the header text, and when the guess missed, the
+   column was simply not read — a sheet whose heading says "Business" instead of "Account" imported
+   nothing at all and there was no way to tell it otherwise. This list is now the single source of
+   truth for BOTH the guess and the dropdown in the mapper, so a heading the CRM has never seen is a
+   two-second fix instead of a dead end.
+   [key, label, aliases, group] — alias order no longer decides anything; see guessCols scoring. */
+const IMPORT_FIELDS=[
+  ['acc','Account / restaurant name',['account name','account','restaurant name','restaurant','business name','business','company name','company','store name','store','merchant','venue','organization','organisation','org','dba','location name','client','customer'],'Restaurant'],
+  ['aphone','Restaurant phone (main line)',['restaurant phone','business phone','company phone','store phone','main line','main phone','account phone','office phone','landline'],'Restaurant'],
+  ['addr','Street address',['street address','address line 1','address1','address','street'],'Restaurant'],
+  ['city','City',['city','town','municipality','locality','area'],'Restaurant'],
+  ['state','State',['state','province','region'],'Restaurant'],
+  ['web','Website',['website','web site','url','site','domain','homepage','web'],'Restaurant'],
+  ['ord','Online ordering link',['online ordering','ordering link','order link','ordering url','order url','ordering'],'Restaurant'],
+  ['pos','POS / platform',['pos system','pos','point of sale','platform'],'Restaurant'],
+  ['cui','Cuisine',['cuisine','food type','concept','category','type of food'],'Restaurant'],
+  ['del','Delivery apps',['delivery apps','third party','3rd party','delivery'],'Restaurant'],
+  ['hours','Hours',['hours of operation','hours','open hours'],'Restaurant'],
+  ['locs','# of locations',['# of locations','# locs','# locations','number of locations','locations','store count'],'Restaurant'],
+  ['parent','Parent / brand account',['parent account','brand account','parent brand','parent','franchise'],'Restaurant'],
+  ['first','First name',['first name','firstname','given name','first'],'Person'],
+  ['last','Last name',['last name','lastname','surname','family name','last'],'Person'],
+  ['name','Full name (splits into first + last)',['full name','contact name','owner name','person','contact','owner','name'],'Person'],
+  ['title','Job title',['job title','title','role','position'],'Person'],
+  ['email','Email',['email address','email','e-mail','work email','business email','primary email','mail'],'Person'],
+  ['email2','Alt / personal email',['secondary email','alt email','alternate email','email 2','email2','personal email','other email'],'Person'],
+  ['email3','Third email',['tertiary email','email 3','email3'],'Person'],
+  ['phone','Direct phone',['mobile phone','cell phone','direct phone','phone number','mobile','cell','phone','telephone','contact number'],'Person'],
+  ['warm','Warmth / tier',['warmth','tier','health','priority'],'Person'],
+  ['dispo','Call disposition',['call disposition','disposition','dispo','call result','outcome'],'Person'],
+  ['note','Notes',['notes','note','comments','comment','description'],'Person'],
+  ['stage','Deal stage',['deal stage','stage','status','pipeline'],'Deal'],
+  ['val','Deal value',['deal value','value','amount','mrr','revenue'],'Deal'],
+  ['opens','Email opens',['email opens','opens','opened','pixel_visits','pixel visits'],'Engagement'],
+  ['openat','Last opened',['last opened','opened at','last_open','last open'],'Engagement'],
+  ['replied','Replied?',['replied','reply','has replied'],'Engagement'],
+  ['lastact','Last contacted',['last contacted','last activity','last touch','lastcontacted','last engaged'],'Engagement'],
+];
+/* ===== THE GUESS =====
+   The old version took the first heading that merely CONTAINED an alias, in field order — so
+   "Restaurant Phone" was claimed by Account (alias "restaurant") before the phone field ever saw it,
+   and "Business" / "Cell" / "Town" matched nothing at all and were dropped without a word. Now every
+   column/field pair is SCORED and the best pairs win, so a strong signal beats a weak one no matter
+   what order the columns arrive in:
+     exact heading  >  the alias appears as a whole word  >  loose substring  >  what the values in
+     the column actually LOOK like.
+   That last one is what makes a heading nobody has ever seen work anyway: a column full of
+   "jane@x.com" is an email whatever it's called. Sniffs only ever fill a field no heading claimed. */
+const _SNIFF={
+  email:v=>/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v),
+  phone:v=>/^[\d\s().+\-x]{7,}$/.test(v)&&v.replace(/\D/g,'').length>=7&&v.replace(/\D/g,'').length<=15,
+  web:v=>/^(https?:\/\/|www\.)/i.test(v)||(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(v)&&/\.(com|net|org|co|io|us|biz|menu|restaurant|cafe|pizza|bar)$/i.test(v)),
+  state:v=>/^(a[klrz]|c[aot]|de|fl|ga|hi|i[adln]|k[sy]|la|m[adeinost]|n[cdehjmvy]|o[hkr]|pa|ri|s[cd]|t[nx]|ut|v[at]|w[aivy]|dc)$/i.test(v),
+  addr:v=>/^\d+\s+\S+/.test(v)&&/\b(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|lane|way|hwy|highway|pkwy|ct|court|pl|place|ste|suite)\b/i.test(v),
+};
+/* Deliberately NOT sniffed: names. "Zed's Diner" and "Rita Pavuk" are the same shape — two capitalised
+   words — so the restaurant would land in the contact's name half the time. Left for you to point at. */
+const _SNIFF_ORDER=['email','phone','web','state','addr'];   // most → least certain
+function guessCols(H,rows){
+  const heads=H.map(h=>String(h||'').toLowerCase().replace(/[_.]+/g,' ').replace(/\s+/g,' ').trim());
+  const pairs=[];
+  heads.forEach((h,i)=>{ if(!h) return;
+    IMPORT_FIELDS.forEach(f=>{ let best=0;
+      f[2].forEach(n=>{ let s=0;
+        if(h===n) s=1000;                                                                       // "email" === "email"
+        else if(new RegExp('(^|[^a-z0-9])'+n.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'([^a-z0-9]|$)').test(h)) s=500;  // "work email"
+        else if(n.length>=4&&h.includes(n)) s=200;                                              // "emailaddr" — weak, 4+ only
+        if(s) s+=n.length;                                                                      // the more specific alias breaks the tie
+        if(s>best) best=s; });
+      if(best) pairs.push([best,i,f[0]]); }); });
+  const M={},taken={}; IMPORT_FIELDS.forEach(f=>M[f[0]]=-1);
+  pairs.sort((a,b)=>b[0]-a[0]||a[1]-b[1]).forEach(p=>{ if(M[p[2]]>=0||taken[p[1]]) return; M[p[2]]=p[1]; taken[p[1]]=1; });
+  // Now read up to 40 rows of every still-unclaimed column and let the values speak.
+  const sn={};
+  if(rows&&rows.length>1) heads.forEach((h,i)=>{ if(taken[i]) return;
+    let seen=0; const hit={};
+    for(let r=1;r<Math.min(rows.length,41);r++){ const v=String(rows[r][i]==null?'':rows[r][i]).trim(); if(!v) continue; seen++;
+      _SNIFF_ORDER.forEach(k=>{ if(_SNIFF[k](v)) hit[k]=(hit[k]||0)+1; }); }
+    if(seen>=2) for(const k of _SNIFF_ORDER) if((hit[k]||0)/seen>=0.7){ (sn[k]=sn[k]||[]).push(i); break; }
+  });
+  // Extra emails/phones cascade into the alt slots in column order rather than fighting over the primary.
+  const fill=(k,fields)=>{ (sn[k]||[]).forEach(i=>{ if(taken[i]) return;
+    const f=fields.find(x=>M[x]<0); if(!f) return; M[f]=i; taken[i]=1; }); };
+  fill('email',['email','email2','email3']);
+  fill('phone',['phone','aphone']);
+  fill('web',['web']); fill('state',['state']); fill('addr',['addr']);
+  return M; }
+let _impPending=null;
+/* One row per COLUMN IN YOUR SHEET, because that's the direction you read it in: "this heading,
+   with this example value in it, becomes this field." A column can only feed one field, so the
+   list can't silently end up with two Email columns fighting over the same contact. */
+function openColMapper(text,rows,guess){
+  const H=rows[0].map(h=>String(h||'').trim());
+  const owner={};                                  // column index -> field key (first field to claim it wins)
+  IMPORT_FIELDS.forEach(f=>{ const i=guess[f[0]]; if(i>=0&&owner[i]==null) owner[i]=f[0]; });
+  _impPending={text,rows,H,owner};
+  let m=el('impModal'); if(!m){ m=document.createElement('div'); m.id='impModal'; m.className='cmodal-wrap';
+    m.addEventListener('click',e=>{ if(e.target===m) closeColMapper(); }); document.body.appendChild(m); }
+  renderColMapper(); m.style.display='flex';
+}
+function closeColMapper(){ const m=el('impModal'); if(m) m.style.display='none'; _impPending=null; }
+function setColField(i,k){ if(!_impPending) return;
+  // A field can only come from one column: hand it over rather than importing the same thing twice.
+  if(k) Object.keys(_impPending.owner).forEach(j=>{ if(+j!==+i&&_impPending.owner[j]===k) delete _impPending.owner[j]; });
+  if(k) _impPending.owner[i]=k; else delete _impPending.owner[i];
+  renderColMapper(); }
+function renderColMapper(){ const m=el('impModal'), P=_impPending; if(!m||!P) return;
+  const groups=[...new Set(IMPORT_FIELDS.map(f=>f[3]))];
+  const sample=i=>{ for(let r=1;r<Math.min(P.rows.length,25);r++){ const v=String(P.rows[r][i]==null?'':P.rows[r][i]).trim(); if(v) return v.length>40?v.slice(0,40)+'…':v; } return ''; };
+  const rows=P.H.map((h,i)=>{ const cur=P.owner[i]||'';
+    const opts='<option value="">— skip this column —</option>'+groups.map(g=>'<optgroup label="'+esc(g)+'">'+
+      IMPORT_FIELDS.filter(f=>f[3]===g).map(f=>'<option value="'+f[0]+'"'+(cur===f[0]?' selected':'')+'>'+esc(f[1])+'</option>').join('')+'</optgroup>').join('');
+    const sv=sample(i);
+    return '<tr><td style="padding:5px 8px"><b style="font-size:12px">'+esc(h||'(no heading)')+'</b>'+
+      (sv?'<div class="tsub" style="opacity:.55;font-size:11px">'+esc(sv)+'</div>':'<div class="tsub" style="opacity:.35;font-size:11px">(empty)</div>')+'</td>'+
+      '<td style="padding:5px 8px;width:46%"><select class="cflt" style="width:100%" onchange="setColField('+i+',this.value)">'+opts+'</select></td></tr>'; }).join('');
+  const mapped=Object.keys(P.owner).length;
+  const hasAnchor=Object.values(P.owner).some(k=>['acc','email','phone','first','name'].includes(k));
+  m.innerHTML='<div class="cmodal" style="max-width:720px">'+
+    '<div class="cm-head"><div><div class="cm-name">📥 Match your columns</div>'+
+      '<div class="cm-sub">'+(P.rows.length-1)+' rows · '+P.H.length+' columns · '+mapped+' matched. Anything left on <i>skip</i> is ignored.</div></div>'+
+      '<button class="cm-x" onclick="closeColMapper()">✕</button></div>'+
+    '<div style="max-height:52vh;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:8px">'+
+      '<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--mut)">YOUR COLUMN</th><th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--mut)">IMPORT AS</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    (hasAnchor?'':'<div class="tsub" style="margin-top:10px;color:var(--warm)">⚠ Nothing is matched to an account name, email, phone or person yet — the import would have nothing to file rows under.</div>')+
+    '<div class="logbar" style="margin-top:12px;justify-content:flex-end"><button class="btn gh" onclick="closeColMapper()">Cancel</button>'+
+      '<button class="btn pri"'+(hasAnchor?'':' disabled style="opacity:.45"')+' onclick="runMappedImport()">Import '+(P.rows.length-1)+' rows</button></div>'+
+  '</div>';
+}
+function runMappedImport(){ const P=_impPending; if(!P) return;
+  const M={}; IMPORT_FIELDS.forEach(f=>M[f[0]]=-1);
+  Object.keys(P.owner).forEach(i=>{ M[P.owner[i]]=+i; });
+  const text=P.text; closeColMapper(); importCSV(text,M); }
+function importCSV(text,mapIn){
   const rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
   const H=rows[0].map(h=>h.toLowerCase().trim());
-  const col=(...names)=>{ for(const n of names){ const i=H.findIndex(h=>h===n||h.includes(n)); if(i>=0)return i; } return -1; };
-  const iAcc=col('account','restaurant','company'),iFirst=col('first'),iLast=col('last'),iName=col('contact name','owner','name'),
-    iTitle=col('title'),iEmail=col('email'),iPhone=col('phone'),iCity=col('city','area'),iState=col('state'),
-    iWeb=col('website'),iPos=col('pos','platform'),iWarm=col('warmth','tier','health','priority'),iStage=col('stage'),iVal=col('value'),
-    iCui=col('cuisine','food type','category'),iOrd=col('online ordering','ordering link','order link','ordering url','order url','ordering'),
-    iAddr=col('address','street'),iDispo=col('call disposition','disposition','dispo'),iNote=col('notes','note'),
-    iDel=col('delivery apps','delivery'),iLocs=col('# locs','# locations','locations'),
-    iHours=col('hours'),iParent=col('parent account','brand account','parent brand','parent'),
+  // No confirmed mapping yet → show what it guessed and let you correct it before anything lands.
+  if(!mapIn){ openColMapper(text,rows,guessCols(H,rows)); return; }
+  const M=mapIn, g=k=>(M[k]==null?-1:M[k]);
+  const iAcc=g('acc'),iFirst=g('first'),iLast=g('last'),iName=g('name'),
+    iTitle=g('title'),iEmail=g('email'),iPhone=g('phone'),iCity=g('city'),iState=g('state'),
+    iWeb=g('web'),iPos=g('pos'),iWarm=g('warm'),iStage=g('stage'),iVal=g('val'),
+    iCui=g('cui'),iOrd=g('ord'),
+    iAddr=g('addr'),iDispo=g('dispo'),iNote=g('note'),
+    iDel=g('del'),iLocs=g('locs'),
+    iHours=g('hours'),iParent=g('parent'),
     // The restaurant's own number, as opposed to a named person's direct line.
-    iAPhone=col('restaurant phone','business phone','company phone','store phone','main line','main phone','account phone');
+    iAPhone=g('aphone');
   /* A row that lists a restaurant and a phone number but no person used to be thrown away whole —
      the importer only looked at the phone column inside "if this row has an email or a first name".
      That is how 1,354 of 2,066 accounts ended up with no way to contact them at all. If nobody is
@@ -7884,13 +8020,13 @@ function importCSV(text){
                ||(iName>=0&&String(r[iName]||'').trim());
     return (!person&&iPhone>=0)?String(r[iPhone]||'').trim():''; };
   // ---- Engagement columns → intent signals (so an imported list shows up in Intent) ----
-  const iOpens=col('opens','opened','pixel_visits','pixel visits','email opens'),
-    iOpenAt=col('last opened','opened at','last_open','last open'),
-    iReplied=col('replied','reply','has replied'),
-    iLastAct=col('last contacted','last activity','last touch','lastcontacted','last engaged'),
+  const iOpens=g('opens'),
+    iOpenAt=g('openat'),
+    iReplied=g('replied'),
+    iLastAct=g('lastact'),
     // Contact exports carry the personal/alt addresses people actually reply from — capture
     // them so future open/reply imports attach to the right person instead of spawning a duplicate.
-    iEmail2=col('secondary email','alt email','email 2','personal email'),iEmail3=col('tertiary email');
+    iEmail2=g('email2'),iEmail3=g('email3');
   const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='y'||v==='1'; };
   let na=0,nc=0,nsig=0;
   const byName={}; accounts().forEach(a=>byName[a.name.toLowerCase()]=a.id);
@@ -7993,9 +8129,10 @@ function importCSV(text){
   // "Imported 0 accounts, 0 contacts" told you nothing. If the sheet landed nothing, say what
   // the top row actually looked like and what one column would fix it.
   if(!na&&!nc&&!nsig){
-    alert('Nothing imported from that file.\n\nThe top row needs to be your column headings, and at least one of them has to say Account, Restaurant, Company, Name, Email or Phone.\n\nWhat the top row said:\n'+
-      rows[0].slice(0,12).map(h=>'  • '+(String(h||'').trim()||'(blank)')).join('\n')+
-      '\n\n'+(rows.length-1)+' row'+(rows.length===2?'':'s')+' under it were read but had nothing to file.');
+    // The mapping is confirmed by now, so this is a data problem, not a heading problem — but the
+    // fix is still in the mapper, so put them back in it rather than at a dead end.
+    if(confirm((rows.length-1)+' row'+(rows.length===2?'':'s')+' were read but nothing could be filed.\n\n'+
+      'Usually that means the columns you matched to Account / Email / Phone are empty on every row.\n\nGo back and re-match the columns?')) openColMapper(text,rows,mapIn);
     return; }
   toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':'')+(nlink?' · '+nlink+' filed under a restaurant':''));
 }
