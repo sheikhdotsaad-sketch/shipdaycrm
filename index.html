@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z165';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z166';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1200,7 +1200,7 @@ function bookRail(){ const b=document.getElementById('bookBox'); if(!b) return;
     '<span style="color:var(--mut)">Everything on every tab — accounts, contacts, notes, Hot List, quota — is just this book. '+
     (canEdit()?'':"You're seeing it as "+owner+" sees it. You can read it but not change it — nothing you edit here will save. ")+
     // Embert has no book of his own on purpose, so tell him plainly where his work lands.
-    (workBook()?"This is "+owner+"'s book and you work in it — your calls, notes and emails save here for real, stamped <b>"+esc(realRep()||'you')+"</b> so it's clear who did what. ":'')+
+    (workBook()?"This is "+owner+"'s book and you work in it — your calls, notes and emails save here for real, stamped <b>"+esc(repShort(realRep())||'you')+"</b> so it's clear who did what. ":'')+
     (mates.length?('Only '+esc(mates.join(', '))+' can change it — everyone else can look.'):'')+'</span>'+
     (list.length>1?('<div style="margin-top:6px">'+list.filter(r=>r!==cur).map(r=>
       '<button class="btn sm gh" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">Switch to '+esc(bookName(r))+'</button>').join(' ')+'</div>'):'')+
@@ -2495,6 +2495,12 @@ function fireToMyHot(cid){ const c=contact(cid); if(!c) return; const me=myRep()
 // on the first name (small team, first names are unique) so ownership matches however it was entered.
 function repCanon(n){ return String(n||'').trim().toLowerCase().split(/\s+/)[0]; }
 function repSame(a,b){ const x=repCanon(a); return !!x && x===repCanon(b); }
+/* 🔑 THE NAME YOU SAY OUT LOUD. Saad, on the opener the call card handed Embert: "bro just have it
+   say embert". Nobody introduces themselves on a cold call with their full legal name — "Hi Lambros,
+   Embert Rein Sy with Shipday" is instantly a script being read. First name only, and only where a
+   human says or reads it as a sentence. Everything that has to MATCH a person — log stamps,
+   assignees, hotFor keys, repCanon — keeps the full stored name; this is display, nothing else. */
+function repShort(n){ return String(n||'').trim().split(/\s+/)[0]||''; }
 // Who a task belongs to: whoever it was handed to, else whoever created it.
 function taskOwner(t){ return (t&&(t.assignee||t.by))||''; }
 function taskMine(t){ const mr=repCanon((typeof myRep==='function'&&myRep())||'');
@@ -2823,7 +2829,7 @@ function renderToday(){
 
   // 1) Compact header — greeting + date + My | Team toggle.
   const hr=new Date().getHours(); const greet=hr<12?'Good morning':hr<18?'Good afternoon':'Good evening';
-  const rep=myRep()||'there';
+  const rep=repShort(myRep())||'there';   // "Good afternoon, Embert Rein Sy" is a form letter. See repShort.
   const dstr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
   let h='<div class="today-head"><h2>'+esc(greet)+', '+esc(rep)+'</h2><span class="dt">'+esc(dstr)+'</span>'+
     '<span class="vseg"><button class="'+(todayView==='my'?'on':'')+'" onclick="setTodayView(\'my\')">My day</button>'+
@@ -4103,7 +4109,7 @@ function renderBookChip(){ const b=el('book-chip'); if(!b) return;
             : workBook() ? '<span style="color:var(--sig)">✏️ '+esc(who)+"'s book</span>"
             : esc(bookName(myBook()));
   b.title=(ro ? "You're looking at "+who+"'s CRM — nothing you change here will be saved. C"
-        : workBook() ? "You work in "+who+"'s book — your calls and notes save here and are stamped "+(realRep()||'you')+". C"
+        : workBook() ? "You work in "+who+"'s book — your calls and notes save here and are stamped "+(repShort(realRep())||'you')+". C"
         : 'Your own book — c')+'lick to switch to someone else.';
 }
 /* ============ GOOGLE CONNECTION, VISIBLE ============
@@ -5212,7 +5218,10 @@ function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
   // as bad. Both fall back to wording that reads normally either way.
   let an=a?String(brandName(a)||'').trim():'';
   if(!an||an==='—'||(typeof isJunkDomainAccount==='function'&&a&&isJunkDomainAccount(a))) an='your restaurant';
-  const map={ first:fn, first_name:fn, account:an, company:an, rep:senderName(),
+  // {{rep}} is always a first-person mention — "I'm {{rep}} with Shipday" in the body, and the
+  // trailing "Best,\n{{rep}}" is replaced wholesale by applySig()/repSig(), which already sign off
+  // with the first name. So a full legal name here only ever made the one sentence read like a form.
+  const map={ first:fn, first_name:fn, account:an, company:an, rep:repShort(senderName()),
     apps:(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats',
     locs:String(acctLocs(a)) };
   return String(str).replace(/\{\{\s*(first_name|first|account|company|rep|apps|locs)\s*\}\}/gi,(m,k)=>map[k.toLowerCase()]||''); }
@@ -5250,7 +5259,7 @@ function emailStep(c,n){
   const custom=cadDefFor(c)[n-1];
   if(custom&&(custom.subj||custom.body)){ base={subj:fillTokens(custom.subj||'',c), body:applySig(fillTokens(custom.body||'',c)), type:custom.type||'', label:custom.label||''}; }
   else {
-    const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=senderName();
+    const a=acct(c.accountId), fn=(c.first||cname(c).split(' ')[0]||'there'), an=aname(a), rep=repShort(senderName());   // first name — the sign-off is repSig()'s job, see repShort
     const apps=(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats';
     const locs=acctLocs(a);
     const sign='\n\n'+repSig();
@@ -5883,7 +5892,8 @@ function callBrief(c){ if(!c) return '';
   // script on Embert's call card told him to open with "Hi, Saad Sheikh with Shipday" — the one line
   // he says out loud, and it was someone else's name. myRep() is the rep for THIS book: himself where
   // he works, and the owner's name when he's only looking at their card.
-  const a=acct(c.accountId), rep=myRep()||store.__rep||'Shipday';
+  // repShort: `rep` is only ever spoken here, and you introduce yourself by first name. See repShort.
+  const a=acct(c.accountId), rep=repShort(myRep()||store.__rep)||'Shipday';
   const open=lastOpenTs(c), opens=openCount(c), touch=lastTouchTs(c), fn=(c.first||cname(c).split(' ')[0]||'there');
   let head;
   if(c.replied) head='↩️ <b>Replied to your outreach</b> — they raised a hand. Reference it and go straight for a time.';
@@ -8967,12 +8977,13 @@ function aiEmail(t,id){
   if(t==='c'){ const c=contact(id),a=acct(c.accountId); name=c.first||cname(c); acctName=aname(a); ctx=c.notes||''; step=c.nextStep||''; }
   else { const d=deal(id),c=contact(d.contactId),a=acct(d.accountId); name=(c&&c.first)||'there'; acctName=aname(a); ctx=d.notes||''; step=d.nextStep||''; }
   const rep=myRep()||store.__rep||'Shipday';   // same fix as callBrief — sign it with whoever's sending
+  const repFn=repShort(rep)||rep;              // "I'm Embert with Shipday" in the sentence, full name on the sign-off
   const body=
 `Subject: Quick idea for ${acctName} deliveries
 
 Hi ${name},
 
-I'm ${rep} with Shipday — we help restaurants like ${acctName} run their own delivery: dispatch drivers, track orders live, and cut third-party fees.
+I'm ${repFn} with Shipday — we help restaurants like ${acctName} run their own delivery: dispatch drivers, track orders live, and cut third-party fees.
 
 ${ctx?('Following up on: '+ctx+'\n\n'):''}${step?('Next: '+step+'\n\n'):''}Worth a quick 15-min look this week? Happy to tailor it to how ${acctName} operates today.
 
@@ -9025,8 +9036,13 @@ const REP_BY_EMAIL={
   'saad.sheikh@shipday.com':'Saad Sheikh',
   'embert@shipday.com':'Embert Rein Sy',
   'embert.sy@shipday.com':'Embert Rein Sy',
-  'aime@shipday.com':'Aime',
+  // Both of Aime's addresses map to the SAME full name as BOOKS[1].rep. If they disagreed, the book
+  // would say "Aime Kamana" while the browser said "Aime", and ownBook()'s repCanon check would still
+  // pass (first word) but every "stamped by" line would show two different people doing one job.
+  'aime@shipday.com':'Aime Kamana',
+  'aime.kamana@shipday.com':'Aime Kamana',
   'david.umana@shipday.com':'David Umana',
+  'johnny.angulo@shipday.com':'Johnny Angulo',
 };
 function repFromEmail(em){
   em=String(em||'').toLowerCase().trim(); if(!em) return '';
