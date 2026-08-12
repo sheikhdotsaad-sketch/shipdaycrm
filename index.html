@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z172';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z173';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -5981,12 +5981,19 @@ async function sendSeqEmail(id){
     // not found". In that case drop the dead thread and resend as a fresh email so the step still goes out.
     const post=(withThread)=>fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
       body:JSON.stringify({to:c.email,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
-        // Open tracking costs deliverability: a 1x1 remote image on a domain unrelated to
-        // shipday.com is the clearest "bulk mail" tell a filter can read, and it is byte-identical
-        // in every message the team sends. On a COLD step that trade is bad — the pixel measures an
-        // open that the pixel itself helped push to spam. Once they have opened or replied before,
-        // the thread has standing and the signal is worth more than the risk, so track from there on.
-        track:(n>=3||!!c.replied||!!c.lastEmailOpenTs),
+        /* 🔴 REVERSED, and it was my mistake. z153 withheld the pixel on cold steps because a 1x1
+           remote image is a bulk tell. The reasoning was fine; the consequence was not.
+             - 47% of his live sequence contacts sit on step 1 or 2, so half his sending went blind.
+             - Worse, the condition was SELF-SEALING: `lastEmailOpenTs` is one of the switches that
+               turns tracking on, and a contact can never earn it without a pixel. A lead that had
+               not opened before could never be measured again, permanently.
+           Saad: "i havent had an email open since nam" / "i had a 52 percent open rate". He is
+           right, and this is why. Verified against a real cold send in his Sent folder
+           (berriesrestaurantgroup, 12 Aug): plain text + HTML both present, so z153's
+           multipart/alternative fix IS deployed and working — that was the change that actually
+           bought deliverability. The pixel was the small half of the trade and it cost him the
+           entire signal, so it goes back on. */
+        track:true,
         threadId:(isReply&&withThread)?(s.threadId||''):'', inReplyTo:(isReply&&withThread)?(s.lastMsgId||''):''})});
     let r=await post(true); let d=await r.json();
     // No mailbox connected for this rep. The server used to fall back to the original owner's
