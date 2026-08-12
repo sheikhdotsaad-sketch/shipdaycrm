@@ -4177,12 +4177,15 @@ function subscribeClaims(){
       if(UI.tab==='hotlist'&&!drawerOpen()&&!mine) renderHotList();
     }).subscribe();
 }
-async function claimLead(c){ const me=myRep(); if(!me||!c||!claimsReady()) return;
+/* 🔴 Claims go STRAIGHT to Supabase — they skip save() and pushCloudNow(), so neither view-only gate
+   catches them. Merely scrolling a teammate's Hot List would otherwise stake claims on their leads,
+   under their own name, on people nobody is actually calling. Looking at a book must write nothing. */
+async function claimLead(c){ const me=myRep(); if(!me||!c||!claimsReady()||!canEdit()) return;
   if(claimedByOther(c)) return;   // never steal a teammate's active lead — they saw it first
   const now=Date.now(); claimsMap[c.id]={rep:me,at:now};  // optimistic
   try{ await sb.from('crm_state').upsert({id:claimPfx()+c.id,data:{rep:me,at:now,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('claimLead',e); }
 }
-async function releaseClaim(c){ if(!c||!claimsReady()) return; const r=claimsMap[c.id]; if(r&&r.rep!==myRep()) return;
+async function releaseClaim(c){ if(!c||!claimsReady()||!canEdit()) return; const r=claimsMap[c.id]; if(r&&r.rep!==myRep()) return;
   delete claimsMap[c.id];  // optimistic
   // tombstone (at:0) rather than DELETE so anon key never needs delete grants
   try{ await sb.from('crm_state').upsert({id:claimPfx()+c.id,data:{rep:'',at:0,contactId:c.id},updated_at:new Date().toISOString()}); }catch(e){ console.warn('releaseClaim',e); }
@@ -6086,7 +6089,11 @@ function renderHotList(){
   // while it stays your Now-up so a long call doesn't hit the 30-min TTL).
   const _cr=claimOf(cur);
   if(cur && me && (!claimMine(cur) || Date.now()-(_cr?_cr.at:0) > CLAIM_TTL/2)) claimLead(cur);
-  const idBar = me
+  // Visiting is reading. Don't say "calling as Johnny" to someone who isn't Johnny and can't dial
+  // from here, and don't offer a "change" that would rewrite the visitor's own name for nothing.
+  const idBar = visiting()
+    ? '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">👁 <b>'+esc(me)+'\u2019s queue</b>, in his order — this is what he sees when he sits down. You\u2019re reading it; nothing here claims a lead or logs a call.</div></div>'
+    : me
     ? '<div class="panel" style="border-color:var(--sig)"><div style="padding:9px 14px;font-size:12.5px">👤 Calling as <b>'+esc(me)+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> — leads you open lock to you for 30 min so teammates don\'t double-dial.</div></div>'
     : '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">⚠️ <b>Set your name</b> to turn on lead-locking (stops you and teammates calling the same person) · <span onclick="setMyRep()" style="cursor:pointer;color:var(--hot)"><b>set name</b></span></div></div>';
   const coldN=due.filter(c=>c.warmth==='Cold').length, hotN=due.filter(c=>c.warmth==='Hot').length;
