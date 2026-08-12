@@ -29,6 +29,9 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cc-name{font-size:21px;font-weight:800;line-height:1.1}
 .cc-sub{color:var(--mut);margin:3px 0 9px;font-size:13px}
 .cc-bits{font-size:12px;color:var(--mut);margin-bottom:10px}
+.sibs{font-size:12px;color:var(--mut);margin:4px 0 6px}
+.sibs a{color:var(--sig);cursor:pointer}
+.sibs a:hover{text-decoration:underline}
 .cc-bits b{color:var(--ink);font-weight:600}
 .cc-note input{width:100%}
 .cc-actions{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:4px}
@@ -610,7 +613,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z170';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z171';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -5321,11 +5324,23 @@ function brandName(a){
   // Some rows were imported address-FIRST: "2038 Madison Road Che Empanadas OBV". Cut everything up
   // to and including the street word — but only if a real name is left. "31707 Urban Street Food"
   // would be gutted down to "Food", so there we just drop the house number and keep the name.
-  if(/^\d/.test(n)){
+  // A house number is a bare number — "8th St Coffee House" opens with an ordinal, and that is the
+  // shop's actual name.
+  if(/^\d+\s/.test(n)){
     const w=n.split(/\s+/);
-    let si=-1; for(let i=1;i<w.length-1;i++){ if(_STREET_TAIL.test(w[i])){ si=i; break; } }
+    // ...and it has to be CLOSE to the front. A real address prefix is short ("2038 Madison Road",
+    // "500 S. Nolen Dr"). A street word deep in the string is a TRAILING address instead, and
+    // cutting after it returns the suite: "286 Noodle House 3347 W Walnut St Ste 105" -> "Ste 105".
+    // "5 Points Drive In and Market" is a drive-in, not an address — "Drive"/"Way" followed by
+    // In/Thru is part of the restaurant's name.
+    let si=-1; for(let i=1;i<Math.min(w.length-1,4);i++){
+      if(_STREET_TAIL.test(w[i])&&!/^(in|thru|through)\b/i.test(w[i+1]||'')){ si=i; break; } }
     if(si>0&&w.length-si-1>=2) n=w.slice(si+1).join(' ');
-    else if(w.length-1>=2) n=w.slice(1).join(' ');
+    // A leading number is only a house number when there IS a street word behind it. Without one
+    // the number is part of the name, and dropping it turned David's seven "24 Seven Tacos" rows
+    // into seven "Seven Tacos" — the `si>0` guard here is what stops that. "56 Kitchen" and
+    // "1899 Golf" were already safe by word count; "24 Seven Tacos" was not.
+    else if(si>0&&w.length-1>=2) n=w.slice(1).join(' ');
   }
   const city=String((a&&a.city)||'').trim();
   if(city){
@@ -5346,6 +5361,70 @@ function acctLoc(a){ const full=String((a&&a.name)||'').trim(), b=brandName(a);
   let rest=i<0?'':full.slice(i+b.length);
   if(!rest.trim()) rest=full.slice(0,Math.max(0,i));
   return rest.replace(/^[\s,|(\-–—]+/,'').replace(/[\s,|)\-–—]+$/,'').trim(); }
+
+/* 🔴 "im calling lunas bakery in my book right / they ahve 3 locations / it sucks that i didnt
+   know that before."
+   The book held "Luna Bakery" and "Luna Bakery & Cafe" as two unrelated Cleveland rows. Nothing
+   could ever have linked them: parentId is only set by an import, and the multi-location pass
+   matches on an identical website host — which the row with no website at all can never have.
+   So the call card said nothing and he dialled one storefront blind to the other two.
+   This finds siblings at RENDER time and only ever SHOWS them. It sets no parentId, merges
+   nothing, writes no field. That asymmetry is the entire design: a wrong guess here costs a
+   glance, where a wrong merge would file two restaurants' calls under one name forever. */
+const _AGGHOST=/(toasttab|square\.site|squareup|clover\.com|olo\.com|chownow|doordash|ubereats|grubhub|slicelife|menufy|wixsite|godaddysites|business\.site|facebook|instagram|linktr\.ee|weebly|sites\.google|beyondmenu|popmenu|owner\.com|bentobox)/;
+const _realHost=u=>{ const h=_webHost(u); return (h&&h.indexOf('.')>0&&!_AGGHOST.test(h))?h:''; };
+let _SIBIX=null;
+function _sibIx(){
+  if(_SIBIX) return _SIBIX;
+  const byHost={},byCity={},byPfx={};
+  accounts().forEach(a=>{
+    const h=_realHost(a.website); if(h)(byHost[h]=byHost[h]||[]).push(a);
+    const n=_nblob(a.name),ct=String(a.city||'').trim().toLowerCase();
+    if(n.length>=8&&ct)(byCity[ct]=byCity[ct]||[]).push(a);
+    // Two names in a prefix relationship with a >=10 char stem MUST share their first 10
+    // characters, so bucketing on those 10 finds every such pair without comparing the book
+    // against itself.
+    if(n.length>=10)(byPfx[n.slice(0,10)]=byPfx[n.slice(0,10)]||[]).push(a);
+  });
+  _SIBIX={byHost,byCity,byPfx};
+  Promise.resolve().then(()=>{ _SIBIX=null; });
+  return _SIBIX;
+}
+/* Two kinds of evidence, and they must not read the same on screen.
+   'linked' — already grouped by a human/import, or they share a real website host. Certain.
+   'likely' — one normalised name is a full prefix of the other ("lunabakery" ⊂ "lunabakerycafe").
+              Strong but not proof, so it renders as a QUESTION, never as a fact: "Ostioneria" is
+              just Spanish for oyster house and prefixes two unrelated Houston restaurants.
+
+   The prefix test runs with a city OR with a >=10 character stem, and that OR is the whole
+   point. David's book has a city on 2% of rows and a website on 4% — requiring a city switched
+   the entire feature off for him (2 hits in 2,183 rows) while his book was quietly holding
+   SEVEN "24 Seven Tacos" storefronts. A long stem is its own evidence when nothing else exists;
+   8 characters is not, which is why the shorter stems still have to agree on a city. */
+function sameBrand(a){
+  if(!a) return [];
+  const ix=_sibIx(),out={};
+  const add=(x,k)=>{ if(!x||x.id===a.id) return; if(!out[x.id]||k==='linked') out[x.id]={a:x,k:k}; };
+  const b=brandOf(a); if(b){ add(b,'linked'); childLocs(b.id).forEach(x=>add(x,'linked')); }
+  childLocs(a.id).forEach(x=>add(x,'linked'));
+  const h=_realHost(a.website); if(h)(ix.byHost[h]||[]).forEach(x=>add(x,'linked'));
+  const n=_nblob(a.name); if(n.length<8) return Object.keys(out).map(k=>out[k]);
+  const ct=String(a.city||'').trim().toLowerCase();
+  const pfx=x=>{ const m=_nblob(x.name); if(m===n||m.indexOf(n)===0||n.indexOf(m)===0) add(x,'likely'); };
+  if(ct)(ix.byCity[ct]||[]).forEach(pfx);
+  if(n.length>=10)(ix.byPfx[n.slice(0,10)]||[]).forEach(pfx);
+  return Object.keys(out).map(k=>out[k]);
+}
+function sibsHtml(a){
+  const s=sameBrand(a); if(!s.length) return '';
+  const sure=s.filter(x=>x.k==='linked'),maybe=s.filter(x=>x.k==='likely');
+  const link=x=>'<a onclick="event.stopPropagation();openAccount(\''+x.a.id+'\')" title="'+esc(x.a.name||'')+'" style="cursor:pointer">'+
+    esc(brandName(x.a)||x.a.name)+(acctLoc(x.a)?' <span style="opacity:.6">'+esc(acctLoc(x.a))+'</span>':'')+'</a>';
+  let h='';
+  if(sure.length) h+='<div class="sibs">🏢 <b>'+(sure.length+1)+' locations</b> · '+sure.map(link).join(' · ')+'</div>';
+  if(maybe.length) h+='<div class="sibs" style="opacity:.75">🏢 Same brand? '+maybe.map(link).join(' · ')+'</div>';
+  return h;
+}
 function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
   const _junk=s=>{s=String(s||'').trim().toLowerCase();return !s||/^(\(no name\)|unknown|n\/?a|none|no ?name|main ?line|mainline|main|line|front ?desk|front|desk|owner|manager|info|null|undefined|[-—.])$/.test(s);};
   // A greeting may ONLY use a real human first name. cname() deliberately falls back to the
@@ -6134,6 +6213,7 @@ function callCard(c,dueN,snoozedN){
   h+='<div class="cc-body"><div class="cc-main">';
   h+='<div class="cc-name">'+esc(cname(c))+'</div>';
   h+='<div class="cc-sub">'+esc(c.title||'')+(a?' · '+esc(brandName(a)||a.name)+(acctLoc(a)?' <span style="opacity:.5">'+esc(acctLoc(a))+'</span>':''):'')+'</div>';
+  h+=sibsHtml(a);   // before you dial: this brand has other storefronts in your book
   h+='<div class="cc-bits">'+bits.join(' · ')+'</div>';
   h+='<div class="cc-note"><input class="cflt" placeholder="call note…" value="'+esc(c.callNote||'')+'" onchange="setNote(\''+c.id+'\',this.value)"></div>';
   h+='</div><div class="cc-actions">';
@@ -7348,7 +7428,7 @@ function openAccount(id){
     (isBrand(a)?'<span class="tag">🏢 '+childLocs(id).length+' loc</span>':isLocation(a)?'<span class="tag">📍 Location</span>':'')+
     (a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing customer</span>':a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
     '<button class="x" onclick="closeDrawer()">×</button>';
-  let b='';
+  let b=sibsHtml(a);
   // ---- at-a-glance: account heat/intent + freshness + open-now ----
   { const lt=acctLastTouch(a), lo=acctLastOpen(a), open=hoursOpenNow(a), hh=acctHeat(a), ii=acctIntentScore(a);
     const chips=[ statChip('Heat',hh,hh>=350?'var(--hot)':hh>=180?'var(--warm)':''),
