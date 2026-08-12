@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z163';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z164';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -903,7 +903,7 @@ const deals   =()=>Object.values(store.deals);
    change underneath it, and by the time any click or edit runs the index has already been dropped.
    save() busts it as well, for anything that mutates in a batch and paints later. */
 let _IDX=null;
-function idxBust(){ _IDX=null; }
+function idxBust(){ _IDX=null; _numIdx=null; _sncM=null; }   // the phone-line caches ride along
 function _idx(){
   if(_IDX) return _IDX;
   const byA={}, dByA={}, kids={};
@@ -4197,14 +4197,35 @@ function taskIndex(){ const T=tasks(); const stamp=(+store.__updatedAt||0)+'|'+T
   _taskIdx=m; _taskIdxAt=stamp; return m; }
 // number -> contacts sharing it. Rebuilt only when the book changes.
 let _numIdx=null,_numIdxAt=0;
-function numIndex(){ const stamp=(+store.__updatedAt||0)+'|'+Object.keys(store.contacts||{}).length;
+/* ⚠️ THE STAMP HAS TO BE CHEAP, because it runs on every cache HIT — that's the whole point of the
+   cache. The obvious version counted the contacts (Object.keys(store.contacts).length), which is
+   O(book) per lookup: allocating a 1,082-string array a thousand times a render cost exactly as
+   much as the work it was meant to skip, and the first cut of this memo measured no faster at all.
+   __updatedAt moves on every save() — which is the only way a contact is ever added — and the
+   store identity check catches a whole-book replacement (load / cloud merge / restore) that keeps
+   the same timestamp. idxBust() clears both as well. */
+let _sncStore=null;
+function numStamp(){ if(_sncStore!==store){ _sncStore=store; _numIdx=null; _sncM=null; } return +store.__updatedAt||0; }
+function numIndex(){ const stamp=numStamp();
   if(_numIdx&&_numIdxAt===stamp) return _numIdx;
   const m={}; contacts().forEach(c=>telKeys(c).forEach(k=>{ (m[k]=m[k]||[]).push(c); }));
   _numIdx=m; _numIdxAt=stamp; return m; }
-// Other contact records that ring the same phone as c.
-function sameNumberContacts(c){ const seen={},out=[]; const idx=numIndex();
+/* Other contact records that ring the same phone as c — memoised on the same stamp as the index.
+   🔑 THIS WAS THE HOT LIST. dupDial() asks this question THREE times (recent dial on the line /
+   call-back already booked / claimed by a teammate), elig() calls dupDial on every contact, and
+   hotQueue() runs elig over the whole book up to four times — so the same tiny array was being
+   rebuilt about a dozen times per contact per render. Measured on the 1,082-contact book:
+   dupDial alone was 75ms of the tab's 124ms, against 6-18ms for every other tab. Same answers,
+   built once. Callers only ever read the array (forEach / some / for-of); if you ever need to
+   change one, copy it first — it's shared now. */
+let _sncM=null,_sncAt=-1;
+function sameNumberContacts(c){ if(!c) return [];
+  const stamp=numStamp();
+  if(!_sncM||_sncAt!==stamp){ _sncM=new Map(); _sncAt=stamp; }
+  const hit=_sncM.get(c.id); if(hit) return hit;
+  const seen={},out=[]; const idx=numIndex();
   telKeys(c).forEach(k=>(idx[k]||[]).forEach(o=>{ if(o.id!==c.id&&!seen[o.id]){ seen[o.id]=1; out.push(o); } }));
-  return out; }
+  _sncM.set(c.id,out); return out; }
 /* The most recent call anyone on the team made to this NUMBER via a different
    contact record. This is what we show in the modal and suppress the queue on. */
 function recentDialOnNumber(c,within){
@@ -4297,7 +4318,15 @@ function hotQueue(){ const now=Date.now();
   const dueAt=c=>{ const a=+c.nextCallAt||0; if(+c.promisedCallAt) return a;
     const e=taskIndex()[c.id], b=(e&&e.callDue)||0;
     return (a&&b)?Math.min(a,b):(a||b); };
-  const byHeat=(a,b)=>callPriority(b)-callPriority(a);
+  /* Heat is scored ONCE per contact per pass, not once per comparison. A sort of the full book is
+     ~14,600 comparator calls against 1,082 contacts, so callPriority was being recomputed thirteen
+     times over for every lead — measured at 62ms of the tab's own render, and there are several of
+     these sorts. The map is local to this call, so there is no cache to invalidate and no way for
+     a stale score to survive into the next render; heat still recomputes from scratch every time
+     the queue is built. */
+  const _pri=new Map();
+  const pri=c=>{ let v=_pri.get(c.id); if(v===undefined){ v=callPriority(c); _pri.set(c.id,v); } return v; };
+  const byHeat=(a,b)=>pri(b)-pri(a);
   // Body of the list = contacts you tagged Hot PLUS anyone sitting on a sequence CALL step (a planned,
   // meaningful dial). Call-steps join the ranked body so they compete by heat in the top 150 and get
   // dialed — not stranded in the appended tail behind every Hot-tagged lead.
