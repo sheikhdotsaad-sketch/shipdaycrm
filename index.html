@@ -609,7 +609,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z156';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z157';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -6777,8 +6777,11 @@ function customBlock(ent,id){
   const cf=r.custom||{}; const keys=Object.keys(cf);
   let h='<div class="sec">Custom fields <button class="btn sm gh" style="float:right" onclick="addField(\''+ent+'\',\''+id+'\')">+ Add field</button></div>';
   if(!keys.length) h+='<div class="tsub">None yet — add your own.</div>';
-  keys.forEach((k,i)=>{ h+='<div class="cfrow"><label>'+esc(k)+'</label>'+
-      '<input value="'+esc(cf[k]||'')+'" oninput="setCustom(\''+ent+'\',\''+id+'\','+i+',this.value)">'+
+  // A column full of links is only useful if you can click it — his sheet carries Toast/Google/social URLs.
+  keys.forEach((k,i)=>{ const v=cf[k]||'', url=/^(https?:\/\/|www\.)\S+$/i.test(String(v).trim());
+    h+='<div class="cfrow"><label>'+esc(k)+'</label>'+
+      '<input value="'+esc(v)+'" oninput="setCustom(\''+ent+'\',\''+id+'\','+i+',this.value)">'+
+      (url?'<a class="btn sm gh" target="_blank" title="Open link" href="'+esc(_extUrl(v))+'">↗</a>':'')+
       '<button class="btn sm gh" title="Remove field" onclick="delField(\''+ent+'\',\''+id+'\','+i+')">×</button></div>'; });
   return h;
 }
@@ -6936,7 +6939,9 @@ function openAccount(id){
      '<a class="btn sm gh" target="_blank" href="'+gmaps(a)+'">📍 Maps</a>'+
      (a.website?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.website))+'">🌐 Website</a>':'')+
      (a.ordering?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.ordering))+'">🛒 Ordering</a>':'')+
-     '<a class="btn sm gh" target="_blank" href="https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||a.state||'')+' facebook')+'">f Facebook</a>'+
+     // A link that came off the sheet beats a guessed search — ★ marks the ones we actually have.
+     (a.facebook?'<a class="btn sm gh" target="_blank" href="'+esc(_extUrl(a.facebook))+'">f Facebook ★</a>'
+       :'<a class="btn sm gh" target="_blank" href="https://www.google.com/search?q='+encodeURIComponent((a.name||'')+' '+(a.city||a.state||'')+' facebook')+'">f Facebook</a>')+
      '</div>';
   if(a.isCustomer&&!a.existingCust){
     b+='<div class="sec">Customer</div>';
@@ -7862,6 +7867,31 @@ function parseCSV(text,d){ d=d||_delim(text); const rows=[]; let row=[],cur='',q
     else { if(ch==='"')q=true; else if(ch===d){row.push(cur);cur='';} else if(ch==='\n'){row.push(cur);rows.push(row);row=[];cur='';} else if(ch==='\r'){} else cur+=ch; }
   } if(cur!==''||row.length){row.push(cur);rows.push(row);} return rows;
 }
+/* Real sheets don't start with the headings. David's pipeline opens with a section banner —
+   ",,DECEMBER,,,,,,," — and the importer read THAT as the header row, so every column was called ""
+   or "DECEMBER", nothing matched, and the file landed nothing at all. That is the blank import.
+   Score the first dozen rows and take the one that reads like headings: several filled cells, short
+   distinct words rather than numbers, URLs or sentences. Earliest wins ties, so a normal sheet is
+   still row 0 and nothing changes for it. */
+function findHeaderRow(rows){
+  let best=0,bestScore=-1;
+  for(let i=0;i<Math.min(rows.length,12);i++){
+    const filled=rows[i].map(c=>String(c==null?'':c).trim()).filter(Boolean);
+    if(filled.length<2) continue;                                   // a lone "DECEMBER" is a banner, not a header
+    const wordy=filled.filter(v=>/[a-z]/i.test(v)&&v.length<=40&&!/^\d/.test(v)&&!/^https?:/i.test(v)).length;
+    const score=wordy*2+new Set(filled.map(v=>v.toLowerCase())).size;
+    if(score>bestScore){ bestScore=score; best=i; } }
+  return best;
+}
+/* The same banner rows repeat all the way down the file (46 of them in his). Left alone they become
+   accounts called "JANUARY". A row with a single value in a sheet whose rows normally carry several
+   is a divider — but only judge that against the sheet's own shape, so a plain list of restaurant
+   names, where every row has one cell, still imports. */
+function bodyRowFilter(rows){
+  const counts=rows.slice(1).map(r=>r.filter(c=>c&&String(c).trim()).length).sort((a,b)=>a-b);
+  const med=counts.length?counts[Math.floor(counts.length/2)]:0;
+  return r=>{ const n=r.filter(c=>c&&String(c).trim()).length; return !(n<2&&med>=3); };
+}
 /* ===== COLUMN MAPPING =====
    Every field below used to be found by guessing at the header text, and when the guess missed, the
    column was simply not read — a sheet whose heading says "Business" instead of "Account" imported
@@ -7871,12 +7901,15 @@ function parseCSV(text,d){ d=d||_delim(text); const rows=[]; let row=[],cur='',q
    [key, label, aliases, group] — alias order no longer decides anything; see guessCols scoring. */
 const IMPORT_FIELDS=[
   ['acc','Account / restaurant name',['account name','account','restaurant name','restaurant','business name','business','company name','company','store name','store','merchant','venue','organization','organisation','org','dba','location name','client','customer'],'Restaurant'],
-  ['aphone','Restaurant phone (main line)',['restaurant phone','business phone','company phone','store phone','main line','main phone','account phone','office phone','landline'],'Restaurant'],
+  ['aphone','Restaurant phone (main line)',['restaurant phone','business phone','company phone','store phone','main line','main phone','account phone','office phone','landline','rx phone','rx number','rx #'],'Restaurant'],
   ['addr','Street address',['street address','address line 1','address1','address','street'],'Restaurant'],
   ['city','City',['city','town','municipality','locality','area'],'Restaurant'],
   ['state','State',['state','province','region'],'Restaurant'],
   ['web','Website',['website','web site','url','site','domain','homepage','web'],'Restaurant'],
-  ['ord','Online ordering link',['online ordering','ordering link','order link','ordering url','order url','ordering'],'Restaurant'],
+  // The three that feed the account drawer's Quick Links row.
+  ['ord','Online ordering link (Toast)',['toast link','online ordering','ordering link','order link','ordering url','order url','toasttab','ordering','toast'],'Restaurant'],
+  ['gurl','Google link',['google link','google url','google maps','google maps link','maps link','google'],'Restaurant'],
+  ['fb','Facebook / Instagram link',['facebook / insta','facebook/insta','facebook link','instagram link','facebook','instagram','insta','social'],'Restaurant'],
   ['pos','POS / platform',['pos system','pos','point of sale','platform'],'Restaurant'],
   ['cui','Cuisine',['cuisine','food type','concept','category','type of food'],'Restaurant'],
   ['del','Delivery apps',['delivery apps','third party','3rd party','delivery'],'Restaurant'],
@@ -7921,6 +7954,7 @@ const _SNIFF={
 /* Deliberately NOT sniffed: names. "Zed's Diner" and "Rita Pavuk" are the same shape — two capitalised
    words — so the restaurant would land in the contact's name half the time. Left for you to point at. */
 const _SNIFF_ORDER=['email','phone','web','state','addr'];   // most → least certain
+const CUSTOM_COL='__custom';   // pseudo-field: keep this column under its own heading (r.custom)
 function guessCols(H,rows){
   const heads=H.map(h=>String(h||'').toLowerCase().replace(/[_.]+/g,' ').replace(/\s+/g,' ').trim());
   const pairs=[];
@@ -7935,6 +7969,18 @@ function guessCols(H,rows){
       if(best) pairs.push([best,i,f[0]]); }); });
   const M={},taken={}; IMPORT_FIELDS.forEach(f=>M[f[0]]=-1);
   pairs.sort((a,b)=>b[0]-a[0]||a[1]-b[1]).forEach(p=>{ if(M[p[2]]>=0||taken[p[1]]) return; M[p[2]]=p[1]; taken[p[1]]=1; });
+  // First+Last already name the person, so importCSV ignores the full-name column anyway. Release it
+  // rather than leave it looking mapped — a sheet with "Owner Rep" (the rep, not the lead) landed there.
+  if(M.first>=0&&M.name>=0){ delete taken[M.name]; M.name=-1; }
+  /* A heading can lie. His column is called "Facebook / Insta" and holds TRUE/FALSE — a tick-box for
+     whether anyone looked, not a link. Filing that as the Facebook URL would put a dead button on the
+     account. If a link field's column isn't mostly links, hand it back; it lands as a custom field
+     under its own heading instead, which is what it actually is. */
+  if(rows&&rows.length>3) ['ord','gurl','fb','web'].forEach(k=>{ const i=M[k]; if(i<0) return;
+    let seen=0,urls=0;
+    for(let r=1;r<Math.min(rows.length,41);r++){ const v=String(rows[r][i]==null?'':rows[r][i]).trim();
+      if(!v) continue; seen++; if(/^(https?:\/\/|www\.)/i.test(v)||_SNIFF.web(v)) urls++; }
+    if(seen>=3&&urls/seen<0.5){ delete taken[i]; M[k]=-1; } });
   // Now read up to 40 rows of every still-unclaimed column and let the values speak.
   const sn={};
   if(rows&&rows.length>1) heads.forEach((h,i)=>{ if(taken[i]) return;
@@ -7958,6 +8004,13 @@ function openColMapper(text,rows,guess){
   const H=rows[0].map(h=>String(h||'').trim());
   const owner={};                                  // column index -> field key (first field to claim it wins)
   IMPORT_FIELDS.forEach(f=>{ const i=guess[f[0]]; if(i>=0&&owner[i]==null) owner[i]=f[0]; });
+  /* A column the CRM has no field for — David's "Meeting Linked" — used to be thrown away, which is
+     the worst possible answer: he put it in the sheet because it matters. Records already carry
+     free-form custom fields (customBlock, r.custom), so anything left over is KEPT under its own
+     heading by default and shows up on the drawer. Nothing in the file is silently lost; if it really
+     is junk it's one dropdown away from skip. */
+  H.forEach((h,i)=>{ if(owner[i]!=null||!String(h||'').trim()) return;
+    for(let r=1;r<Math.min(rows.length,25);r++) if(String(rows[r][i]==null?'':rows[r][i]).trim()){ owner[i]=CUSTOM_COL; return; } });
   _impPending={text,rows,H,owner};
   let m=el('impModal'); if(!m){ m=document.createElement('div'); m.id='impModal'; m.className='cmodal-wrap';
     m.addEventListener('click',e=>{ if(e.target===m) closeColMapper(); }); document.body.appendChild(m); }
@@ -7966,24 +8019,28 @@ function openColMapper(text,rows,guess){
 function closeColMapper(){ const m=el('impModal'); if(m) m.style.display='none'; _impPending=null; }
 function setColField(i,k){ if(!_impPending) return;
   // A field can only come from one column: hand it over rather than importing the same thing twice.
-  if(k) Object.keys(_impPending.owner).forEach(j=>{ if(+j!==+i&&_impPending.owner[j]===k) delete _impPending.owner[j]; });
+  // "Keep as a custom field" is the exception — any number of columns can be kept under their own heading.
+  if(k&&k!==CUSTOM_COL) Object.keys(_impPending.owner).forEach(j=>{ if(+j!==+i&&_impPending.owner[j]===k) delete _impPending.owner[j]; });
   if(k) _impPending.owner[i]=k; else delete _impPending.owner[i];
   renderColMapper(); }
 function renderColMapper(){ const m=el('impModal'), P=_impPending; if(!m||!P) return;
   const groups=[...new Set(IMPORT_FIELDS.map(f=>f[3]))];
   const sample=i=>{ for(let r=1;r<Math.min(P.rows.length,25);r++){ const v=String(P.rows[r][i]==null?'':P.rows[r][i]).trim(); if(v) return v.length>40?v.slice(0,40)+'…':v; } return ''; };
   const rows=P.H.map((h,i)=>{ const cur=P.owner[i]||'';
-    const opts='<option value="">— skip this column —</option>'+groups.map(g=>'<optgroup label="'+esc(g)+'">'+
+    const opts='<option value="">— skip this column —</option>'+
+      '<option value="'+CUSTOM_COL+'"'+(cur===CUSTOM_COL?' selected':'')+'>Keep as a custom field'+(h?' — “'+esc(h)+'”':'')+'</option>'+
+      groups.map(g=>'<optgroup label="'+esc(g)+'">'+
       IMPORT_FIELDS.filter(f=>f[3]===g).map(f=>'<option value="'+f[0]+'"'+(cur===f[0]?' selected':'')+'>'+esc(f[1])+'</option>').join('')+'</optgroup>').join('');
     const sv=sample(i);
     return '<tr><td style="padding:5px 8px"><b style="font-size:12px">'+esc(h||'(no heading)')+'</b>'+
       (sv?'<div class="tsub" style="opacity:.55;font-size:11px">'+esc(sv)+'</div>':'<div class="tsub" style="opacity:.35;font-size:11px">(empty)</div>')+'</td>'+
       '<td style="padding:5px 8px;width:46%"><select class="cflt" style="width:100%" onchange="setColField('+i+',this.value)">'+opts+'</select></td></tr>'; }).join('');
-  const mapped=Object.keys(P.owner).length;
-  const hasAnchor=Object.values(P.owner).some(k=>['acc','email','phone','first','name'].includes(k));
+  const vals=Object.values(P.owner), nCust=vals.filter(k=>k===CUSTOM_COL).length, mapped=vals.length-nCust;
+  const hasAnchor=vals.some(k=>['acc','email','phone','first','name'].includes(k));
   m.innerHTML='<div class="cmodal" style="max-width:720px">'+
     '<div class="cm-head"><div><div class="cm-name">📥 Match your columns</div>'+
-      '<div class="cm-sub">'+(P.rows.length-1)+' rows · '+P.H.length+' columns · '+mapped+' matched. Anything left on <i>skip</i> is ignored.</div></div>'+
+      '<div class="cm-sub">'+(P.rows.length-1)+' rows · '+P.H.length+' columns · '+mapped+' matched to a CRM field'+
+        (nCust?', '+nCust+' kept as custom field'+(nCust===1?'':'s'):'')+'. Anything left on <i>skip</i> is ignored.</div></div>'+
       '<button class="cm-x" onclick="closeColMapper()">✕</button></div>'+
     '<div style="max-height:52vh;overflow:auto;margin-top:10px;border:1px solid var(--line);border-radius:8px">'+
       '<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--mut)">YOUR COLUMN</th><th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--mut)">IMPORT AS</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
@@ -7994,10 +8051,16 @@ function renderColMapper(){ const m=el('impModal'), P=_impPending; if(!m||!P) re
 }
 function runMappedImport(){ const P=_impPending; if(!P) return;
   const M={}; IMPORT_FIELDS.forEach(f=>M[f[0]]=-1);
-  Object.keys(P.owner).forEach(i=>{ M[P.owner[i]]=+i; });
+  M[CUSTOM_COL]=[];                                   // [[column index, heading], …] — many allowed
+  Object.keys(P.owner).forEach(i=>{ const k=P.owner[i];
+    if(k===CUSTOM_COL) M[CUSTOM_COL].push([+i,P.H[i]||('Column '+(+i+1))]); else M[k]=+i; });
   const text=P.text; closeColMapper(); importCSV(text,M); }
 function importCSV(text,mapIn){
-  const rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
+  let rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
+  rows=rows.slice(findHeaderRow(rows));                       // skip any banner/title rows above the headings
+  const keep=bodyRowFilter(rows);
+  rows=[rows[0]].concat(rows.slice(1).filter(keep));          // and the dividers repeated further down
+  if(rows.length<2){toast('Empty CSV');return;}
   const H=rows[0].map(h=>h.toLowerCase().trim());
   // No confirmed mapping yet → show what it guessed and let you correct it before anything lands.
   if(!mapIn){ openColMapper(text,rows,guessCols(H,rows)); return; }
@@ -8005,7 +8068,7 @@ function importCSV(text,mapIn){
   const iAcc=g('acc'),iFirst=g('first'),iLast=g('last'),iName=g('name'),
     iTitle=g('title'),iEmail=g('email'),iPhone=g('phone'),iCity=g('city'),iState=g('state'),
     iWeb=g('web'),iPos=g('pos'),iWarm=g('warm'),iStage=g('stage'),iVal=g('val'),
-    iCui=g('cui'),iOrd=g('ord'),
+    iCui=g('cui'),iOrd=g('ord'),iGurl=g('gurl'),iFb=g('fb'),
     iAddr=g('addr'),iDispo=g('dispo'),iNote=g('note'),
     iDel=g('del'),iLocs=g('locs'),
     iHours=g('hours'),iParent=g('parent'),
@@ -8028,6 +8091,15 @@ function importCSV(text,mapIn){
     // them so future open/reply imports attach to the right person instead of spawning a duplicate.
     iEmail2=g('email2'),iEmail3=g('email3');
   const yes=v=>{ v=String(v||'').trim().toLowerCase(); return v==='true'||v==='yes'||v==='y'||v==='1'; };
+  /* Columns with no CRM field of their own ride along under their own heading, onto the person when
+     the row names one and onto the restaurant when it doesn't. Fill-blank, like everything else here,
+     so re-importing a sheet never wipes something you typed over the top of it. */
+  const customs=Array.isArray(M[CUSTOM_COL])?M[CUSTOM_COL]:[];
+  let ncust=0;
+  const stampCustom=(rec,r)=>{ if(!rec||!customs.length) return;
+    customs.forEach(([i,label])=>{ const v=String(r[i]==null?'':r[i]).trim();
+      if(!v||v.toLowerCase()==='none') return; rec.custom=rec.custom||{};
+      if(rec.custom[label]) return; rec.custom[label]=v; ncust++; stampU(rec); }); };
   let na=0,nc=0,nsig=0;
   const byName={}; accounts().forEach(a=>byName[a.name.toLowerCase()]=a.id);
   const byEmail={}; contacts().forEach(c=>{altAddrs(c).forEach(e=>{byEmail[e]=c.id;});});
@@ -8063,12 +8135,12 @@ function importCSV(text,mapIn){
     let aid=byName[an.toLowerCase()];
     // "# Locs" > 1 = a multi-location group (sets locType + the # Locations field)
     const locsN=(iLocs>=0?parseInt(String(r[iLocs]||'').replace(/\.0$/,'')):0)||0;
-    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),phone:aPhoneOf(r),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),hours:(iHours>=0?String(r[iHours]||'').trim():''),isCustomer:false};
+    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),phone:aPhoneOf(r),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),googleUrl:(iGurl>=0?String(r[iGurl]||'').trim():''),facebook:(iFb>=0?String(r[iFb]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),hours:(iHours>=0?String(r[iHours]||'').trim():''),isCustomer:false};
       if(locsN>1){ store.accounts[aid].employees=String(locsN); store.accounts[aid].locType='multi'; }
       byName[an.toLowerCase()]=aid; na++; }
     else { // account already in book — fill in blanks only (re-importing an enriched sheet enriches, never clobbers)
       const a0=acct(aid); if(a0){ let f=false; const fill=(k,i)=>{ const v=(i>=0?String(r[i]||''):'').trim(); if(v&&!a0[k]){ a0[k]=v; f=true; } };
-        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel); fill('hours',iHours);
+        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel); fill('hours',iHours); fill('googleUrl',iGurl); fill('facebook',iFb);
         const ap=aPhoneOf(r); if(ap&&!a0.phone){ a0.phone=ap; f=true; }   // re-importing the same sheet now backfills the main line
         if(locsN>1&&!a0.employees){ a0.employees=String(locsN); f=true; }
         if(locsN>1&&(!a0.locType||a0.locType==='single')&&!isLocation(a0)){ a0.locType='multi'; f=true; }
@@ -8081,7 +8153,11 @@ function importCSV(text,mapIn){
         if(pa&&a0&&pid!==aid&&!a0.parentId&&!isBrand(a0)){
           a0.parentId=pid; a0.locType='single'; stampU(a0);
           if(pa.locType!=='multi'){ pa.locType='multi'; stampU(pa); } } } }
-    const email=(iEmail>=0?r[iEmail]:'').trim();
+    /* One cell, two people: his sheet writes "hernandezjuanita270@gmail.com / heidyguarcas14@gmail.com".
+       The whole string used to be stored as THE address, which is undeliverable and unsearchable.
+       First one is the contact, the rest become alt addresses so a reply from either still matches. */
+    const emailsOnRow=iEmail>=0?String(r[iEmail]||'').split(/[\/;,|]+|\s+/).map(s=>s.trim()).filter(s=>/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(s)):[];
+    const email=emailsOnRow[0]||'';
     let first='',last='';
     if(iFirst>=0){first=(r[iFirst]||'').trim();last=(iLast>=0?r[iLast]:'').trim();}
     else if(iName>=0){const p=(r[iName]||'').trim().split(/\s+/);first=p[0]||'';last=p.slice(1).join(' ');}
@@ -8101,17 +8177,19 @@ function importCSV(text,mapIn){
         const rank={Cold:0,Warm:1,Hot:2};
         if(wNew&&(rank[wNew]||0)>(rank[c.warmth]||0)){ c.warmth=wNew; f=true; }
         [iEmail2,iEmail3].forEach(ix=>{ if(ix>=0){ const av=String(r[ix]||'').trim(); if(av.includes('@')&&av.toLowerCase()!=='none'&&addAltEmail(c,av)){ byEmail[av.toLowerCase()]=c.id; f=true; } } });
+        emailsOnRow.slice(1).forEach(av=>{ if(addAltEmail(c,av)){ byEmail[av.toLowerCase()]=c.id; f=true; } });
         if(f) stampU(c); };
       if(exist){ const c=contact(exist); if(c){ if(email&&!c.email){ c.email=email; byEmail[email.toLowerCase()]=exist; }
         if(phone&&!c.phone&&!c.mobile){ c.phone=phone; if(pk)byPhone[pk]=exist; }
         if(!c.accountId||!acct(c.accountId)){ c.accountId=aid; stampU(c); }   // orphan self-heals onto the row's account
-        stampMeta(c); stampEngage(c,r); } }
+        stampMeta(c); stampEngage(c,r); stampCustom(c,r); } }
       else { const cid=uid('c');
       let warm='Cold'; const wv=(iWarm>=0?r[iWarm]:'').toLowerCase(); if(wv.includes('hot')||wv.includes('a ')||wv.includes('high'))warm='Hot'; else if(wv.includes('warm')||wv.includes('b ')||wv.includes('med'))warm='Warm';
       store.contacts[cid]={id:cid,accountId:aid,first,last,title:(iTitle>=0?r[iTitle]:'').trim(),email,phone,warmth:warm,status:'New',log:[]};
       if(isInternalEmail(email)) store.contacts[cid].internal=true;   // colleague on our own domain — keep out of queue/Intent
       stampMeta(contact(cid));
       stampEngage(contact(cid),r);
+      stampCustom(contact(cid),r);
       if(email)byEmail[email.toLowerCase()]=cid; if(nm)byNameAcct[aid+'|'+nm]=cid; if(pk)byPhone[pk]=cid; nc++; } }
     else { // no contact on the row — notes + phone belong to the ACCOUNT (corporate line)
       const nv=(iNote>=0?String(r[iNote]||'').trim():'');
@@ -8120,7 +8198,8 @@ function importCSV(text,mapIn){
         if(nv&&nv.toLowerCase()!=='none'){ const txt='📝 '+nv; a1.log=a1.log||[];
           if(!a1.log.some(l=>l.txt===txt)){ a1.log.push({ts:Date.now(),txt,sys:true}); stampU(a1); } }
         const pv=(iPhone>=0?String(r[iPhone]||'').trim():'');
-        if(pv&&!a1.phone){ a1.phone=pv; stampU(a1); } } }
+        if(pv&&!a1.phone){ a1.phone=pv; stampU(a1); }
+        stampCustom(a1,r); } }
   });
   // A sheet that names a restaurant on one row and only an address on another leaves the second row
   // orphaned. Heal it here, while the accounts the import just created are fresh.
@@ -8128,13 +8207,13 @@ function importCSV(text,mapIn){
   save(); render();
   // "Imported 0 accounts, 0 contacts" told you nothing. If the sheet landed nothing, say what
   // the top row actually looked like and what one column would fix it.
-  if(!na&&!nc&&!nsig){
+  if(!na&&!nc&&!nsig&&!ncust){
     // The mapping is confirmed by now, so this is a data problem, not a heading problem — but the
     // fix is still in the mapper, so put them back in it rather than at a dead end.
     if(confirm((rows.length-1)+' row'+(rows.length===2?'':'s')+' were read but nothing could be filed.\n\n'+
       'Usually that means the columns you matched to Account / Email / Phone are empty on every row.\n\nGo back and re-match the columns?')) openColMapper(text,rows,mapIn);
     return; }
-  toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':'')+(nlink?' · '+nlink+' filed under a restaurant':''));
+  toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':'')+(nlink?' · '+nlink+' filed under a restaurant':'')+(ncust?' · '+ncust+' custom values kept':''));
 }
 /* ---- Universal CSV importer: auto-detect calls / emails / contacts ---- */
 function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10?d.slice(-10):''; }
@@ -8205,7 +8284,9 @@ function openImportPreview(kind,stats,applyFn){ __applyImport=applyFn;
   openDrawer();
 }
 function smartImport(text){
-  const rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
+  let rows=parseCSV(text).filter(r=>r.some(c=>c&&c.trim())); if(rows.length<2){toast('Empty CSV');return;}
+  rows=rows.slice(findHeaderRow(rows));   // route on the REAL headings, not a "DECEMBER" banner
+  if(rows.length<2){toast('Empty CSV');return;}
   const H=rows[0].map(h=>h.toLowerCase().trim());
   const has=(...n)=>n.some(x=>H.some(h=>h===x||h.includes(x)));
   // exact header match wins over substring — otherwise OpenPhone's "belongsTo" col
