@@ -546,6 +546,7 @@ small.hint{color:var(--dim);font-size:11px}
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="repairAltEmails()" title="Pull the personal/alt addresses buried in merge notes (e.g. a gmail someone replied from) up onto the contact so future open/reply imports attach to the right person">Repair alternate emails</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="bulkSplitContacts()">✂️ Split multi-person contacts</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="fixCalNames()">Clean calendar names</button>
+      <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="fixRepNamed()" title="If an imported sheet had an Owner / Rep / Assigned To column, every lead may have been filed under YOUR name. This moves your name to the Owner field and keeps the lead.">Fix contacts named after me</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="restoreAutoBackup()">Restore auto-backup</button>
       <button class="btn sm gh" style="width:100%;margin-bottom:6px" onclick="reloadSeed()">Reload imported data</button>
       <button class="btn sm gh" style="width:100%;color:var(--hot)" onclick="resetAll()">Reset all</button>
@@ -609,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z157';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z158';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1735,11 +1736,21 @@ function hydrateMine(){
   // The bell too. It's an alert about mail YOU sent, so it belongs to you and to nobody else.
   store.__signals=myBox('signals')||[];
 }
-function _selfEmail(){ return String(myBox('email')||store.__email||'').toLowerCase().trim(); }
+/* Your own address. myBox('email') is only filled by a Gmail/calendar sync, so for a rep who just
+   got a login and hasn't connected a mailbox yet it is EMPTY — and an empty self email cascades:
+   selfDomain() goes blank, isInternalEmail() answers false for everybody (it's `!!sd && …`), and
+   your own address starts reading as an external prospect on your own meetings. The sign-in email
+   is authoritative and is always there, so fall back to it. */
+function _selfEmail(){ return String(myBox('email')||store.__email||bookEmail()||'').toLowerCase().trim(); }
 // Your own company domain (from your rep email) — anyone on it is a colleague, not a lead.
 function selfDomain(){ const e=_selfEmail(); return (e.split('@')[1]||'').trim(); }
 function isInternalEmail(email){ email=String(email||'').toLowerCase().trim(); if(!email.includes('@')) return false;
-  const sd=selfDomain(); return !!sd && (email.split('@')[1]||'')===sd; }
+  const dom=(email.split('@')[1]||''), sd=selfDomain();
+  // Our own domain is a colleague no matter whose login is open — MEET_NOISE and the reply sync have
+  // always known that literally. Stating it here too means a rep with no mailbox connected still can't
+  // have a teammate (or themselves) filed as a lead.
+  if(dom==='shipday.com') return true;
+  return !!sd && dom===sd; }
 function eventExtEmails(e){ const self=_selfEmail(); return (e.attendees||[]).map(a=>typeof a==='string'?a:(a&&a.email)).filter(x=>x&&String(x).toLowerCase()!==self&&!MEET_NOISE.test(x)); }
 const _EMAIL_RX=/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi;
 // All external guest emails on an event — attendees PLUS any pulled from the description/location.
@@ -1853,6 +1864,60 @@ function calNameFixScan(){ const out=[];
     const clean=stripRepFromName(full);
     if(clean && clean!==full && clean.length>=2){ const parts=clean.split(/\s+/); out.push({id:c.id,from:full,to:clean,first:parts.shift()||'',last:parts.join(' ')}); } });
   return out; }
+/* ===== "Every contact is named after ME" — find it and undo it =====
+   A trial user imports their own pipeline export, the sheet has an Owner / Rep / Assigned To column
+   holding their own name on every row, and the importer filed that as the LEAD's name. The column is
+   refused outright now, but books that were already imported have to be repairable, and the repair
+   splits in two because the records are not all the same thing:
+     · a real restaurant with a real address or number, just wearing the wrong name  → KEEP it, move
+       the name to assignee where it belonged, and let cname() fall back to the account. Deleting
+       these would throw away the actual leads.
+     · a record whose only identity IS the rep — our own address, no phone, no account of its own →
+       that is a phantom off their own calendar or a blank row. Delete it, and take the account and
+       demo deal that were auto-created alongside it.
+   Scoped to the signed-in person's own name, so it can never touch a genuine prospect who happens to
+   share a name with someone on another team. */
+function repNamedScan(){
+  const me=_dnorm(senderName()||''); if(!me||me.length<4) return [];
+  const out=[];
+  Object.values(store.contacts||{}).forEach(c=>{
+    const full=[c.first,c.last].filter(Boolean).join(' ').trim();
+    if(!full||_dnorm(full)!==me) return;
+    const a=store.accounts[c.accountId];
+    const realEmail=c.email&&!isInternalEmail(c.email);
+    const phantom=!realEmail&&!c.phone&&!c.mobile;
+    out.push({id:c.id,from:full,phantom,acct:a?a.name:'',
+      // Only pull the account/deal down with it if the calendar or an import invented them for this
+      // one contact — never an account that has other people on it.
+      aid:(phantom&&a&&a.autoFrom&&Object.values(store.contacts).filter(x=>x.accountId===a.id).length===1)?a.id:null});
+  });
+  return out; }
+function fixRepNamed(){
+  const hits=repNamedScan();
+  if(!hits.length){ toast('No contacts are named after you — all clean'); return; }
+  const keep=hits.filter(h=>!h.phantom), gone=hits.filter(h=>h.phantom);
+  if(!confirm('Found '+hits.length+' contact'+(hits.length>1?'s':'')+' named “'+hits[0].from+'” — you.\n\n'+
+    '• '+keep.length+' are real records (they have a number or an outside email). Keeping them and moving your name to the Owner field.\n'+
+    '• '+gone.length+' have nothing on them but your own name. Deleting those'+(gone.some(h=>h.aid)?', plus the accounts auto-created for them':'')+'.\n\n'+
+    'Reversible — Undo appears after.')) return;
+  const snap=[];
+  keep.forEach(h=>{ const c=store.contacts[h.id]; if(!c) return;
+    snap.push({t:'ren',cid:h.id,first:c.first,last:c.last,assignee:c.assignee});
+    if(!c.assignee) c.assignee=h.from;
+    c.first=''; c.last=''; stampU(c); });
+  gone.forEach(h=>{ const c=store.contacts[h.id]; if(!c) return;
+    snap.push({t:'del',cid:h.id,rec:JSON.parse(JSON.stringify(c)),
+      aid:h.aid,arec:h.aid?JSON.parse(JSON.stringify(store.accounts[h.aid])):null,
+      deals:Object.values(store.deals||{}).filter(d=>d.contactId===h.id).map(d=>JSON.parse(JSON.stringify(d)))});
+    Object.values(store.deals||{}).forEach(d=>{ if(d.contactId===h.id) delete store.deals[d.id]; });
+    delete store.contacts[h.id];
+    if(h.aid) delete store.accounts[h.aid]; });
+  idxBust(); save(); renderActive();
+  toast('Fixed '+hits.length+' record'+(hits.length>1?'s':''),()=>{
+    snap.forEach(s=>{ if(s.t==='ren'){ const c=store.contacts[s.cid]; if(c){ c.first=s.first; c.last=s.last; c.assignee=s.assignee; stampU(c); } }
+      else { store.contacts[s.cid]=s.rec; if(s.aid&&s.arec) store.accounts[s.aid]=s.arec;
+        s.deals.forEach(d=>{ store.deals[d.id]=d; }); } });
+    idxBust(); save(); renderActive(); toast('Reverted'); }); }
 // One-click reversible cleanup: strip the leaked rep name from calendar contacts (and rename the
 // person-named account it spawned). Snapshot → Undo toast.
 function fixCalNames(){ const hits=calNameFixScan();
@@ -4962,14 +5027,21 @@ function fillTokens(str,c){ if(!str) return ''; const a=acct(c.accountId);
     apps:(a&&a.delivery)?a.delivery:'DoorDash/Uber Eats',
     locs:String(acctLocs(a)) };
   return String(str).replace(/\{\{\s*(first_name|first|account|company|rep|apps|locs)\s*\}\}/gi,(m,k)=>map[k.toLowerCase()]||''); }
-function senderName(){ return myRep()||store.__rep||'Saad'; }
+/* Who is sending / working in this browser. This used to end `|| 'Saad'`, which meant anybody who
+   hadn't answered the name gate WAS Saad: their emails signed off as him, their activity was
+   attributed to him, and — the reason this got found — every "don't put the rep's own name on a
+   prospect" guard stripped *saad/sheikh* out of THEIR data and left their own name in. The sign-in
+   email already proves who they are, so derive it from that and never impersonate a hardcoded person. */
+function senderName(){ return myRep()||store.__rep||repFromEmail(bookEmail())||''; }
 // Per-rep email signature: every play's copy was pasted from Saad's sequences and ends "Best,\nSaad",
 // which is wrong when Embert (or anyone else) sends. repSig() returns the CURRENT rep's own sign-off
 // (editable, stored per rep in store.__sigs), defaulting to their first name. applySig() swaps a
 // template's trailing sign-off block for the sender's, so no email ever goes out signed as someone else.
 function repSig(){ const me=senderName(); const sigs=(store&&store.__sigs)||{};
   if(sigs[me]!=null && String(sigs[me]).trim()) return String(sigs[me]).replace(/\s+$/,'');
-  const first=String(me||'Saad').split(/\s+/)[0]; return 'Best,\n'+first+'\nShipday'; }
+  // No identity at all → sign off with no name rather than with Saad's. Signing a stranger's email
+  // as somebody else is worse than a slightly bare sign-off.
+  const first=String(me||'').split(/\s+/)[0]; return 'Best,'+(first?'\n'+first:'')+'\nShipday'; }
 function applySig(body){ body=String(body||'').replace(/\s+$/,'');
   // strip a trailing sign-off (last "Best,/Thanks,/Cheers/…" line to end), then append this rep's sig
   const stripped=body.replace(/\n+[ \t]*(Best regards|Warm regards|Best|Thanks so much|Thank you|Thanks|Cheers|Regards|Sincerely|Talk soon)[,.!]?[ \t]*\r?\n[\s\S]*$/i,'').replace(/\s+$/,'');
@@ -7918,7 +7990,12 @@ const IMPORT_FIELDS=[
   ['parent','Parent / brand account',['parent account','brand account','parent brand','parent','franchise'],'Restaurant'],
   ['first','First name',['first name','firstname','given name','first'],'Person'],
   ['last','Last name',['last name','lastname','surname','family name','last'],'Person'],
-  ['name','Full name (splits into first + last)',['full name','contact name','owner name','person','contact','owner','name'],'Person'],
+  /* NOT aliased here: a bare "owner", "contact", "person", "rep" or "user". In a sales export those
+     name the COLLEAGUE who owns the row, not the lead — so a trial user importing their own pipeline
+     got every single contact named after themselves. They belong to the assignee field below.
+     "Owner Name" / "Owner's Name" / "Contact Name" are still honoured: those do name the human. */
+  ['name','Full name (splits into first + last)',['full name','contact name','owner name','owners name','contact person','decision maker','lead name','prospect name','name'],'Person'],
+  ['own','Owner / assigned rep',['account owner','record owner','owner','assigned to','assigned rep','assigned','sales rep','rep','ae','sdr','salesperson','booked by','owned by','closer','user'],'Person'],
   ['title','Job title',['job title','title','role','position'],'Person'],
   ['email','Email',['email address','email','e-mail','work email','business email','primary email','mail'],'Person'],
   ['email2','Alt / personal email',['secondary email','alt email','alternate email','email 2','email2','personal email','other email'],'Person'],
@@ -7929,6 +8006,11 @@ const IMPORT_FIELDS=[
   ['note','Notes',['notes','note','comments','comment','description'],'Person'],
   ['stage','Deal stage',['deal stage','stage','status','pipeline'],'Deal'],
   ['val','Deal value',['deal value','value','amount','mrr','revenue'],'Deal'],
+  /* A meeting log column. David's sheet keeps 479 of them under "Meeting" — Held / Ghosted / No Show /
+     Rescheduled / Not Qualified — which is his entire pipeline history, and it was landing as a text
+     custom field, so the CRM showed him no deals at all. These two build the deal. */
+  ['meet','Meeting outcome (Held / No Show / …)',['meeting outcome','meeting status','meeting result','meeting booked','meeting','demo outcome','demo status','demo','appointment'],'Meeting'],
+  ['ddate','Meeting date',['meeting date','demo date','appointment date','date booked','date'],'Meeting'],
   ['opens','Email opens',['email opens','opens','opened','pixel_visits','pixel visits'],'Engagement'],
   ['openat','Last opened',['last opened','opened at','last_open','last open'],'Engagement'],
   ['replied','Replied?',['replied','reply','has replied'],'Engagement'],
@@ -7955,8 +8037,54 @@ const _SNIFF={
    words — so the restaurant would land in the contact's name half the time. Left for you to point at. */
 const _SNIFF_ORDER=['email','phone','web','state','addr'];   // most → least certain
 const CUSTOM_COL='__custom';   // pseudo-field: keep this column under its own heading (r.custom)
+/* A meeting-log cell → one of the CRM's own stages. Word tests, not an exact value list, so "ghosted",
+   "no-show", "didn't show" and "NOSHOW" all land together and somebody else's vocabulary works too.
+   🔑 Anything it doesn't recognise returns '' and NO deal is created. That matters: z152 was Saad
+   finding out a dispo had been quietly opening deals behind him ("i never asked for that"), so the only
+   thing allowed to build a pipeline row here is a cell that unmistakably records a meeting. His own
+   sheet proves the value of that — the repeated banner rows say "Meeting" and "DEMOS HELD", and both
+   fall through to '' instead of inventing 12 deals. */
+function _meetStage(v){ const s=String(v||'').toLowerCase().trim(); if(!s) return '';
+  if(/^(n\/?a|none|-|tbd|no)$/.test(s)) return '';
+  if(/ghost|no[\s.\-_]*show|noshow|didn'?t show|missed/.test(s)) return 'No Show';
+  if(/not qualif|unqualif|disqualif|\bdq\b|not a fit|no fit/.test(s)) return 'Closed Lost';
+  if(/closed won|\bwon\b|signed|went live|customer/.test(s)) return 'Closed Deal';
+  if(/closed lost|\blost\b|dead/.test(s)) return 'Closed Lost';
+  if(/resched|schedul|booked|upcoming|\bset\b|confirmed|pending/.test(s)) return 'Booked Demo';
+  if(/held|completed|complete|attended|showed|\bdone\b|demoed|\byes\b|^true$/.test(s)) return 'Follow Up';
+  return ''; }
+/* Sheet dates are written for humans — "Apr 6th", "4/6", "2026-04-06". No year on most of them.
+   🔑 A YEAR-LESS DATE IN AN IMPORTED SHEET IS HISTORY, NOT A PLAN. Picking the calendar-nearest year
+   sounds right and is wrong: imported in August, David's December meetings — all of them already held —
+   came out as December of THIS year, i.e. 4 months in the future, and 43 of them landed in 2027. A
+   meeting log that reads "Held" cannot be upcoming, and a forecast full of invented future demos is
+   exactly the kind of thing z152 was about. So take the most recent year that doesn't put the date
+   more than ~6 weeks ahead of today: "Apr 6th" → this April just gone, "Dec 22" → last December, and a
+   genuinely upcoming "Aug 20" is still read as this year because it's inside the grace window. */
+/* Month names come from parseWhen's _MON (line ~3734) — it already knows both "apr" and "april",
+   and two copies of that map is how you get one of them fixed and the other not. */
+function _sheetDate(v,now){
+  const s=String(v||'').trim(); if(!s) return 0;
+  now=now?new Date(+now):new Date();
+  let y=null,mo=null,da=null;
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);                       // 2026-04-06
+  if(m){ y=+m[1]; mo=+m[2]-1; da=+m[3]; }
+  if(mo==null){ m=s.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);   // 4/6 or 4/6/26
+    if(m){ mo=+m[1]-1; da=+m[2]; if(m[3]) y=(+m[3]<100?2000+ +m[3]:+m[3]); } }
+  if(mo==null){ m=s.match(/\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/i);  // Apr 6th
+    if(m){ const k=m[1].slice(0,3).toLowerCase(); if(_MON[k]!=null){ mo=_MON[k]; da=+m[2]; if(m[3]) y=+m[3]; } } }
+  if(mo==null||da==null||mo<0||mo>11||da<1||da>31) return 0;
+  if(y!=null){ const d=new Date(y,mo,da,12,0,0); return isNaN(d)?0:d.getTime(); }
+  const ceiling=now.getTime()+45*864e5;   // a sheet may hold a demo a few weeks out; a year, no
+  let best=0;
+  [now.getFullYear()-2,now.getFullYear()-1,now.getFullYear(),now.getFullYear()+1].forEach(yy=>{
+    const t=new Date(yy,mo,da,12,0,0).getTime();
+    if(t<=ceiling && t>best) best=t; });     // latest year that isn't in the future
+  return best; }
 function guessCols(H,rows){
-  const heads=H.map(h=>String(h||'').toLowerCase().replace(/[_.]+/g,' ').replace(/\s+/g,' ').trim());
+  // Apostrophes come out, not to space: his real sheet says "Owner's Name" and "owners name" has to be
+  // an exact hit on the full-name alias, or the bare-"owner" assignee alias steals it as a substring.
+  const heads=H.map(h=>String(h||'').toLowerCase().replace(/['\u2019]/g,'').replace(/[_.]+/g,' ').replace(/\s+/g,' ').trim());
   const pairs=[];
   heads.forEach((h,i)=>{ if(!h) return;
     IMPORT_FIELDS.forEach(f=>{ let best=0;
@@ -7981,6 +8109,27 @@ function guessCols(H,rows){
     for(let r=1;r<Math.min(rows.length,41);r++){ const v=String(rows[r][i]==null?'':rows[r][i]).trim();
       if(!v) continue; seen++; if(/^(https?:\/\/|www\.)/i.test(v)||_SNIFF.web(v)) urls++; }
     if(seen>=3&&urls/seen<0.5){ delete taken[i]; M[k]=-1; } });
+  /* THE SAME IDEA, APPLIED TO PEOPLE — and this is the one that bit a trial user. A column of names
+     that keeps saying the SAME name is not naming the lead; it's naming a colleague. Whether the
+     heading was "Owner", "Rep" or something we've never seen, 200 rows that all read "Johnny Angulo"
+     describe who owns the rows, not who to call. Two independent tests, no table of rep names to keep
+     up to date, so it holds for the tenth person you hand a login to as well as the second:
+       · barely any distinct values across a decent number of rows  → it's a category, not a name
+       · most values match whoever is signed in, or someone on the team → it's the owner column
+     Either way hand the column back; it lands on the assignee field if its heading asked for that, or
+     as a custom field under its own heading. Restaurant names are deliberately NOT tested this way —
+     five contacts at one restaurant legitimately repeat the account name. */
+  const _me=_dnorm(senderName()||''), _mates=new Set((typeof team==='function'?team():[]).map(n=>_dnorm(n)).filter(n=>n.length>2));
+  if(rows&&rows.length>1) ['name','first','last'].forEach(k=>{ const i=M[k]; if(i<0) return;
+    let seen=0,mine=0; const distinct=new Set();
+    for(let r=1;r<Math.min(rows.length,201);r++){ const v=String(rows[r][i]==null?'':rows[r][i]).trim();
+      if(!v) continue; seen++; const d=_dnorm(v); distinct.add(d);
+      if(d&&((_me&&d===_me)||_mates.has(d))) mine++; }
+    const repeats = seen>=8 && distinct.size<=Math.max(2,seen*0.15);
+    const isOurs  = seen>=3 && mine/seen>=0.5;
+    if(repeats||isOurs){ delete taken[i]; M[k]=-1;
+      // If nothing else claimed the assignee slot, that column IS the owner — file it there.
+      if(M.own<0){ M.own=i; taken[i]=1; } } });
   // Now read up to 40 rows of every still-unclaimed column and let the values speak.
   const sn={};
   if(rows&&rows.length>1) heads.forEach((h,i)=>{ if(taken[i]) return;
@@ -8073,7 +8222,33 @@ function importCSV(text,mapIn){
     iDel=g('del'),iLocs=g('locs'),
     iHours=g('hours'),iParent=g('parent'),
     // The restaurant's own number, as opposed to a named person's direct line.
-    iAPhone=g('aphone');
+    iAPhone=g('aphone'),
+    // Which colleague owns the row. Never the lead's name — see the guard in guessCols.
+    iOwn=g('own'),
+    // A meeting log → a real pipeline row. See _meetStage: unrecognised values build nothing.
+    iMeet=g('meet'),iDDate=g('ddate');
+  const _meName=_dnorm(senderName()||'');   // you can't be your own prospect
+  let nmeet=0;
+  /* One deal per meeting the sheet records, on the contact if the row names one and on the account
+     otherwise. Re-importable: a row that already has a deal for the same account is left alone rather
+     than stacking a second copy, and an existing deal only ever gains a stage/date it was missing. */
+  const stampMeeting=(c,a,r)=>{
+    if(iMeet<0||!a) return;
+    const stage=_meetStage(r[iMeet]); if(!stage) return;
+    const when=iDDate>=0?_sheetDate(r[iDDate]):0;
+    const mine=Object.values(store.deals||{}).filter(d=>d&&d.accountId===a.id&&(!c||!d.contactId||d.contactId===c.id));
+    const same=mine.find(d=>when&&d.demoDate&&Math.abs(new Date(d.demoDate).getTime()-when)<36e5*36) || mine[0];
+    if(same){ let f=false;
+      if(when&&!same.demoDate){ same.demoDate=new Date(when).toISOString(); f=true; }
+      if(f) stampU(same);
+      return; }
+    const id=uid('d');
+    store.deals[id]={id,accountId:a.id,contactId:c?c.id:'',name:a.name||(c?cname(c):''),stage,value:0,
+      warmth:(c&&c.warmth)||'Warm',log:[],createdAt:Date.now(),fromSheet:true,
+      demoDate:when?new Date(when).toISOString():'',
+      assignee:(iOwn>=0?String(r[iOwn]||'').trim():'')||''};
+    if(stage==='Closed Deal'||stage==='Closed Lost') store.deals[id].closedAt=when||Date.now();
+    stampU(store.deals[id]); nmeet++; };
   /* A row that lists a restaurant and a phone number but no person used to be thrown away whole —
      the importer only looked at the phone column inside "if this row has an email or a first name".
      That is how 1,354 of 2,066 accounts ended up with no way to contact them at all. If nobody is
@@ -8158,9 +8333,15 @@ function importCSV(text,mapIn){
        First one is the contact, the rest become alt addresses so a reply from either still matches. */
     const emailsOnRow=iEmail>=0?String(r[iEmail]||'').split(/[\/;,|]+|\s+/).map(s=>s.trim()).filter(s=>/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(s)):[];
     const email=emailsOnRow[0]||'';
+    const owner=(iOwn>=0?String(r[iOwn]||'').trim():'');
     let first='',last='';
     if(iFirst>=0){first=(r[iFirst]||'').trim();last=(iLast>=0?r[iLast]:'').trim();}
     else if(iName>=0){const p=(r[iName]||'').trim().split(/\s+/);first=p[0]||'';last=p.slice(1).join(' ');}
+    /* Last line of defence. guessCols already refuses an owner column, but the mapper lets you point
+       any column at the name by hand — and you cannot be your own prospect. If the row names the
+       person signed in, treat it as the owner instead of the lead. Nothing is dropped: the value
+       still lands on assignee below. */
+    if(_meName&&_dnorm((first+' '+last).trim())===_meName){ first=''; last=''; }
     if(email||first){ const phone=(iPhone>=0?r[iPhone]:'').trim(), pk=norm10(phone), nm=((first||'')+' '+(last||'')).toLowerCase().trim();
       // Dedup: match on email, else same name under the same account, else same phone number.
       const exist=(email&&byEmail[email.toLowerCase()]) || (nm&&byNameAcct[aid+'|'+nm]) || (pk&&byPhone[pk]);
@@ -8178,18 +8359,26 @@ function importCSV(text,mapIn){
         if(wNew&&(rank[wNew]||0)>(rank[c.warmth]||0)){ c.warmth=wNew; f=true; }
         [iEmail2,iEmail3].forEach(ix=>{ if(ix>=0){ const av=String(r[ix]||'').trim(); if(av.includes('@')&&av.toLowerCase()!=='none'&&addAltEmail(c,av)){ byEmail[av.toLowerCase()]=c.id; f=true; } } });
         emailsOnRow.slice(1).forEach(av=>{ if(addAltEmail(c,av)){ byEmail[av.toLowerCase()]=c.id; f=true; } });
+        // Whoever the sheet says owns the row. Fill-blank, so an assignment made in the CRM wins.
+        if(owner&&owner.toLowerCase()!=='none'){
+          if(!c.assignee){ c.assignee=owner; f=true; }
+          // Outside the fill-blank check on purpose: the "Assigned to" filter chips are built from
+          // team(), so a name that only ever arrived by import still has to become selectable.
+          try{ if(!team().includes(owner)) team().push(owner); }catch(e){} }
         if(f) stampU(c); };
       if(exist){ const c=contact(exist); if(c){ if(email&&!c.email){ c.email=email; byEmail[email.toLowerCase()]=exist; }
         if(phone&&!c.phone&&!c.mobile){ c.phone=phone; if(pk)byPhone[pk]=exist; }
         if(!c.accountId||!acct(c.accountId)){ c.accountId=aid; stampU(c); }   // orphan self-heals onto the row's account
-        stampMeta(c); stampEngage(c,r); stampCustom(c,r); } }
+        stampMeta(c); stampEngage(c,r); stampCustom(c,r); stampMeeting(c,acct(aid),r); } }
       else { const cid=uid('c');
       let warm='Cold'; const wv=(iWarm>=0?r[iWarm]:'').toLowerCase(); if(wv.includes('hot')||wv.includes('a ')||wv.includes('high'))warm='Hot'; else if(wv.includes('warm')||wv.includes('b ')||wv.includes('med'))warm='Warm';
-      store.contacts[cid]={id:cid,accountId:aid,first,last,title:(iTitle>=0?r[iTitle]:'').trim(),email,phone,warmth:warm,status:'New',log:[]};
+      store.contacts[cid]={id:cid,accountId:aid,first,last,title:(iTitle>=0?r[iTitle]:'').trim(),email,phone,warmth:warm,status:'New',
+        assignee:(owner&&owner.toLowerCase()!=='none'?owner:''),log:[]};
       if(isInternalEmail(email)) store.contacts[cid].internal=true;   // colleague on our own domain — keep out of queue/Intent
       stampMeta(contact(cid));
       stampEngage(contact(cid),r);
       stampCustom(contact(cid),r);
+      stampMeeting(contact(cid),acct(aid),r);
       if(email)byEmail[email.toLowerCase()]=cid; if(nm)byNameAcct[aid+'|'+nm]=cid; if(pk)byPhone[pk]=cid; nc++; } }
     else { // no contact on the row — notes + phone belong to the ACCOUNT (corporate line)
       const nv=(iNote>=0?String(r[iNote]||'').trim():'');
@@ -8199,7 +8388,7 @@ function importCSV(text,mapIn){
           if(!a1.log.some(l=>l.txt===txt)){ a1.log.push({ts:Date.now(),txt,sys:true}); stampU(a1); } }
         const pv=(iPhone>=0?String(r[iPhone]||'').trim():'');
         if(pv&&!a1.phone){ a1.phone=pv; stampU(a1); }
-        stampCustom(a1,r); } }
+        stampCustom(a1,r); stampMeeting(null,a1,r); } }
   });
   // A sheet that names a restaurant on one row and only an address on another leaves the second row
   // orphaned. Heal it here, while the accounts the import just created are fresh.
@@ -8207,13 +8396,13 @@ function importCSV(text,mapIn){
   save(); render();
   // "Imported 0 accounts, 0 contacts" told you nothing. If the sheet landed nothing, say what
   // the top row actually looked like and what one column would fix it.
-  if(!na&&!nc&&!nsig&&!ncust){
+  if(!na&&!nc&&!nsig&&!ncust&&!nmeet){
     // The mapping is confirmed by now, so this is a data problem, not a heading problem — but the
     // fix is still in the mapper, so put them back in it rather than at a dead end.
     if(confirm((rows.length-1)+' row'+(rows.length===2?'':'s')+' were read but nothing could be filed.\n\n'+
       'Usually that means the columns you matched to Account / Email / Phone are empty on every row.\n\nGo back and re-match the columns?')) openColMapper(text,rows,mapIn);
     return; }
-  toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':'')+(nlink?' · '+nlink+' filed under a restaurant':'')+(ncust?' · '+ncust+' custom values kept':''));
+  toast('Imported '+na+' accounts, '+nc+' contacts'+(nsig?' · '+nsig+' with intent signals':'')+(nmeet?' · '+nmeet+' meetings → pipeline':'')+(nlink?' · '+nlink+' filed under a restaurant':'')+(ncust?' · '+ncust+' custom values kept':''));
 }
 /* ---- Universal CSV importer: auto-detect calls / emails / contacts ---- */
 function norm10(p){ const d=String(p||'').replace(/\D/g,''); return d.length>=10?d.slice(-10):''; }
