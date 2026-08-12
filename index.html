@@ -5879,7 +5879,11 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
   return h+'</div>';
 }
 function callBrief(c){ if(!c) return '';
-  const a=acct(c.accountId), rep=store.__rep||'Saad';
+  // 🔑 WHOEVER IS HOLDING THE PHONE. This read store.__rep, falling back to the literal 'Saad', so the
+  // script on Embert's call card told him to open with "Hi, Saad Sheikh with Shipday" — the one line
+  // he says out loud, and it was someone else's name. myRep() is the rep for THIS book: himself where
+  // he works, and the owner's name when he's only looking at their card.
+  const a=acct(c.accountId), rep=myRep()||store.__rep||'Shipday';
   const open=lastOpenTs(c), opens=openCount(c), touch=lastTouchTs(c), fn=(c.first||cname(c).split(' ')[0]||'there');
   let head;
   if(c.replied) head='↩️ <b>Replied to your outreach</b> — they raised a hand. Reference it and go straight for a time.';
@@ -8962,7 +8966,7 @@ function aiEmail(t,id){
   let name,acctName,ctx,step;
   if(t==='c'){ const c=contact(id),a=acct(c.accountId); name=c.first||cname(c); acctName=aname(a); ctx=c.notes||''; step=c.nextStep||''; }
   else { const d=deal(id),c=contact(d.contactId),a=acct(d.accountId); name=(c&&c.first)||'there'; acctName=aname(a); ctx=d.notes||''; step=d.nextStep||''; }
-  const rep=store.__rep||'Saad';
+  const rep=myRep()||store.__rep||'Shipday';   // same fix as callBrief — sign it with whoever's sending
   const body=
 `Subject: Quick idea for ${acctName} deliveries
 
