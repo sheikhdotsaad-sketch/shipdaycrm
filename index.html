@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z166';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z167';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -683,7 +683,13 @@ const BOOK_MEMBERS={
      logged against a Boston account he isn't working is noise in Johnny's queue. Ownership stays
      personal regardless: z146's per-rep boxes (__gmailBy / __calBy / signals) key to whoever is
      signed in, so sitting in Aime's book never shows him Aime's mailbox, calendar or notifications. */
-  'embert.sy@shipday.com':   ['shipday-team','book:michigan'],
+  /* Saad's book ONLY: "just do my book / not aimes / he doesnt need it / hes only calling for me."
+     He used to have Michigan too, and once the Hot List became individual (see laneMine) that was
+     actively harmful: write access is what puts you in a book's CREW, and the crew is what splits
+     the queue — so listing him in Michigan meant Aime would sit down to half her own book, the other
+     half reserved for a rep who never dials it. A seat in a book is now a claim on half its leads.
+     He can still OPEN Aime's book and read it like anyone else; he just isn't dealt any of it. */
+  'embert.sy@shipday.com':   ['shipday-team'],
   'aime.kamana@shipday.com': ['book:michigan'],
   'david.umana@shipday.com': ['book:david'],                    // own territories, own account list
   'johnny.angulo@shipday.com': ['book:johnny']
@@ -4351,6 +4357,51 @@ function spreadByAccount(list){ const pool=list.slice(), out=[], lastPos={}; let
       if(score>bestScore){ bestScore=score; best=i; } }
     const c=pool.splice(best,1)[0]; out.push(c); lastPos[c.accountId||('_'+c.id)]=pos; pos++; }
   return out; }
+/* 🔑 THE HOT LIST IS INDIVIDUAL — "the hot list is individual not everyones accounts" / "im so
+   confused as to why embert cant have his own fucking view".
+   It never was. Two people opening the SAME book got the SAME queue: ownership was only ever checked
+   as `seqMine` (which returns TRUE for anything unowned) and `claimedByOther` (a 30-minute live lock,
+   so it only separates two reps dialing in the same half hour). Every lead nobody had explicitly
+   claimed — which is essentially the whole book — was served to both of them, in the same heat order.
+   So Saad and Embert sat down to identical lists of 51 and rang the same restaurants. That is also
+   the honest answer to "im literally calling the same people": the queue was never his, it was the
+   book's.
+   The fix is to split the UNOWNED pool, deterministically and permanently, by contact id. Each rep
+   who writes this book gets a disjoint slice, so no lead is ever offered to two people. It's a pure
+   function of the id — no coordination, no flag to keep in sync, no way for the two lists to drift
+   into overlapping.
+   WHAT IS NEVER LANED: anything with a real owner. Pinned to your Hot List, your sequence, assigned
+   to you, or simply the last person who logged something on it — that's yours, lane or no lane, and
+   correspondingly it is never in anyone else's. Ownership evidence beats the hash every time, so
+   working a lead keeps it rather than tossing it back for the other rep to re-dial tomorrow.
+   ALSO: "if he wants to he should be able to add other peoples accounts". He can — pinning anything
+   from Accounts/search sets hotFor[me], which is explicit ownership, so it jumps the lane into his
+   list. The lane only decides who gets served the leads nobody has spoken for.
+   Solo book (Aime, David, Johnny) ⇒ one rep in the crew ⇒ laneMine is always true and nothing here
+   applies. This can only ever narrow a book that genuinely has two people working it. */
+function bookCrew(){
+  const cur=myBook(), out=[];
+  Object.keys(BOOK_MEMBERS).forEach(em=>{
+    if(!(BOOK_MEMBERS[em]||[]).includes(cur)) return;
+    const n=repCanon(REP_BY_EMAIL[em]||repFromEmail(em)); if(n&&out.indexOf(n)<0) out.push(n); });
+  return out.sort();                       // sorted = same slice for the same person on every device
+}
+function _idHash(s){ s=String(s||''); let h=5381; for(let i=0;i<s.length;i++) h=((h*33)^s.charCodeAt(i))>>>0; return h; }
+// Who already owns this lead, by evidence. '' = nobody has spoken for it.
+function leadOwner(c){
+  if(!c) return '';
+  const hf=c.hotFor||{}; const pins=Object.keys(hf); if(pins.length) return pins[0];
+  let o=''; try{ o=seqOwner(c)||''; }catch(e){}
+  return o || c.assignee || lastLogBy(c) || '';
+}
+function laneMine(c){
+  const crew=bookCrew(); if(crew.length<2) return true;
+  const me=repCanon(myRep()); const i=crew.indexOf(me); if(i<0) return true;   // unknown rep ⇒ don't hide the book
+  if(hotForMe(c)) return true;                                                 // you pinned it: always yours
+  const own=repCanon(leadOwner(c));
+  if(own) return own===me;                                                     // evidence beats the hash
+  return (_idHash(c.id)%crew.length)===i;
+}
 function hotQueue(){ const now=Date.now();
   // In-pipe contacts (booked demo / follow-up / no-show deals on them or their account) live in
   // the Pipeline tab — the Hot List is strictly the cold/warm-call playlist.
@@ -4366,7 +4417,7 @@ function hotQueue(){ const now=Date.now();
   // deliberate paths (Hot-tagged / call-step / in-sequence) while the heat auto-fill below took
   // anything eligible — so a lead another rep is actively running got excluded by name and then
   // readmitted by heat. Checking it here covers every path at once. Unowned still = shared pool.
-  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!demoBooked(c)&&!isDeadChain(acct(c.accountId))&&!dupDial(c)&&seqMine(c);
+  const elig=c=>!['In Pipeline','Customer'].includes(c.status)&&!isCustC(c)&&!c.queueOut&&!c.internal&&!claimedByOther(c)&&!isDNC(c)&&(hasRealPhone(c)||(inSeq(c)&&seqMine(c)))&&!demoBooked(c)&&!isDeadChain(acct(c.accountId))&&!dupDial(c)&&seqMine(c)&&laneMine(c);
   // The play has its own clock. If the cadence just fired Email 1 and booked "Call 2/10" for
   // tomorrow, this person HAS been contacted today — dialing them now is the queue overruling
   // the sequence it just built. Their turn comes when the step's task comes due.
@@ -6138,7 +6189,10 @@ function renderHotList(){
   const idBar = visiting()
     ? '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">👁 <b>'+esc(me)+'\u2019s queue</b>, in his order — this is what he sees when he sits down. You\u2019re reading it; nothing here claims a lead or logs a call.</div></div>'
     : me
-    ? '<div class="panel" style="border-color:var(--sig)"><div style="padding:9px 14px;font-size:12.5px">👤 Calling as <b>'+esc(me)+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> — leads you open lock to you for 30 min so teammates don\'t double-dial.</div></div>'
+    ? '<div class="panel" style="border-color:var(--sig)"><div style="padding:9px 14px;font-size:12.5px">👤 Calling as <b>'+esc(me)+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> — leads you open lock to you for 30 min so teammates don\'t double-dial.'
+      // The queue got smaller on purpose. Say so, or it reads as leads going missing.
+      +(bookCrew().length>1 ? '<br><span style="color:var(--mut)">This is <b>your</b> list — '+esc(bookCrew().filter(r=>r!==repCanon(me)).map(r=>r.charAt(0).toUpperCase()+r.slice(1)).join(' and '))+' is dealt different leads out of this book, so you two never ring the same restaurant. Anything you pin 🔥 or have already worked stays yours.</span>' : '')
+      +'</div></div>'
     : '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">⚠️ <b>Set your name</b> to turn on lead-locking (stops you and teammates calling the same person) · <span onclick="setMyRep()" style="cursor:pointer;color:var(--hot)"><b>set name</b></span></div></div>';
   const coldN=due.filter(c=>c.warmth==='Cold').length, hotN=due.filter(c=>c.warmth==='Hot').length;
   let exhaust='';
