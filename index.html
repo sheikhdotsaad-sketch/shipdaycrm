@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z169';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z170';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4060,15 +4060,24 @@ function reqLandsAt(reqKey,c){
   const ladder=attemptLadder(rq.ms,((+((c||{}).callCount)||0)+1));
   return nextGoodCallTime(Date.now()+ladder,callBand(new Date()).k);
 }
-/* A no-answer on a lead who opened your email this morning is not the same as a no-answer on row
-   4,000 of a cold list, and it shouldn't get the same call-back. Hot = try again today; everyone
-   else = tomorrow, because a same-day retry just burns the number. Any button still overrides. */
+/* 🔴 NO ANSWER DOES NOT COME BACK THE SAME DAY. Saad: "if theres no answer the call doesnt have
+   to pop up 4 hours later."
+   This used to hand any "hot" lead a 4h call-back on a no-answer — and hot is a wide net (warmth
+   Hot, OR an email open in the last 2 days, OR a reply in the last 2 days), so a single open put a
+   restaurant back on the card the same afternoon. Nobody picked up; four hours later nobody is
+   more likely to pick up, and it is a straight road to ringing the same shop twice a day.
+   Now a no-answer is always at least a day, and the ladder widens it from there (1.5x on the 2nd
+   attempt, 2.5x on the 3rd, 4x, 6x), while nextGoodCallTime already rotates OFF the daypart that
+   just failed — so tomorrow's attempt is a different time of day, not a rerun.
+   Heat still matters, just not by re-dialing sooner: it keeps ranking the lead higher in the
+   queue. Every requeue button still overrides this by hand. */
 function suggestReq(d,c){
   if(!d) return 'none';
-  if(d.k!=='noanswer'&&d.k!=='lvm') return d.req||'none';
+  // A voicemail is different — you left a message, so a warm lead getting back on the list a day
+  // later is a follow-up, not a redial. That half is unchanged. Only no-answer lost its same-day path.
+  if(d.k!=='lvm') return d.req||'none';
   const hot=c&&(c.warmth==='Hot'||(Date.now()-lastOpenTs(c)<2*_DAY)||(Date.now()-(+c.lastReplyTs||0)<2*_DAY));
-  if(!hot) return d.req||'none';
-  return d.k==='lvm'?'1d':'4h';
+  return hot?'1d':(d.req||'none');
 }
 function dtLocal(ts){ const d=new Date(+ts||Date.now()); const p=n=>(n<10?'0':'')+n;
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
