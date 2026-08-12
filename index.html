@@ -722,6 +722,21 @@ function bookRowFor(user){
 function myBook(){ return (TEAM.row||SHARED_BOOK); }
 function onSharedBook(){ return myBook()===SHARED_BOOK; }
 function isTeamBook(row){ return BOOKS.some(b=>b.row===row); }
+/* 🔑 THERE ARE THREE STATES, NOT TWO — this is what "did we forget about embert" was about.
+   Once every book is named after a person, an SDR who works two other people's books has no row of
+   his own, so the app greeted him with "👤 Saad · your own book". Both halves false: it is not his,
+   and he is not merely visiting it either — he genuinely dials and writes there.
+     ownBook()  you ARE the owner (or it's your private row)  → "👤 Saad"
+     workBook() you write here but it's someone else's        → "✏️ Saad's book"   ← Embert
+     visiting() you can only read                             → "👁 Johnny's CRM"
+   Deliberately NOT solved by giving Embert a book: it would start empty and every call he made would
+   land where no AE ever looks. He works inside the AE's book and his name goes on the record. */
+function ownBook(){ const cur=myBook();
+  if(!isTeamBook(cur)) return true;                       // a private row is yours by definition
+  const owner=bookRep(cur), me=realRep();
+  if(!owner||!me) return true;                            // unknown ⇒ don't nag; same spirit as canEdit
+  return repCanon(owner)===repCanon(me); }
+function workBook(){ return canEdit() && !ownBook(); }
 function myWrite(){ const m=BOOK_MEMBERS[bookEmail()]; return (m&&m.length)?m.slice():[]; }
 /* Books you can OPEN: your own first, then everyone else's. */
 function myBooks(){ const out=myWrite();
@@ -1180,9 +1195,12 @@ function bookRail(){ const b=document.getElementById('bookBox'); if(!b) return;
   // People, not addresses — "Only Aime, Embert can change it" reads; a list of @shipday.com does not.
   const mates=Object.keys(BOOK_MEMBERS).filter(e=>(BOOK_MEMBERS[e]||[]).includes(cur))
     .map(e=>(repFromEmail(e)||e).split(' ')[0]);
-  b.innerHTML='<b>'+esc(bookName(cur))+(canEdit()?'':' <span style="color:var(--hot)">👁 view only</span>')+'</b><br>'+
+  const owner=esc(bookRep(cur)||'they');
+  b.innerHTML='<b>'+esc(bookName(cur))+(canEdit()?(workBook()?' <span style="color:var(--sig)">✏️ you work here</span>':''):' <span style="color:var(--hot)">👁 view only</span>')+'</b><br>'+
     '<span style="color:var(--mut)">Everything on every tab — accounts, contacts, notes, Hot List, quota — is just this book. '+
-    (canEdit()?'':"You're seeing it as "+esc(bookRep(cur)||'they')+" sees it. You can read it but not change it — nothing you edit here will save. ")+
+    (canEdit()?'':"You're seeing it as "+owner+" sees it. You can read it but not change it — nothing you edit here will save. ")+
+    // Embert has no book of his own on purpose, so tell him plainly where his work lands.
+    (workBook()?"This is "+owner+"'s book and you work in it — your calls, notes and emails save here for real, stamped <b>"+esc(realRep()||'you')+"</b> so it's clear who did what. ":'')+
     (mates.length?('Only '+esc(mates.join(', '))+' can change it — everyone else can look.'):'')+'</span>'+
     (list.length>1?('<div style="margin-top:6px">'+list.filter(r=>r!==cur).map(r=>
       '<button class="btn sm gh" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">Switch to '+esc(bookName(r))+'</button>').join(' ')+'</div>'):'')+
@@ -4081,9 +4099,12 @@ function renderBookChip(){ const b=el('book-chip'); if(!b) return;
   // Say view-only up here, not only when a save is refused. Someone who spends ten minutes taking
   // notes and finds out at the end has lost ten minutes and some trust in the app.
   const ro=!canEdit(), who=bookName(myBook()).replace(/^\S+\s/,'');
-  b.innerHTML=ro? '<span style="color:var(--hot)">👁 '+esc(who)+"'s CRM</span>" : esc(bookName(myBook()));
-  b.title=(ro?"You're looking at "+who+"'s CRM — nothing you change here will be saved. C"
-             :'Your own book — c')+'lick to switch to someone else.';
+  b.innerHTML=ro   ? '<span style="color:var(--hot)">👁 '+esc(who)+"'s CRM</span>"
+            : workBook() ? '<span style="color:var(--sig)">✏️ '+esc(who)+"'s book</span>"
+            : esc(bookName(myBook()));
+  b.title=(ro ? "You're looking at "+who+"'s CRM — nothing you change here will be saved. C"
+        : workBook() ? "You work in "+who+"'s book — your calls and notes save here and are stamped "+(realRep()||'you')+". C"
+        : 'Your own book — c')+'lick to switch to someone else.';
 }
 /* ============ GOOGLE CONNECTION, VISIBLE ============
    Connecting your Gmail is the FIRST thing a new rep has to do and it used to be reachable only
@@ -4132,10 +4153,16 @@ function bookMenu(){
   let g=el('bookgate'); if(!g){ g=document.createElement('div'); g.id='bookgate'; document.body.appendChild(g); }
   g.innerHTML='<div class="gatebox">'+
     '<h1>Whose <b>book</b>?</h1>'+
-    '<p>Open anyone\'s book and you see their CRM the way they see it — their accounts, their Hot List, their tasks, their pipeline. The ones marked 👁 you can read but not change.</p>'+
+    '<p>Open anyone\'s book and you see their CRM the way they see it — their accounts, their Hot List, their tasks, their pipeline. 👁 you can read but not change. ✏️ you work in, and anything you do there is stamped with your name.</p>'+
     list.map(r=>{ const w=myWrite(), ro=w.length?!w.includes(r):isTeamBook(r);
+      // Say "you work here" on the books you can change but don't own, so an SDR looking at four
+      // other people's names can see at a glance which two are actually his to dial.
+      const mine=!ro && repCanon(bookRep(r)||'')===repCanon(realRep()||'') && !!bookRep(r) && !!realRep();
       return '<button class="btn rbtn'+(r===cur?' pri':'')+'" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">'+esc(bookName(r))+
-      (ro?' <span style="font-size:11px;opacity:.6">👁 view only</span>':'')+
+      // On the row you're standing in, "you're here" is already floated right — the second label
+      // collides with it, so that row gets the pencil alone.
+      (ro?' <span style="font-size:11px;opacity:.6">👁 view only</span>'
+         :(mine?'':' <span style="font-size:11px;opacity:.6;color:var(--sig)">✏️'+(r===cur?'':' you work here')+'</span>'))+
       (r===cur?' <span style="float:right;font-size:11px;opacity:.8">you\'re here</span>':'')+'</button>'; }).join('')+
     '<button class="btn gh" style="width:100%;margin-top:8px" onclick="this.closest(\'#bookgate\').style.display=\'none\'">Cancel</button>';
   g.style.display='flex';
@@ -5691,6 +5718,9 @@ function schedPreset(id,k){ const inp=el('schedAt_'+id); if(!inp) return; const 
   else if(k==='mon'){ d.setDate(d.getDate()+((8-d.getDay())%7||7)); d.setHours(8,0,0,0); }
   inp.value=_schedFmt(d); }
 async function confirmScheduleSend(id){ const c=contact(id); if(!c) return;
+  // Same shape as sendSeqEmail: this INSERTS into scheduled_sends before save() ever runs, so a
+  // view-only session could queue real mail that goes out later and survives the rollback.
+  if(!canEdit()){ readOnlyBlocked(); return; }
   if(!c.email){ toast('No email address on this contact'); return; }
   const inp=el('schedAt_'+id); const v=inp&&inp.value; if(!v){ toast('Pick a date & time'); return; }
   const when=new Date(v); if(isNaN(when.getTime())||when.getTime()<=Date.now()+30000){ toast('Pick a time in the future'); return; }
