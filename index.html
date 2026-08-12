@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z159';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z160';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -647,7 +647,12 @@ const BOOKS=[
 /* First book listed is that person's HOME — where they land at sign-in.
    Aime and David have exactly one entry on purpose: that's the only book each can reach. */
 const BOOK_MEMBERS={
-  'saad.sheikh@shipday.com': ['shipday-team'],                  // Saad runs Ohio, and only Ohio
+  /* Ohio first = Saad's home, where he lands at sign-in. The other three are there so he can set a new
+     rep's book UP for them — load their sheet, check the mapping, fix an import — instead of talking a
+     trial user through it over chat. Switching books is a deliberate, visible act, and the private
+     per-rep boxes (__gmailBy / __calBy / signals) stay keyed to whoever is signed in, so this does NOT
+     reopen z146: he still cannot see anyone's mailbox, calendar or notifications. */
+  'saad.sheikh@shipday.com': ['shipday-team','book:michigan','book:david','book:johnny'],
   'embert.sy@shipday.com':   ['shipday-team','book:michigan'],  // SDR — dials in both territories
   'aime.kamana@shipday.com': ['book:michigan'],
   'david.umana@shipday.com': ['book:david'],                    // own territories, own account list
