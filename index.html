@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z167';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z168';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -749,11 +749,55 @@ function myBooks(){ const out=myWrite();
   BOOKS.forEach(b=>{ if(!out.includes(b.row)) out.push(b.row); });
   const cur=myBook(); if(!out.includes(cur)) out.unshift(cur);   // a stranger's private row
   return out; }
+/* 🔑 SDRs BELONG IN THE PICKER TOO — "can we now just show ae's - the four of us and then sdrs -
+   embert / and he can see his own view / what the fuck is so hard about that".
+   Embert still gets no book of his own, and shouldn't (z165c): it would start empty and every call
+   he made would land where no AE ever looks. But "he has no book" had quietly become "he isn't in
+   the list at all", so there was no way to look at what he's actually working — which is the thing
+   being asked for, and has been for a while.
+   Since z167 he DOES have something of his own: a lane of leads inside the book he works that
+   nobody else is dealt. THAT is his view. So picking Embert doesn't open a row — it stays in the
+   book he works and renders it AS HIM: his lane, his tasks, his claims, his day.
+   Read-only, exactly like opening Johnny's. viewAs() forces canEdit() false so nothing can be
+   written under a borrowed name, and meKey() still keys off realRep(), so his mailbox stays his
+   and yours stays yours. */
+function isBookOwner(rep){ const r=repCanon(rep); return !!r && BOOKS.some(b=>repCanon(b.rep)===r); }
+function repOfEmail(em){ return REP_BY_EMAIL[em]||repFromEmail(em)||''; }
+// Everyone with a write seat somewhere who is not an AE with a book. Today that's Embert.
+function allSdrs(){ const out=[];
+  Object.keys(BOOK_MEMBERS).forEach(em=>{
+    const n=repOfEmail(em); if(!n||isBookOwner(n)) return;
+    const rows=(BOOK_MEMBERS[em]||[]).slice(); if(!rows.length) return;
+    if(!out.some(x=>repCanon(x.rep)===repCanon(n))) out.push({rep:n,rows}); });
+  return out; }
+/* Self-clearing on purpose: if you're viewing as someone and then switch to a book they don't
+   work, the answer is not to strand you read-only in your own book — it's that there is nothing
+   of theirs here to look at, so you're simply yourself again. */
+function viewAs(){ let v=''; try{ v=sessionStorage.getItem('shipday_crm_viewas')||''; }catch(e){}
+  if(!v||repSame(v,realRep())) return '';
+  const cur=myBook();
+  const ok=Object.keys(BOOK_MEMBERS).some(em=>(BOOK_MEMBERS[em]||[]).includes(cur)
+        && repCanon(repOfEmail(em))===repCanon(v));
+  return ok?v:''; }
+function clearViewAs(){ try{ sessionStorage.removeItem('shipday_crm_viewas'); }catch(e){}
+  const g=el('bookgate'); if(g) g.style.display='none';
+  toast('Back to your own view'); render(); syncRail(); }
+async function viewAsRep(rep){
+  const s=allSdrs().find(x=>repCanon(x.rep)===repCanon(rep)); if(!s) return;
+  try{ sessionStorage.setItem('shipday_crm_viewas',s.rep); }catch(e){}
+  const g=el('bookgate'); if(g) g.style.display='none';
+  // He works inside somebody's book, so if you're not standing in it, go there first. The
+  // sessionStorage flag survives the reload, so you land already looking through his eyes.
+  if(!s.rows.includes(myBook())) return switchBook(s.rows[0]);
+  toast("Looking at "+repShort(s.rep)+"'s view — read only"); render(); syncRail();
+}
 /* Books you can CHANGE. Two deliberate escape hatches, both erring towards letting a real rep
    work: if we can't identify who is signed in we never lock them out — being wrongly frozen out
    of your own book is a far worse failure than a visitor being able to type — and someone with no
    membership at all still owns their private row. */
 function canEdit(){ if(!BOOK_SPLIT) return true;
+  // FIRST, ahead of every escape hatch below: looking through someone else's eyes is a read.
+  if(viewAs()) return false;
   if(!bookEmail()) return true;
   const cur=myBook();
   if(unlocked()===cur) return true;
@@ -1156,7 +1200,18 @@ async function pushCloudNow(){
   // Last line of defence. This function merges whatever is in memory into the target row, so if
   // the in-memory book and the target row ever disagree it would quietly copy one territory into
   // another — unrecoverable in practice. Refuse rather than risk it.
-  if(store.__sbId&&c.row&&store.__sbId!==c.row){ console.warn('push blocked: store is',store.__sbId,'target is',c.row); setSync('err','Save blocked'); return; }
+  /* 🔴 THIS GUARD DIDN'T FIRE, AND IT COST JOHNNY HIS BOOK.
+     It used to read `if(store.__sbId && ...)` — so it only checked when the in-memory book happened
+     to carry an __sbId stamp, and a freshly loaded or restored book very often carries none. No
+     stamp, no comparison, push goes through to whatever row TEAM.row is pointing at. That is how
+     2,741 accounts got replaced by a partial copy of someone else's book, and mergeStores copies
+     __sbId across too, so the stamp itself isn't trustworthy anyway.
+     LS is. It is `lsKey(row)` of the book actually loaded into memory, set at load and re-set by
+     useBook, never empty and never merged in from the cloud. If it disagrees with the target row,
+     memory and destination are two different books — refuse, loudly. There is no undo for this. */
+  if(c.row && LS!==lsKey(c.row)){
+    console.warn('push blocked: memory is',LS,'target row is',c.row);
+    setSync('err','Save blocked — wrong book'); return; }
   // And the same question again, because save() is not the only way in: switchBook awaits this
   // function directly to flush before it reloads. A viewer leaving someone else's book must not
   // upload their copy of it on the way out.
@@ -4072,8 +4127,11 @@ let claimsMap={}, claimSub=null;
    boxes are NOT borrowed — hydrateMine still keys to the real sign-in, so this shows you their
    pipeline, never their inbox, calendar or notifications. */
 function realRep(){ try{ return (localStorage.getItem('shipday_crm_rep')||'').trim(); }catch(e){ return ''; } }
-function myRep(){ if(!canEdit()){ const r=bookRep(myBook()); if(r) return r; } return realRep(); }
-function visiting(){ return !canEdit()&&!!bookRep(myBook()); }
+function myRep(){ const v=viewAs(); if(v) return v;
+  if(!canEdit()){ const r=bookRep(myBook()); if(r) return r; } return realRep(); }
+function visiting(){ return !!viewAs() || (!canEdit()&&!!bookRep(myBook())); }
+// Whose CRM is on the screen — an SDR you're viewing as, else the owner of the book.
+function viewedRep(){ return viewAs()||bookRep(myBook())||''; }
 function setMyRep(){ repGate(false); }
 /* Rep sign-in gate — IDENTITY, not security (password auth stays Phase C). Picking who you
    are is what makes lead-locking + activity attribution work, so boot() forces it once per
@@ -4110,7 +4168,10 @@ function renderBookChip(){ const b=el('book-chip'); if(!b) return;
   b.style.display='';
   // Say view-only up here, not only when a save is refused. Someone who spends ten minutes taking
   // notes and finds out at the end has lost ten minutes and some trust in the app.
-  const ro=!canEdit(), who=bookName(myBook()).replace(/^\S+\s/,'');
+  // Viewing as an SDR keeps you in this book, so the book's name is the wrong answer — say the
+  // person whose screen you're actually looking at.
+  const va=viewAs();
+  const ro=!canEdit(), who=va?repShort(va):bookName(myBook()).replace(/^\S+\s/,'');
   b.innerHTML=ro   ? '<span style="color:var(--hot)">👁 '+esc(who)+"'s CRM</span>"
             : workBook() ? '<span style="color:var(--sig)">✏️ '+esc(who)+"'s book</span>"
             : esc(bookName(myBook()));
@@ -4161,24 +4222,50 @@ function renderGmailBox(){ const g=el('gbox'); if(!g) return;
   }
 }
 function bookMenu(){
-  const list=myBooks(), cur=myBook();
+  const list=myBooks(), cur=myBook(), va=viewAs();
+  // Sorted so the four AEs read as one group and the SDRs as another — "show ae's, the four of us,
+  // and then sdrs - embert". An org chart, not a list of database rows.
+  const aes=list.filter(r=>isTeamBook(r)), priv=list.filter(r=>!isTeamBook(r)), sdrs=allSdrs();
+  const hdr=t=>'<div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:12px 0 6px">'+t+'</div>';
   let g=el('bookgate'); if(!g){ g=document.createElement('div'); g.id='bookgate'; document.body.appendChild(g); }
   g.innerHTML='<div class="gatebox">'+
     '<h1>Whose <b>book</b>?</h1>'+
     '<p>Open anyone\'s book and you see their CRM the way they see it — their accounts, their Hot List, their tasks, their pipeline. 👁 you can read but not change. ✏️ you work in, and anything you do there is stamped with your name.</p>'+
-    list.map(r=>{ const w=myWrite(), ro=w.length?!w.includes(r):isTeamBook(r);
+    (aes.length?hdr('Account Executives'):'')+
+    // NOT `va || …` — picking a book clears the borrowed view (see pickBook), so these rows must
+    // describe the permission you'd actually land with, not the read-only state you're leaving.
+    aes.concat(priv).map(r=>{ const w=myWrite(), ro=w.length?!w.includes(r):isTeamBook(r);
       // Say "you work here" on the books you can change but don't own, so an SDR looking at four
       // other people's names can see at a glance which two are actually his to dial.
       const mine=!ro && repCanon(bookRep(r)||'')===repCanon(realRep()||'') && !!bookRep(r) && !!realRep();
-      return '<button class="btn rbtn'+(r===cur?' pri':'')+'" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">'+esc(bookName(r))+
+      const here=(r===cur&&!va);
+      return '<button class="btn rbtn'+(here?' pri':'')+'" onclick="pickBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">'+esc(bookName(r))+
       // On the row you're standing in, "you're here" is already floated right — the second label
       // collides with it, so that row gets the pencil alone.
       (ro?' <span style="font-size:11px;opacity:.6">👁 view only</span>'
-         :(mine?'':' <span style="font-size:11px;opacity:.6;color:var(--sig)">✏️'+(r===cur?'':' you work here')+'</span>'))+
-      (r===cur?' <span style="float:right;font-size:11px;opacity:.8">you\'re here</span>':'')+'</button>'; }).join('')+
+         :(mine?'':' <span style="font-size:11px;opacity:.6;color:var(--sig)">✏️'+(here?'':' you work here')+'</span>'))+
+      (here?' <span style="float:right;font-size:11px;opacity:.8">you\'re here</span>':'')+'</button>'; }).join('')+
+    /* An SDR has no row, so he can't be a "book". He is still a person with his own list, and
+       leaving him off the menu is what made it look like the app had forgotten he exists. */
+    (sdrs.length?hdr('SDRs'):'')+
+    sdrs.map(s=>{ const on=va&&repCanon(va)===repCanon(s.rep), me=repSame(s.rep,realRep());
+      return '<button class="btn rbtn'+(on||me?' pri':'')+'" onclick="viewAsRep('+JSON.stringify(s.rep).replace(/"/g,'&quot;')+')">👤 '+esc(repShort(s.rep))+
+        (me?'':' <span style="font-size:11px;opacity:.6">👁 view only</span>')+
+        // Embert opening this sees his own name AND the book he works. Only one of them can be
+        // "you're here" or the menu contradicts itself — the book is where he is, this row is who.
+        (me?' <span style="float:right;font-size:11px;opacity:.8">that\'s you</span>'
+           :(on?' <span style="float:right;font-size:11px;opacity:.8">you\'re here</span>':''))+'</button>'; }).join('')+
+    (sdrs.length?'<div class="tsub" style="font-size:10px;line-height:1.45;margin:-2px 0 4px;color:var(--mut)">'+
+      esc(sdrs.map(s=>repShort(s.rep)).join(', '))+' works inside an AE\'s book rather than having one of his own, so opening him stays in that book and shows you his half of it — the leads he\'s dealt, his Hot List, his day.</div>':'')+
+    (va?'<button class="btn" style="width:100%;margin-top:8px" onclick="clearViewAs()">↩︎ Back to my own view</button>':'')+
     '<button class="btn gh" style="width:100%;margin-top:8px" onclick="this.closest(\'#bookgate\').style.display=\'none\'">Cancel</button>';
   g.style.display='flex';
 }
+// Choosing a real book always means "be yourself again" — otherwise you'd carry a borrowed pair
+// of eyes into the next book and wonder why everything was read-only.
+function pickBook(row){ try{ sessionStorage.removeItem('shipday_crm_viewas'); }catch(e){}
+  if(row===myBook()){ const g=el('bookgate'); if(g) g.style.display='none'; render(); syncRail(); return; }
+  switchBook(row); }
 function claimsReady(){ return !!sb && syncReady(); }
 function claimRecActive(r){ return !!r && (Date.now()-(+r.at||0)<CLAIM_TTL); }
 function claimOf(c){ const r=c&&claimsMap[c.id]; return claimRecActive(r)?r:null; }
