@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z160';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z161';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -8103,10 +8103,26 @@ function guessCols(H,rows){
         if(s>best) best=s; });
       if(best) pairs.push([best,i,f[0]]); }); });
   const M={},taken={}; IMPORT_FIELDS.forEach(f=>M[f[0]]=-1);
-  pairs.sort((a,b)=>b[0]-a[0]||a[1]-b[1]).forEach(p=>{ if(M[p[2]]>=0||taken[p[1]]) return; M[p[2]]=p[1]; taken[p[1]]=1; });
+  pairs.sort((a,b)=>b[0]-a[0]||a[1]-b[1]);
+  /* 🔑 A REFUSED COLUMN HAS TO FALL THROUGH TO THE RUNNER-UP, and until now it didn't — which turned
+     one of the checks below into a worse bug than the thing it was catching. Johnny's sheet has both
+     "Company / Account" and "Google Business Profile"; "business" is a longer alias hit than "account",
+     so the account name went to the link column, the link check correctly refused it, and then nothing
+     re-ran — so "Company / Account" was never looked at again and 2,762 restaurants imported with no
+     name at all. So: assign, let the checks veto, then assign again from what's left, and never
+     re-offer a pairing that was already refused. Settles in two passes on every sheet tested; the cap
+     is only there so a pathological file can't spin. */
+  const banned={};
+  const assign=()=>pairs.forEach(p=>{ if(M[p[2]]>=0||taken[p[1]]||banned[p[2]+'|'+p[1]]) return;
+    M[p[2]]=p[1]; taken[p[1]]=1; });
+  const ban=(k,i)=>{ banned[k+'|'+i]=1; delete taken[i]; M[k]=-1; _vetoed=true; };
+  let _vetoed=false;
+  for(let pass=0;pass<3;pass++){
+    assign(); _vetoed=false; runVetoes(); if(!_vetoed) break; }
+  function runVetoes(){
   // First+Last already name the person, so importCSV ignores the full-name column anyway. Release it
   // rather than leave it looking mapped — a sheet with "Owner Rep" (the rep, not the lead) landed there.
-  if(M.first>=0&&M.name>=0){ delete taken[M.name]; M.name=-1; }
+  if(M.first>=0&&M.name>=0){ delete taken[M.name]; banned['name|'+M.name]=1; M.name=-1; }
   /* A heading can lie. His column is called "Facebook / Insta" and holds TRUE/FALSE — a tick-box for
      whether anyone looked, not a link. Filing that as the Facebook URL would put a dead button on the
      account. If a link field's column isn't mostly links, hand it back; it lands as a custom field
@@ -8115,7 +8131,21 @@ function guessCols(H,rows){
     let seen=0,urls=0;
     for(let r=1;r<Math.min(rows.length,41);r++){ const v=String(rows[r][i]==null?'':rows[r][i]).trim();
       if(!v) continue; seen++; if(/^(https?:\/\/|www\.)/i.test(v)||_SNIFF.web(v)) urls++; }
-    if(seen>=3&&urls/seen<0.5){ delete taken[i]; M[k]=-1; } });
+    if(seen>=3&&urls/seen<0.5) ban(k,i); });
+  /* AND THE MIRROR OF IT, which is the one that hurt. Johnny's export heads a column
+     "Google Business Profile"; the word "business" is a longer alias hit than "account", so the
+     tie-break handed the ACCOUNT NAME to it and all 2,762 restaurants came in called
+     "https://www.google.com/search?q=…". A column full of links is never somebody's name or address,
+     whatever it's headed — so give it back, and pass it to the Google-link field if nothing claimed
+     that yet, since a link column in a restaurant list is almost always exactly that. */
+  if(rows&&rows.length>3) ['acc','name','first','last','addr','city'].forEach(k=>{ const i=M[k]; if(i<0) return;
+    let seen=0,urls=0;
+    for(let r=1;r<Math.min(rows.length,41);r++){ const v=String(rows[r][i]==null?'':rows[r][i]).trim();
+      if(!v) continue; seen++; if(/^(https?:\/\/|www\.)/i.test(v)) urls++; }
+    if(seen>=3&&urls/seen>=0.5){ ban(k,i);
+      const heads2=String(H[i]||'').toLowerCase();
+      const to=/google|gmb|business profile|maps/.test(heads2)?'gurl':'web';
+      if(M[to]<0){ M[to]=i; taken[i]=1; } } });
   /* THE SAME IDEA, APPLIED TO PEOPLE — and this is the one that bit a trial user. A column of names
      that keeps saying the SAME name is not naming the lead; it's naming a colleague. Whether the
      heading was "Owner", "Rep" or something we've never seen, 200 rows that all read "Johnny Angulo"
@@ -8134,9 +8164,10 @@ function guessCols(H,rows){
       if(d&&((_me&&d===_me)||_mates.has(d))) mine++; }
     const repeats = seen>=8 && distinct.size<=Math.max(2,seen*0.15);
     const isOurs  = seen>=3 && mine/seen>=0.5;
-    if(repeats||isOurs){ delete taken[i]; M[k]=-1;
+    if(repeats||isOurs){ ban(k,i);
       // If nothing else claimed the assignee slot, that column IS the owner — file it there.
       if(M.own<0){ M.own=i; taken[i]=1; } } });
+  }
   // Now read up to 40 rows of every still-unclaimed column and let the values speak.
   const sn={};
   if(rows&&rows.length>1) heads.forEach((h,i)=>{ if(taken[i]) return;
@@ -8260,10 +8291,40 @@ function importCSV(text,mapIn){
      the importer only looked at the phone column inside "if this row has an email or a first name".
      That is how 1,354 of 2,066 accounts ended up with no way to contact them at all. If nobody is
      named on the row, the number belongs to the business. */
-  const aPhoneOf=r=>{ const v=(iAPhone>=0?String(r[iAPhone]||'').trim():''); if(v) return v;
+  /* ---- Placeholder numbers and addresses, found by evidence rather than by blacklist ----
+     Johnny's Salesforce export carries 5555555555 on 23 restaurants, hi@mystore.com on 28 and
+     core@2.11.8 on 13 — website-template and CRM defaults, not contact details. Imported as-is they
+     merge 28 unrelated restaurants onto one email in the dedupe index and hand the rep a call list
+     of numbers that ring nowhere.
+     🔑 The test is HOW MANY DIFFERENT BUSINESSES share the value, not what the value is. A real chain
+     does share a corporate line — but across 4 locations, not 23. Measured on his file the largest
+     genuine overlap is 4 and the smallest placeholder is 13, so 8 sits in open space. Plus the shapes
+     that are never a phone number in any sheet: too short, one digit repeated, 1234567890. */
+  /* A link field takes links, checked ROW BY ROW rather than by sampling the column.
+     Johnny's "Enriched" export turned out to be two different spreadsheets pasted into one file: rows
+     1-511 are Restaurant | Website | Google link, and from row 512 the same columns hold Phone |
+     Rep name. Sampling the top of the column says "these are links" and it's right about the top —
+     so the only honest place to check is the value in front of you. Whatever the heading and whatever
+     the rest of the column looks like, a phone number is not a website and "Johnny Angulo" is not a
+     Google page, and refusing them individually costs one regex. */
+  const okUrl=v=>{ v=String(v||'').trim();
+    return /^(https?:\/\/|www\.)\S+$/i.test(v)||/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(\/\S*)?$/i.test(v)?v:''; };
+  const _fakePhone=v=>{ const d=String(v||'').replace(/\D/g,''); if(!d) return false;
+    if(d.length<7) return true;
+    if(/^(\d)\1+$/.test(d)) return true;
+    return /^(0?123456789|1234567890)$/.test(d); };
+  const _dupVals=(idx)=>{ const seen={}; if(idx<0) return {};
+    rows.slice(1).forEach(r=>{ const v=String(r[idx]||'').trim().toLowerCase(); if(!v) return;
+      const who=String(r[iAcc]||'').trim().toLowerCase();
+      (seen[v]=seen[v]||new Set()).add(who||Math.random()); });
+    const junk={}; Object.keys(seen).forEach(v=>{ if(seen[v].size>=8) junk[v]=1; }); return junk; };
+  const junkEmail=_dupVals(iEmail), junkPhone=Object.assign(_dupVals(iPhone),_dupVals(iAPhone));
+  const okPhone=v=>{ v=String(v||'').trim();
+    return (!v||_fakePhone(v)||junkPhone[v.toLowerCase()])?'':v; };
+  const aPhoneOf=r=>{ const v=okPhone(iAPhone>=0?String(r[iAPhone]||'').trim():''); if(v) return v;
     const person=(iEmail>=0&&String(r[iEmail]||'').trim())||(iFirst>=0&&String(r[iFirst]||'').trim())
                ||(iName>=0&&String(r[iName]||'').trim());
-    return (!person&&iPhone>=0)?String(r[iPhone]||'').trim():''; };
+    return (!person&&iPhone>=0)?okPhone(String(r[iPhone]||'').trim()):''; };
   // ---- Engagement columns → intent signals (so an imported list shows up in Intent) ----
   const iOpens=g('opens'),
     iOpenAt=g('openat'),
@@ -8317,12 +8378,12 @@ function importCSV(text,mapIn){
     let aid=byName[an.toLowerCase()];
     // "# Locs" > 1 = a multi-location group (sets locType + the # Locations field)
     const locsN=(iLocs>=0?parseInt(String(r[iLocs]||'').replace(/\.0$/,'')):0)||0;
-    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:(iWeb>=0?r[iWeb]:'').trim(),phone:aPhoneOf(r),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:(iOrd>=0?String(r[iOrd]||'').trim():''),googleUrl:(iGurl>=0?String(r[iGurl]||'').trim():''),facebook:(iFb>=0?String(r[iFb]||'').trim():''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),hours:(iHours>=0?String(r[iHours]||'').trim():''),isCustomer:false};
+    if(!aid){ aid=uid('a'); store.accounts[aid]={id:aid,name:an,city:(iCity>=0?r[iCity]:'').trim(),state:(iState>=0?r[iState]:'').trim(),address:(iAddr>=0?String(r[iAddr]||'').trim():''),website:okUrl(iWeb>=0?r[iWeb]:''),phone:aPhoneOf(r),pos:(iPos>=0?r[iPos]:'').trim(),cuisine:(iCui>=0?String(r[iCui]||'').trim():''),ordering:okUrl(iOrd>=0?r[iOrd]:''),googleUrl:okUrl(iGurl>=0?r[iGurl]:''),facebook:okUrl(iFb>=0?r[iFb]:''),delivery:(iDel>=0?String(r[iDel]||'').trim():''),hours:(iHours>=0?String(r[iHours]||'').trim():''),isCustomer:false};
       if(locsN>1){ store.accounts[aid].employees=String(locsN); store.accounts[aid].locType='multi'; }
       byName[an.toLowerCase()]=aid; na++; }
     else { // account already in book — fill in blanks only (re-importing an enriched sheet enriches, never clobbers)
-      const a0=acct(aid); if(a0){ let f=false; const fill=(k,i)=>{ const v=(i>=0?String(r[i]||''):'').trim(); if(v&&!a0[k]){ a0[k]=v; f=true; } };
-        fill('cuisine',iCui); fill('ordering',iOrd); fill('pos',iPos); fill('website',iWeb); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel); fill('hours',iHours); fill('googleUrl',iGurl); fill('facebook',iFb);
+      const a0=acct(aid); if(a0){ let f=false; const fill=(k,i,clean)=>{ let v=(i>=0?String(r[i]||''):'').trim(); if(clean) v=clean(v); if(v&&!a0[k]){ a0[k]=v; f=true; } };
+        fill('cuisine',iCui); fill('ordering',iOrd,okUrl); fill('pos',iPos); fill('website',iWeb,okUrl); fill('city',iCity); fill('state',iState); fill('address',iAddr); fill('delivery',iDel); fill('hours',iHours); fill('googleUrl',iGurl,okUrl); fill('facebook',iFb,okUrl);
         const ap=aPhoneOf(r); if(ap&&!a0.phone){ a0.phone=ap; f=true; }   // re-importing the same sheet now backfills the main line
         if(locsN>1&&!a0.employees){ a0.employees=String(locsN); f=true; }
         if(locsN>1&&(!a0.locType||a0.locType==='single')&&!isLocation(a0)){ a0.locType='multi'; f=true; }
@@ -8339,7 +8400,8 @@ function importCSV(text,mapIn){
        The whole string used to be stored as THE address, which is undeliverable and unsearchable.
        First one is the contact, the rest become alt addresses so a reply from either still matches. */
     const emailsOnRow=iEmail>=0?String(r[iEmail]||'').split(/[\/;,|]+|\s+/).map(s=>s.trim()).filter(s=>/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(s)):[];
-    const email=emailsOnRow[0]||'';
+    // The whole cell is what gets shared by 28 restaurants, so that's what the junk test keys on.
+    const email=(junkEmail[String(r[iEmail]||'').trim().toLowerCase()]?'':emailsOnRow[0])||'';
     const owner=(iOwn>=0?String(r[iOwn]||'').trim():'');
     let first='',last='';
     if(iFirst>=0){first=(r[iFirst]||'').trim();last=(iLast>=0?r[iLast]:'').trim();}
@@ -8349,7 +8411,7 @@ function importCSV(text,mapIn){
        person signed in, treat it as the owner instead of the lead. Nothing is dropped: the value
        still lands on assignee below. */
     if(_meName&&_dnorm((first+' '+last).trim())===_meName){ first=''; last=''; }
-    if(email||first){ const phone=(iPhone>=0?r[iPhone]:'').trim(), pk=norm10(phone), nm=((first||'')+' '+(last||'')).toLowerCase().trim();
+    if(email||first){ const phone=okPhone(iPhone>=0?r[iPhone]:''), pk=norm10(phone), nm=((first||'')+' '+(last||'')).toLowerCase().trim();
       // Dedup: match on email, else same name under the same account, else same phone number.
       const exist=(email&&byEmail[email.toLowerCase()]) || (nm&&byNameAcct[aid+'|'+nm]) || (pk&&byPhone[pk]);
       // Sheet metadata → matched or new contact: fill blank title/dispo, log a 📝 note once (txt-dedup),
@@ -8393,7 +8455,7 @@ function importCSV(text,mapIn){
       if(a1){
         if(nv&&nv.toLowerCase()!=='none'){ const txt='📝 '+nv; a1.log=a1.log||[];
           if(!a1.log.some(l=>l.txt===txt)){ a1.log.push({ts:Date.now(),txt,sys:true}); stampU(a1); } }
-        const pv=(iPhone>=0?String(r[iPhone]||'').trim():'');
+        const pv=okPhone(iPhone>=0?String(r[iPhone]||''):'');
         if(pv&&!a1.phone){ a1.phone=pv; stampU(a1); }
         stampCustom(a1,r); stampMeeting(null,a1,r); } }
   });
