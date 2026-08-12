@@ -464,7 +464,7 @@ small.hint{color:var(--dim);font-size:11px}
     <div class="s"><b id="hs-cust">0</b><span>Customers</span></div>
   </div>
   <div class="hspace"></div>
-  <button class="hbtn" id="book-chip" style="display:none" onclick="bookMenu()" title="Which territory you're working in"></button>
+  <button class="hbtn" id="book-chip" style="display:none" onclick="bookMenu()" title="Whose book you're looking at"></button>
   <span style="position:relative"><button class="hbtn" id="bell" onclick="openSignals(event)" title="New opens &amp; replies">🔔 <span id="bellN"></span></button><div id="sigpop" style="display:none"></div></span>
   <button class="hbtn" id="gmail-chip" style="display:none" onclick="connectGmail()" title="Your Gmail and Calendar aren't linked yet — click to fix it"></button>
   <button class="hbtn" id="rep-chip" onclick="setMyRep()" title="Who's working in this browser — every call, email &amp; note you log is stamped with this name so Team Activity can tell reps apart">👤 …</button>
@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z164';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z165';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -635,21 +635,25 @@ const TEAM = { url:'https://muidkwqinwcfnfvnducj.supabase.co', key:'eyJhbGciOiJI
    stranger and gets a private row of their own that starts empty, so an unexpected sign-in can
    never reach a real book. */
 const SHARED_BOOK='shipday-team';                    // Ohio — the original row, never renamed
-/* One book per AE, each named for the person AND the patch, because "Michigan" alone doesn't tell
-   you whose desk it is and "David" alone doesn't tell you what's in it. The ROWS are untouched and
-   must stay that way: a row id is the address of a couple of megabytes of somebody's work, and
-   renaming one doesn't move the data, it just points the app at an empty book. That is precisely
-   how Johnny's list went missing — he got a new row and his old one became unreachable — so from
-   here on, labels are free to change and rows are not. */
+/* 🔑 A BOOK IS A PERSON, NOT A PATCH. I built this as territories — Ohio, Michigan, Texas, Boston —
+   and Saad: "not peoples territories… i just wanted to be able to change between other peoples
+   books / as if i was just looking at their crm." Nobody thinks "open Boston", they think "look at
+   Johnny's". So the label is the name, and `rep` is who it belongs to — which is also who the app
+   pretends to be while you're visiting (see myRep), so their book looks like THEIR CRM and not like
+   yours with their accounts dropped into it.
+   The ROWS are untouched and must stay that way: a row id is the address of a couple of megabytes
+   of somebody's work, and renaming one doesn't move the data, it just points the app at an empty
+   book. That is exactly how Johnny's list went missing. Labels are free to change; rows are not. */
 const BOOKS=[
-  { row:'shipday-team',  name:'Saad · Ohio',    icon:'🏠' },   // the original row, never renamed
-  { row:'book:michigan', name:'Aime · Michigan',icon:'🚗' },
-  // David runs his own territories and imports his own account list. Named explicitly rather than
-  // letting bookRowFor() hand him an anonymous 'book:<user-id>' — that would also isolate him, but
-  // the row would be keyed to an id nobody can look up, so it could never be shared with anyone.
-  { row:'book:david',    name:'David · Texas',  icon:'🗺️' },
-  { row:'book:johnny',   name:'Johnny · Boston',icon:'🌮' }
+  { row:'shipday-team',  name:'Saad',   rep:'Saad Sheikh',   icon:'👤' },   // the original row, never renamed
+  { row:'book:michigan', name:'Aime',   rep:'Aime Kamana',   icon:'👤' },
+  // Named explicitly rather than letting bookRowFor() hand out an anonymous 'book:<user-id>' — that
+  // would isolate them too, but the row would be keyed to an id nobody can look up, so it could
+  // never be opened by anyone else.
+  { row:'book:david',    name:'David',  rep:'David Umana',   icon:'👤' },
+  { row:'book:johnny',   name:'Johnny', rep:'Johnny Angulo', icon:'👤' }
 ];
+function bookRep(row){ const b=BOOKS.find(x=>x.row===row); return (b&&b.rep)||''; }
 /* 🔑 SEEING A BOOK AND CHANGING ONE ARE DIFFERENT PERMISSIONS, and this list is only the second.
    Every book above is READABLE by the whole team: an AE covering someone's patch over a holiday,
    or anyone checking why a list looks empty, shouldn't have to ask permission to look at a screen.
@@ -665,7 +669,12 @@ const BOOK_MEMBERS={
      trial user through it over chat. Switching books is a deliberate, visible act, and the private
      per-rep boxes (__gmailBy / __calBy / signals) stay keyed to whoever is signed in, so this does NOT
      reopen z146: he still cannot see anyone's mailbox, calendar or notifications. */
-  'saad.sheikh@shipday.com': ['shipday-team','book:michigan','book:david','book:johnny'],
+  /* Saad's own book only, like everyone else. He used to be listed on all four so he could set a
+     new rep's book up for them (loading Johnny's sheet, fixing a mapping) — but that made "switch
+     to Johnny" put him INSIDE Johnny's CRM with full write, when what he asked for was to look at
+     it. Setup still has to be possible, so it moved to `unlock()`: a deliberate, per-session,
+     one-book override rather than a permanent standing permission. ADMINS is who may ask for it. */
+  'saad.sheikh@shipday.com': ['shipday-team'],
   /* 🔑 EMBERT IS THE SDR, AND AN SDR IS NOT A TERRITORY. He dials into the AEs' books and books
      meetings for them, so giving him a book of his own would be exactly wrong twice over: it would
      start empty, and every call he made would land somewhere the AE never looks. He writes into the
@@ -725,8 +734,25 @@ function myBooks(){ const out=myWrite();
    membership at all still owns their private row. */
 function canEdit(){ if(!BOOK_SPLIT) return true;
   if(!bookEmail()) return true;
-  const w=myWrite(), cur=myBook();
+  const cur=myBook();
+  if(unlocked()===cur) return true;
+  const w=myWrite();
   return w.length ? w.includes(cur) : !isTeamBook(cur); }
+/* Setting up somebody's book — importing their list, fixing a bad mapping — is real work that
+   somebody has to be able to do. It just isn't the DEFAULT way to be in their book. So it's an
+   explicit unlock: one named book, this tab only (sessionStorage, so closing the tab ends it),
+   and it has to be asked for out loud. */
+const ADMINS=['saad.sheikh@shipday.com'];
+function isAdmin(){ return ADMINS.includes(bookEmail()); }
+function unlocked(){ try{ return sessionStorage.getItem('shipday_crm_unlock')||''; }catch(e){ return ''; } }
+function unlockBook(){ const row=myBook();
+  if(!isAdmin()) return;
+  const who=(bookRep(row)||'').split(' ')[0]||bookName(row);
+  if(unlocked()===row){ try{ sessionStorage.removeItem('shipday_crm_unlock'); }catch(e){}
+    toast("Locked again — "+who+"'s book is back to view only"); render(); syncRail(); return; }
+  if(!confirm('Edit '+who+"'s book directly?\n\nAnything you change is saved into their book for real, stamped with YOUR name so they can see who did it.\n\nEnds when you close this tab.")) return;
+  try{ sessionStorage.setItem('shipday_crm_unlock',row); }catch(e){}
+  toast("Editing "+who+"'s book"); render(); syncRail(); }
 function bookName(row){ const b=BOOKS.find(x=>x.row===row); return b?(b.icon+' '+b.name):'🔒 My own book'; }
 
 /* ====================== CONSTANTS ====================== */
@@ -1151,13 +1177,21 @@ function bookRail(){ const b=document.getElementById('bookBox'); if(!b) return;
   if(!BOOK_SPLIT){ b.style.display='none'; return; }
   b.style.display='block';
   const cur=myBook(), list=myBooks();
-  const mates=Object.keys(BOOK_MEMBERS).filter(e=>(BOOK_MEMBERS[e]||[]).includes(cur));
+  // People, not addresses — "Only Aime, Embert can change it" reads; a list of @shipday.com does not.
+  const mates=Object.keys(BOOK_MEMBERS).filter(e=>(BOOK_MEMBERS[e]||[]).includes(cur))
+    .map(e=>(repFromEmail(e)||e).split(' ')[0]);
   b.innerHTML='<b>'+esc(bookName(cur))+(canEdit()?'':' <span style="color:var(--hot)">👁 view only</span>')+'</b><br>'+
-    '<span style="color:var(--mut)">Everything on every tab — accounts, contacts, notes, Hot List, quota — is just this territory. '+
-    (canEdit()?'':"You can read it but not change it — nothing you edit here will save. ")+
+    '<span style="color:var(--mut)">Everything on every tab — accounts, contacts, notes, Hot List, quota — is just this book. '+
+    (canEdit()?'':"You're seeing it as "+esc(bookRep(cur)||'they')+" sees it. You can read it but not change it — nothing you edit here will save. ")+
     (mates.length?('Only '+esc(mates.join(', '))+' can change it — everyone else can look.'):'')+'</span>'+
     (list.length>1?('<div style="margin-top:6px">'+list.filter(r=>r!==cur).map(r=>
-      '<button class="btn sm gh" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">Switch to '+esc(bookName(r))+'</button>').join(' ')+'</div>'):'');
+      '<button class="btn sm gh" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">Switch to '+esc(bookName(r))+'</button>').join(' ')+'</div>'):'')+
+    // Setting a rep's book up for them is real work, so the door exists — but it's here, in the
+    // settings rail, and it has to be pressed. It is never the state you land in.
+    (isAdmin()&&isTeamBook(cur)&&!myWrite().includes(cur)
+      ? '<div style="margin-top:6px"><button class="btn sm gh" onclick="unlockBook()">'+
+        (unlocked()===cur?'🔒 Lock again — back to view only':'✏️ Let me edit '+esc(bookRep(cur).split(' ')[0]||bookName(cur))+"'s book")+'</button></div>'
+      : '');
 }
 /* per-rep integration keys (Google) */
 // The app IS hosted now, and the real self-serve OAuth flow shipped with connectGmail(). This
@@ -1797,7 +1831,11 @@ const MEET_NOISE=/(no-?reply|notification|mailer|bounce|postmaster|calendar-|@sh
    their inbox and their calendar to everybody else — Aime opened the CRM and was looking at
    Saad's "Needs a Reply". Same for the rep email, which was a fixed value in the seed, so every
    rep's CRM thought it WAS Saad. Everything personal now files under the rep who fetched it. */
-function meKey(){ return repCanon(myRep()||store.__rep||'')||'__me'; }
+/* realRep, NOT myRep. Visiting someone's book makes myRep() answer with their name so their queue
+   and their tasks render as theirs — but the mailbox, calendar and notification boxes are keyed
+   through here, and borrowing a name must never mean borrowing an inbox. That is z146 in reverse
+   and it would be the more serious version: reading a teammate's mail rather than being shown it. */
+function meKey(){ return repCanon(realRep()||store.__rep||'')||'__me'; }
 function myBox(k){ return (store['__'+k+'By']||{})[meKey()]||null; }
 function setBox(k,v){ (store['__'+k+'By']=store['__'+k+'By']||{})[meKey()]=v; return v; }
 // Point store.__gmail / store.__cal at YOUR copy. Called after every load and cloud pull, so
@@ -3993,7 +4031,19 @@ const GRP_LANE=12;
    DEVICE-local key so each browser knows who it is. 30-min TTL auto-frees a lead. */
 const CLAIM_TTL=30*60*1000;
 let claimsMap={}, claimSub=null;
-function myRep(){ try{ return (localStorage.getItem('shipday_crm_rep')||'').trim(); }catch(e){ return ''; } }
+/* 🔑 IN SOMEONE ELSE'S BOOK, YOU ARE THEM. Saad: "as if i was just looking at their crm."
+   Almost everything personal in here is scoped by this one function — Hot List ownership, whose
+   tasks the dashboard shows, which sequences are "mine", who a lead is claimed by. Opening Johnny's
+   book while still identified as Saad Sheikh therefore showed his accounts filtered to Saad's name,
+   which is to say an empty CRM: his queue, his tasks and his sequences all belong to him and were
+   filtered straight out. Answering as the book's owner is what makes it read like his screen.
+   Safe precisely because it only ever happens where you cannot write (canEdit is false in anyone
+   else's book), so nothing is ever logged, claimed or sent under a borrowed name. Their private
+   boxes are NOT borrowed — hydrateMine still keys to the real sign-in, so this shows you their
+   pipeline, never their inbox, calendar or notifications. */
+function realRep(){ try{ return (localStorage.getItem('shipday_crm_rep')||'').trim(); }catch(e){ return ''; } }
+function myRep(){ if(!canEdit()){ const r=bookRep(myBook()); if(r) return r; } return realRep(); }
+function visiting(){ return !canEdit()&&!!bookRep(myBook()); }
 function setMyRep(){ repGate(false); }
 /* Rep sign-in gate — IDENTITY, not security (password auth stays Phase C). Picking who you
    are is what makes lead-locking + activity attribution work, so boot() forces it once per
@@ -4030,10 +4080,10 @@ function renderBookChip(){ const b=el('book-chip'); if(!b) return;
   b.style.display='';
   // Say view-only up here, not only when a save is refused. Someone who spends ten minutes taking
   // notes and finds out at the end has lost ten minutes and some trust in the app.
-  const ro=!canEdit();
-  b.innerHTML=(ro?'<span style="color:var(--hot)">👁 View only · </span>':'')+esc(bookName(myBook()));
-  b.title=(ro?"You're reading "+bookName(myBook()).replace(/^\S+\s/,'')+" — nothing you change here will be saved. "
-             :'Working in '+bookName(myBook()).replace(/^\S+\s/,'')+' — ')+'click to switch territory';
+  const ro=!canEdit(), who=bookName(myBook()).replace(/^\S+\s/,'');
+  b.innerHTML=ro? '<span style="color:var(--hot)">👁 '+esc(who)+"'s CRM</span>" : esc(bookName(myBook()));
+  b.title=(ro?"You're looking at "+who+"'s CRM — nothing you change here will be saved. C"
+             :'Your own book — c')+'lick to switch to someone else.';
 }
 /* ============ GOOGLE CONNECTION, VISIBLE ============
    Connecting your Gmail is the FIRST thing a new rep has to do and it used to be reachable only
@@ -4081,8 +4131,8 @@ function bookMenu(){
   const list=myBooks(), cur=myBook();
   let g=el('bookgate'); if(!g){ g=document.createElement('div'); g.id='bookgate'; document.body.appendChild(g); }
   g.innerHTML='<div class="gatebox">'+
-    '<h1>Which <b>territory</b>?</h1>'+
-    '<p>Each territory is a separate book — its own accounts, contacts, notes and quota. Nothing you log in one ever shows up in the other. You can open anyone\'s book to look; the ones marked 👁 you can read but not change.</p>'+
+    '<h1>Whose <b>book</b>?</h1>'+
+    '<p>Open anyone\'s book and you see their CRM the way they see it — their accounts, their Hot List, their tasks, their pipeline. The ones marked 👁 you can read but not change.</p>'+
     list.map(r=>{ const w=myWrite(), ro=w.length?!w.includes(r):isTeamBook(r);
       return '<button class="btn rbtn'+(r===cur?' pri':'')+'" onclick="switchBook('+JSON.stringify(r).replace(/"/g,'&quot;')+')">'+esc(bookName(r))+
       (ro?' <span style="font-size:11px;opacity:.6">👁 view only</span>':'')+
@@ -5552,6 +5602,9 @@ function ingestBounces(replies){
 // thread onto the prior message via the stored threadId + Message-ID so the conversation stays
 // intact. This is what lets the whole cadence run without ever opening Gmail. =====
 async function sendSeqEmail(id){
+  // A send is the one write that leaves the building. The save() gate would roll the record back
+  // afterwards, but the mail would already be gone — and gone under the borrowed name.
+  if(!canEdit()){ readOnlyBlocked(); return; }
   const c=contact(id); if(!c) return;
   if(!c.email){ toast('No email address on this contact'); return; }
   if(!SYNC_FN){ toast('Connect integrations first'); return; }
