@@ -610,7 +610,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z168';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug12·z169';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -6168,7 +6168,30 @@ const PIN_HOLD=3*3600e3;   // one sitting. A pin from yesterday isn't a call in 
 // "Next ▸" — the deliberate way to move on when you didn't log anything (wrong number in your
 // hand, changed your mind, just browsing). Without this the only way past a held card would be
 // to disposition a call that never happened.
-function nextLead(){ setPin(null); renderHotList(); }
+function nextLead(){ const was=pinnedLead; addSkip(was); setPin(null); renderHotList();
+  if(was) toast('Skipped for this block'+(skipIds.length>1?' · '+skipIds.length+' skipped':''), unskipLast); }
+/* 🔴 "Next ▸" WAS A NO-OP, AND IT WAS THIS.
+   It cleared the pin and re-rendered — but renderHotList's very next move with no pin is
+   `cur=due[0]`, and due[0] is the SAME lead, because the block froze the order and skipping
+   somebody doesn't make them stop being due. So Next re-pinned the person you just skipped
+   and the card never changed. Saad: "the next button doesnt even work."
+   Skipping has to be remembered, so keep a set of ids that are passed over for THIS block only.
+   Deliberately not `queueOut` and deliberately not a snooze: you didn't reject the lead, you
+   just aren't calling them this minute. They stay in the list, stay callable, stay in the
+   counts — they only lose the Now-up slot. A new block or 4h clears it, same lifetime as the
+   order it belongs to. */
+let skipIds=[], skipAt=0;
+try{ skipIds=JSON.parse(localStorage.getItem('shipday_crm_skip')||'[]')||[]; skipAt=+localStorage.getItem('shipday_crm_skip_at')||0; }catch(e){}
+function skipLive(){ return !!(skipAt && Date.now()-skipAt<SESSION_TTL); }
+function skipped(id){ return skipLive() && skipIds.indexOf(id)>=0; }
+function saveSkips(){ try{ if(skipIds.length){ localStorage.setItem('shipday_crm_skip',JSON.stringify(skipIds)); localStorage.setItem('shipday_crm_skip_at',String(skipAt)); }
+  else { localStorage.removeItem('shipday_crm_skip'); localStorage.removeItem('shipday_crm_skip_at'); } }catch(e){} }
+function clearSkips(){ skipIds=[]; skipAt=0; saveSkips(); }
+function addSkip(id){ if(!id) return; if(!skipLive()) skipIds=[]; skipAt=Date.now();
+  if(skipIds.indexOf(id)<0) skipIds.push(id); saveSkips(); }
+// Undo, because Next is one click away from a mis-click and the lead is gone off the card.
+function unskipLast(){ if(!skipIds.length) return; const id=skipIds.pop(); saveSkips();
+  setPin(id); renderHotList(); toast('Back to '+cname(contact(id)||{})); }
 /* ===== THE BLOCK: hold the ORDER so the list stops rearranging itself between calls =====
    Every logged call, open, reply and sync re-ranks the queue, so the person who was 4th when you
    started is 11th two dials later. That is correct for deciding who to call next and useless for
@@ -6186,7 +6209,7 @@ function startSession(ids){ sessionIds=ids.slice(0,SESSION_N); sessionAt=Date.no
   try{ localStorage.setItem('shipday_crm_sess',JSON.stringify(sessionIds)); localStorage.setItem('shipday_crm_sess_at',String(sessionAt)); }catch(e){} }
 function endSession(){ sessionIds=[]; sessionAt=0;
   try{ localStorage.removeItem('shipday_crm_sess'); localStorage.removeItem('shipday_crm_sess_at'); }catch(e){} }
-function newBlock(){ endSession(); setPin(null); renderHotList(); toast('New block — queue re-ranked from scratch'); }
+function newBlock(){ endSession(); clearSkips(); setPin(null); renderHotList(); toast('New block — queue re-ranked from scratch'); }
 function orderBySession(due){
   if(!sessionLive()) startSession(due.map(c=>c.id));
   const pos={}; sessionIds.forEach((id,i)=>{ pos[id]=i; });
@@ -6264,7 +6287,9 @@ function renderHotList(){
      So the pin now holds the person until YOU finish them, in or out of the queue. A pin older
      than PIN_HOLD is a different sitting, not a live call, and lets go on its own. */
   if(!pinC && pinnedLead && Date.now()-pinnedAt<PIN_HOLD) pinC=contact(pinnedLead)||null;
-  if(pinC){ cur=pinC; } else { cur=due[0]||null; setPin(cur?cur.id:null); }
+  // Serve the first lead you HAVEN'T passed over this block. Falling back to due[0] on purpose:
+  // if you've skipped every single one, an empty card is a worse answer than the top of the list.
+  if(pinC){ cur=pinC; } else { cur=due.find(c=>!skipped(c.id))||due[0]||null; setPin(cur?cur.id:null); }
   const rest=due.filter(c=>cur&&c.id!==cur.id);
   const me=myRep();
   // Claim-on-surface: the lead in front of you locks to you (heartbeat re-stamps
@@ -6311,7 +6336,11 @@ function renderHotList(){
   const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
   const droppedN=contacts().filter(c=>c.queueOut).length;
   const restoreLink=droppedN?' · <span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span>':'';
-  h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+'</span><button class="btn sm gh" onclick="recalcQueue()" title="Pull fresh opens/replies and re-rank the whole queue" style="margin-left:auto">↻ Resync &amp; recalc</button>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
+  // Skipped leads are still in this list and still callable — say so, or "Next" starts to feel
+  // like leads are disappearing, which is the exact complaint the block was built to answer.
+  const skipN=skipLive()?skipIds.filter(id=>due.some(c=>c.id===id)).length:0;
+  const skipLink=skipN?' · <span onclick="clearSkips();renderHotList();toast(\'Skipped leads back in rotation\')" style="cursor:pointer;color:var(--sig)">⏭ '+skipN+' skipped this block — bring back</span>':'';
+  h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+skipLink+'</span><button class="btn sm gh" onclick="recalcQueue()" title="Pull fresh opens/replies and re-rank the whole queue" style="margin-left:auto">↻ Resync &amp; recalc</button>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
   if(snoozed.length){
     const t2=dataTable('hotlist2',chosenCols('hotlist2'),snoozed,r=>"openContact('"+r.id+"')",snoozeCell);
     h+='<div class="panel"><div class="ph"><h3>💤 Scheduled</h3><span class="sub">'+snoozed.length+' snoozed by disposition — soonest first</span>'+colMenu('hotlist2')+'</div>'+t2.html+'</div>';
