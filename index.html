@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug12·z173';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug13·z174';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3806,7 +3806,7 @@ function applyDispo(c,key,note,reqKey,atTs){ const d=DISPO_BY[key]; if(!c||!d) r
   if(!d.gone&&typeof onCallStep==='function'&&onCallStep(c)){
     const s=c.emailSeq, N=cadNFor(c), n=Math.min(+s.step||1,N), def=cadDefFor(c)[n-1]||{}, by=senderName();
     seqPrev={n:n,step:s.step,done:!!s.done,lastBy:s.lastBy,lastSentAt:s.lastSentAt};
-    advanceStep(c,n,by,'📞 Call '+n+'/'+N+(def.label?' — '+def.label:'')+' logged by '+by+' — '+d.t);
+    advanceStep(c,n,by,'📞 '+stepLabel(c,n,'/')+(def.label?' — '+def.label:'')+' logged by '+by+' — '+d.t);
   }
   releaseClaim(c);
   save(); renderActive(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget();
@@ -5231,6 +5231,27 @@ Saad`},
 // 'task' (any manual to-do). 'new'/'reply' are email subtypes; reply threads onto the prior email.
 function stepKind(s){ const t=((s&&s.type)||'').toLowerCase(); return (t==='call'||t==='task')?t:'email'; }
 function isEmailStep(s){ return stepKind(s)==='email'; }
+/* 🔴 THE STEP POINTER IS NOT THE EMAIL NUMBER. withCallSteps() interleaves a call after every
+   email, so a 5-email play becomes 10 steps: 1,3,5,7,9 email and 2,4,6,8,10 call. Every label in
+   the app printed that raw pointer next to the word "Email", so the fifth and LAST email announced
+   itself as "Email 9 of 10" — Saad: "it says email 9/10 when its actually email 5". It reads as
+   four emails still to come when there are none, and it makes the cockpit numbers meaningless.
+   The copy that goes out was always right (emailStep indexes the same interleaved array); only the
+   number beside it was wrong. So count each kind WITHIN ITS OWN KIND and keep the raw step for
+   anything that actually addresses the pointer — tasks' cadStep, setSeqStep, revert. */
+function ordInSteps(def,n){ def=def||[]; const k=stepKind(def[n-1]||{});
+  let i=0, of=0;
+  def.forEach((s,ix)=>{ if(stepKind(s)!==k) return; of++; if(ix<n) i=of; });
+  return { i:i||1, of:of||1, kind:k }; }
+function stepOrd(c,n){ return ordInSteps(cadDefFor(c),n); }
+function kindNoun(k){ return k==='call'?'Call':k==='task'?'Task':'Email'; }
+// "Email 5 of 5" / "Call 4 of 5" — the phrase a human reads. sep is '/' for terse log lines.
+function stepLabel(c,n,sep){ const o=stepOrd(c,n);
+  return kindNoun(o.kind)+' '+o.i+(sep||' of ')+o.of; }
+// The next step of the SAME kind, for "…, Email 4 queued" hints. Returns null at the end.
+function nextOfKind(c,n,kind){ const def=cadDefFor(c)||[];
+  for(let ix=n; ix<def.length; ix++) if(stepKind(def[ix])===kind) return ix+1;
+  return null; }
 // Every play should dial as well as email: interleave a CALL step right after each email so the
 // cadence is Email 1 → Call → Email 2 → Call → …  Idempotent — if a play already carries a call
 // step (a hand-built or already-interleaved play) it's left untouched, so this never double-inserts.
@@ -5679,8 +5700,8 @@ function seqStarter(c){ const s=c&&c.emailSeq; if(s&&s.owner) return s.owner;
 function ensureEmailTask(id,step){ const c=contact(id); if(!c) return; const def=cadDefFor(c), N=def.length; if(step<1||step>N) return;
   if(tasks().some(t=>t.emailCad&&t.contactId===id&&(+t.cadStep||0)===step&&!t.done)) return;   // already an open task for this step
   const s=def[step-1], lbl=s&&s.label?(' — '+s.label):''; const wait=(+ (s&&s.d)||0);            // days after the prior step
-  const k=stepKind(s); const noun=k==='call'?'Call':k==='task'?'Task':'Email'; const tt=k==='call'?'call':k==='task'?'other':'email';
-  addTask({title:noun+' '+step+'/'+N+lbl,type:tt,contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:seqStarter(c)}); }
+  const k=stepKind(s), tt=k==='call'?'call':k==='task'?'other':'email';
+  addTask({title:stepLabel(c,step,'/')+lbl,type:tt,contactId:id,due:today0().getTime()+wait*864e5,emailCad:true,cadStep:step,assignee:seqStarter(c)}); }
 // syncSeqTasks: the task dashboard is DERIVED from emailSeq (the real source of truth, which merges
 // safely per-contact) instead of relying on __tasks alone — __tasks syncs last-writer-wins and can
 // be clobbered by another tab, silently emptying the queue. On every load + sync we regenerate a
@@ -5706,8 +5727,8 @@ function syncSeqTasks(){ let made=0; const openMap={};
     const step=Math.min(Math.max(+s.step||1,1),N);
     if(openMap[c.id+'|'+step]) return;                                   // already queued for this step
     const st=def[step-1], lbl=(st&&st.label)?(' — '+st.label):'';
-    const k=stepKind(st), noun=k==='call'?'Call':k==='task'?'Task':'Email', tt=k==='call'?'call':k==='task'?'other':'email';
-    tasks().push({id:uid('t'),type:tt,title:noun+' '+step+'/'+N+lbl,due:today0().getTime(),done:false,createdAt:Date.now(),contactId:c.id,accountId:'',emailCad:true,cadStep:step,assignee:seqStarter(c)});
+    const k=stepKind(st), tt=k==='call'?'call':k==='task'?'other':'email';
+    tasks().push({id:uid('t'),type:tt,title:stepLabel(c,step,'/')+lbl,due:today0().getTime(),done:false,createdAt:Date.now(),contactId:c.id,accountId:'',emailCad:true,cadStep:step,assignee:seqStarter(c)});
     openMap[c.id+'|'+step]=1; made++; });
   return made+pruned+reassigned; }
 // advanceStep: the shared engine behind every "step done" — logs the touch, moves emailSeq.step
@@ -5721,14 +5742,14 @@ function advanceStep(c,n,by,logLine){ if(!c) return; const N=cadNFor(c); const s
   if(!s.done) ensureEmailTask(c.id,n+1);                              // …and drop the next step's task
   stampU(c); }
 function markEmailStepSent(c,n,by){ if(!c) return; const N=cadNFor(c); const e=emailStep(c,n);
-  advanceStep(c,n,by,'📧 Email '+n+'/'+N+' sent by '+by+' — '+e.subj); }
+  advanceStep(c,n,by,'📧 '+stepLabel(c,n,'/')+' sent by '+by+' — '+e.subj); }
 // completeSeqStep: mark a call/task step done (no send). Advances the cadence just like a sent email.
 function completeSeqStep(id){ const c=contact(id); if(!c) return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
   const N=cadNFor(c); const n=Math.min(+s.step||1,N); const def=cadDefFor(c)[n-1]||{}; const k=stepKind(def); const by=senderName();
-  const noun=k==='call'?'Call':'Task'; const icon=k==='call'?'📞':'✅'; const lbl=def.label?(' — '+def.label):'';
-  advanceStep(c,n,by,icon+' '+noun+' '+n+'/'+N+lbl+' done by '+by);
+  const icon=k==='call'?'📞':'✅'; const lbl=def.label?(' — '+def.label):'';
+  advanceStep(c,n,by,icon+' '+stepLabel(c,n,'/')+lbl+' done by '+by);
   save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
-  toast(c.emailSeq.done?('Sequence complete — '+noun.toLowerCase()+' '+n+' done'):(noun+' '+n+' done · step '+(n+1)+' queued')); }
+  toast(c.emailSeq.done?('Sequence complete — '+stepLabel(c,n)+' done'):(stepLabel(c,n)+' done · step '+(n+1)+' of '+N+' queued')); }
 // Revert one step: undo the most recent send, reopen that step's task, drop any later task.
 function revertEmailStep(id){ const c=contact(id); const s=c&&c.emailSeq; if(!s){ toast('No email cadence'); return; }
   const N=cadNFor(c); const cur=s.done?N+1:Math.min(+s.step||1,N); const target=cur-1;
@@ -5769,7 +5790,7 @@ function copyEmailStep(id){ const c=contact(id); if(!c)return; saveSeqEdit(id,tr
     try{ const item=new ClipboardItem({
         'text/html':new Blob(['Subject: '+esc(e.subj)+'<br><br>'+html],{type:'text/html'}),
         'text/plain':new Blob(['Subject: '+e.subj+'\n\n'+plain],{type:'text/plain'}) });
-      navigator.clipboard.write([item]).then(()=>toast('Email '+n+' copied (rich)')).catch(()=>copyPlainStep(e,n)); return;
+      navigator.clipboard.write([item]).then(()=>toast(stepLabel(c,n)+' copied (rich)')).catch(()=>copyPlainStep(e,n)); return;
     }catch(_){ } }
   copyPlainStep(e,n); }
 function copyPlainStep(e,n){ const txt='Subject: '+e.subj+'\n\n'+e.body;
@@ -5780,7 +5801,8 @@ function logEmailSent(id){ const c=contact(id); if(!c)return; const s=c.emailSeq
   markEmailStepSent(c,n,by);   // advances the step, closes this task, spawns the next
   save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
   const nextD=cadDefFor(c)[n]?(+cadDefFor(c)[n].d||0):0;
-  toast(c.emailSeq.done?('Cadence complete — Email '+n+' logged by '+by):('Email '+n+' logged · Email '+(n+1)+' due in '+nextD+'d')); }
+  toast(c.emailSeq.done?('Cadence complete — '+stepLabel(c,n)+' logged by '+by)
+      :(stepLabel(c,n)+' logged'+(nextOfKind(c,n,'email')?' · '+stepLabel(c,nextOfKind(c,n,'email'))+' due in '+nextD+'d':''))); }
 // ===== Self-serve Gmail connect: pop the gmail-oauth flow for the signed-in rep. After they
 // click Allow on Google, their refresh token is stored server-side (rep_gmail) keyed by rep name,
 // so their sends leave THEIR own inbox. One click, no tokens to paste. =====
@@ -5971,9 +5993,9 @@ async function sendSeqEmail(id){
   saveSeqEdit(id,true);
   const N=cadNFor(c); const n=Math.min(+s.step||1,N); const e=emailStep(c,n);
   const isReply=(e.type==='reply');
-  if(!confirm('Send Email '+n+'/'+N+' to '+cname(c)+' <'+c.email+'> now, from your Gmail?\n\nSubject: '+e.subj)) return;
+  if(!confirm('Send '+stepLabel(c,n,'/')+' (step '+n+'/'+N+') to '+cname(c)+' <'+c.email+'> now, from your Gmail?\n\nSubject: '+e.subj)) return;
   const by=senderName();
-  setSync&&setSync('busy','Sending Email '+n+'…');
+  setSync&&setSync('busy','Sending '+stepLabel(c,n)+'…');
   try{
     const bodyOut=e.html?fillTokens(e.body,c):e.body;
     // POST to gmail-send. On a reply step we thread onto the stored conversation; but if that
@@ -6022,7 +6044,8 @@ async function sendSeqEmail(id){
     bumpEmail();                                // counts toward today's 100 — see the hot-list scoreboard
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
     setSync&&setSync('ok','Sent');
-    toast(c.emailSeq.done?('✅ Cadence complete — Email '+n+' sent to '+cname(c)):('✅ Email '+n+' sent to '+cname(c)+' · Email '+(n+1)+' queued'));
+    toast(c.emailSeq.done?('✅ Cadence complete — '+stepLabel(c,n)+' sent to '+cname(c))
+      :('✅ '+stepLabel(c,n)+' sent to '+cname(c)+(nextOfKind(c,n,'email')?' · '+stepLabel(c,nextOfKind(c,n,'email'))+' queued':'')));
   }catch(err){ setSync&&setSync('err','Send failed'); toast('Send failed: '+((err&&err.message)||err)); }
 }
 // ===== Schedule send: queue the current step to go out at a future time. The row lands in the
@@ -6052,17 +6075,17 @@ async function confirmScheduleSend(id){ const c=contact(id); if(!c) return;
   const N=cadNFor(c); const n=Math.min(+s.step||1,N); const e=emailStep(c,n);
   const isReply=(e.type==='reply'); const by=senderName();
   const bodyOut=e.html?fillTokens(e.body,c):e.body;
-  if(!confirm('Schedule Email '+n+'/'+N+' to '+cname(c)+' <'+c.email+'> for '+when.toLocaleString()+'?\n\nIt sends automatically at that time, even if the CRM is closed.\n\nSubject: '+e.subj)) return;
+  if(!confirm('Schedule '+stepLabel(c,n,'/')+' (step '+n+'/'+N+') to '+cname(c)+' <'+c.email+'> for '+when.toLocaleString()+'?\n\nIt sends automatically at that time, even if the CRM is closed.\n\nSubject: '+e.subj)) return;
   setSync&&setSync('busy','Scheduling…');
   try{
     const {error}=await sb.from('scheduled_sends').insert({to_email:c.email,subject:e.subj,body:bodyOut,html:e.html?true:false,
       cid:c.id,rep:by,thread_id:isReply?(s.threadId||''):'',in_reply_to:isReply?(s.lastMsgId||''):'',
       send_at:when.toISOString(),status:'pending'});
     if(error) throw error;
-    advanceStep(c,n,by,'🕒 Email '+n+'/'+N+' scheduled for '+when.toLocaleString()+' by '+by+' — '+e.subj);
+    advanceStep(c,n,by,'🕒 '+stepLabel(c,n,'/')+' scheduled for '+when.toLocaleString()+' by '+by+' — '+e.subj);
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
     setSync&&setSync('ok','Scheduled');
-    toast('🕒 Email '+n+' scheduled for '+when.toLocaleString());
+    toast('🕒 '+stepLabel(c,n)+' scheduled for '+when.toLocaleString());
   }catch(err){ setSync&&setSync('err','Schedule failed'); toast('Schedule failed: '+((err&&err.message)||err)); }
 }
 // ===== Sequence copy editor: paste your real sequence steps once, whole team sends them =====
@@ -6102,8 +6125,8 @@ function saveCadence(){ cadSync();
 // the follow-up call — clamped to the last step). Rep can still pick ANY step.
 function resumeStepOpts(seqId,wasEmail){ const q=seqById(seqId); const steps=(q&&q.steps)||cadDef(); const N=steps.length;
   let ec=0, suggest=N; for(let i=0;i<N;i++){ if(stepKind(steps[i])==='email'){ ec++; if(ec===(+wasEmail||1)){ suggest=Math.min(i+2,N); break; } } }
-  let o=''; for(let i=0;i<N;i++){ const sd=steps[i], kk=stepKind(sd), noun=kk==='call'?'📞 Call':kk==='task'?'✅ Task':'✉ Email';
-    o+='<option value="'+(i+1)+'"'+((i+1)===suggest?' selected':'')+'>Step '+(i+1)+': '+noun+(sd.label?' — '+esc(sd.label):'')+'</option>'; } return o; }
+  let o=''; for(let i=0;i<N;i++){ const sd=steps[i], ro=ordInSteps(steps,i+1), icon=ro.kind==='call'?'📞':ro.kind==='task'?'✅':'✉';
+    o+='<option value="'+(i+1)+'"'+((i+1)===suggest?' selected':'')+'>Step '+(i+1)+': '+icon+' '+kindNoun(ro.kind)+' '+ro.i+' of '+ro.of+(sd.label?' — '+esc(sd.label):'')+'</option>'; } return o; }
 function renderResumeSteps(id){ const c=contact(id); const s=(c&&c.emailSeq)||{}; const sel=el('resSeq_'+id); const seqId=(sel&&sel.value)||s.seqId;
   const w=el('resStep_'+id); if(w) w.innerHTML=resumeStepOpts(seqId,+s.pausedEmail||1); }
 function pausedCadBlock(id){ const c=contact(id); const s=(c&&c.emailSeq)||{}; const q=seqById(s.seqId);
@@ -6138,10 +6161,12 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
   const def=cadDefFor(c)[n-1]||{}, k=stepKind(def);
   const lastBy=c.emailSeq.lastBy, lastAt=c.emailSeq.lastSentAt;
   const qNow=seqById(c.emailSeq.seqId), seqName=(qNow&&qNow.name)||'Sequence';
-  const noun=k==='call'?'Call':k==='task'?'Task':'Email';
-  const stepLbl=def.label||(noun+' '+n);
+  const stepLbl=def.label||stepLabel(c,n);
   const headIcon=k==='call'?'📞':k==='task'?'✅':'✉️';
-  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>'+headIcon+' '+esc(seqName)+'</b><span class="tsub">'+(done?'✓ Complete · '+N+'/'+N+' done':noun+' '+n+' of '+N+' · '+esc(stepLbl))+'</span></div>';
+  let h='<div class="cadbox in"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>'+headIcon+' '+esc(seqName)+'</b><span class="tsub">'+(done?'✓ Complete · all '+N+' steps done'
+    // Both numbers, because they answer different questions: "Email 5 of 5" is how much copy is
+    // left to send, "step 9 of 10" is where the pointer sits. Showing only the pointer was the bug.
+    :stepLabel(c,n)+' <span style="opacity:.6">· step '+n+' of '+N+'</span>'+(def.label?' · '+esc(def.label):''))+'</span></div>';
   h+='<div class="tsub" style="margin-top:4px">Working as <b>'+esc(senderName())+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> · <span onclick="connectGmail()" style="cursor:pointer;color:var(--sig)" title="Connect your Gmail so sends leave your own inbox">🔗 connect Gmail</span> · <span onclick="editSig()" style="cursor:pointer;color:var(--sig)" title="Set your own sign-off — replaces the template signature on emails you send">✎ signature</span> · <span onclick="switchSequence(\''+id+'\')" style="cursor:pointer;color:var(--sig)">⇄ switch sequence</span> · <span onclick="removeFromSeq(\''+id+'\')" style="cursor:pointer;color:var(--lost)" title="Take this contact out of the sequence and clear its cadence tasks">✕ remove</span>'+(lastBy?' · last step by <b>'+esc(lastBy)+'</b> '+esc(fmtAgo(lastAt)):'')+'</div>';
   if(!done){
     if(k==='email'){
@@ -6162,7 +6187,7 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
       h+='</div>';
       if(rich){ h+='<div id="seqBody_'+id+'" class="cadbody rt-editor" contenteditable="true" style="width:100%;box-sizing:border-box;margin-top:6px;min-height:150px;overflow:auto;resize:vertical" onblur="saveSeqEdit(\''+id+'\')" onpaste="rtPaste(event,\''+id+'\')" ondragover="event.preventDefault()" ondrop="rtDrop(event,\''+id+'\')">'+fillTokens(e.body,c)+'</div>'; }
       else { h+='<textarea id="seqBody_'+id+'" class="cadbody" style="width:100%;box-sizing:border-box;margin-top:6px;resize:vertical;min-height:150px" onchange="saveSeqEdit(\''+id+'\')">'+esc(e.body)+'</textarea>'; }
-      h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="sendSeqEmail(\''+id+'\')" title="Send this step from your Gmail right now — tracked for opens, then advances the cadence">📤 Send Email '+n+'</button>'+
+      h+='<div class="logbar" style="margin-top:8px"><button class="btn sm pri" onclick="sendSeqEmail(\''+id+'\')" title="Send this step from your Gmail right now — tracked for opens, then advances the cadence">📤 Send '+stepLabel(c,n)+'</button>'+
          '<button class="btn sm gh" onclick="toggleSchedule(\''+id+'\')" title="Schedule this email to send later — goes out even if the CRM is closed">🕒 Schedule</button>'+
          '<button class="btn sm gh" onclick="copyEmailStep(\''+id+'\')" title="Copy the copy to paste manually instead">⧉ Copy</button><button class="btn sm gh" onclick="logEmailSent(\''+id+'\')" title="Mark sent without sending from here (e.g. you sent it elsewhere)">✓ Log sent</button>'+
          (e.edited?'<button class="btn sm gh" onclick="resetSeqEdit(\''+id+'\')" title="Discard your edits and go back to the template copy">↺ Reset to template</button>':'')+
@@ -6710,10 +6735,9 @@ function setSeqRepFilter(v){ seqRepFilter=v; renderSequences(); }
 // paused contact we use the step it was paused on (pausedEmail), else its live step.
 function seqCurStep(c){ const s=c.emailSeq||{}; const N=cadNFor(c)||1;
   const raw=s.paused?(+s.pausedEmail||+s.step||1):(+s.step||1); return Math.min(Math.max(raw,1),N); }
-function seqStepMeta(c){ const n=seqCurStep(c); const steps=cadDefFor(c); const target=steps[n-1]||{}; const tk=stepKind(target);
-  let ord=0; for(let i=0;i<n;i++){ if(stepKind(steps[i]||{})===tk) ord++; }
-  const noun=tk==='call'?'Call':tk==='task'?'Task':'Email', icon=tk==='call'?'📞':tk==='task'?'✅':'✉';
-  return {kind:tk,ord:ord,key:tk+':'+ord,label:icon+' '+noun+' '+ord}; }
+function seqStepMeta(c){ const n=seqCurStep(c); const o=ordInSteps(cadDefFor(c),n), tk=o.kind;
+  const icon=tk==='call'?'📞':tk==='task'?'✅':'✉';
+  return {kind:tk,ord:o.i,key:tk+':'+o.i,label:icon+' '+kindNoun(tk)+' '+o.i}; }
 function setSeqKind(k){ seqKindFilter=(seqKindFilter===k?null:k); renderSequences(); }
 // Roll up every contact's emailSeq into per-sequence buckets: active enrollees + completed +
 // a step histogram so we can show where people are stuck in each play.
@@ -6745,7 +6769,7 @@ function seqRowHtml(c){
   const s=c.emailSeq||{}; const q=seqById(s.seqId); const N=cadNFor(c); const step=Math.min(Math.max(+s.step||1,1),N);
   const done=!!s.done; const pct=Math.round((done?N:(step-1))/Math.max(N,1)*100);
   const a=acct(c.accountId); const stepDef=cadDefFor(c)[step-1]||{}; const lbl=stepDef.label||'';
-  const kk=stepKind(stepDef), noun=kk==='call'?'📞 Call':kk==='task'?'✅ Task':'✉ Email';
+  const kk=stepKind(stepDef), kIcon=kk==='call'?'📞 ':kk==='task'?'✅ ':'✉ ';
   const last=s.lastSentAt?('sent '+fmtAgo(s.lastSentAt)+(s.lastBy?(' · '+esc(s.lastBy)):'')):'not sent yet';
   const owner=seqStarter(c);
   return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
@@ -6753,7 +6777,7 @@ function seqRowHtml(c){
     '<td class="tsub">'+(a?esc(aname(a)):noAcctCell(c))+'</td>'+
     '<td>'+(owner?('<span class="tag">'+esc(owner)+'</span>'):'<span class="tsub">—</span>')+'</td>'+
     '<td>'+esc((q&&q.name)||'Cadence')+'</td>'+
-    '<td>'+(done?'<span class="tag cust">✓ complete</span>':(noun+' '+step+'/'+N+(lbl?' · '+esc(lbl):'')))+'</td>'+
+    '<td>'+(done?'<span class="tag cust">✓ complete</span>':(kIcon+stepLabel(c,step,'/')+(lbl?' · '+esc(lbl):'')))+'</td>'+
     '<td style="min-width:90px">'+bar(pct, done?'var(--won)':'var(--acc)')+'</td>'+
     '<td class="tsub">'+last+'</td></tr>';
 }
@@ -6801,9 +6825,9 @@ function renderSequences(){
   seqLib().forEach(q=>{ const m=stats[q.id]; const N=q.steps.length; const sel=seqFocus===q.id;
     const maxH=Math.max(1,...Object.values(m.hist),1);
     const histBars=Array.from({length:N},(_,i)=>{ const n=i+1, cnt=m.hist[n]||0;
-      const sd=q.steps[i]||{}, kk=stepKind(sd), noun=kk==='call'?'Call':kk==='task'?'Task':'Email';
+      const bo=ordInSteps(q.steps,n);
       const on=(seqFocus===q.id&&seqStepFocus===n);
-      return '<div title="'+noun+' '+n+': '+cnt+' waiting — click to see them" onclick="event.stopPropagation();setSeqStep(\''+q.id+'\','+n+')" style="flex:1;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px">'+
+      return '<div title="'+kindNoun(bo.kind)+' '+bo.i+' of '+bo.of+' (step '+n+' of '+N+'): '+cnt+' waiting — click to see them" onclick="event.stopPropagation();setSeqStep(\''+q.id+'\','+n+')" style="flex:1;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px">'+
         '<div style="width:100%;background:'+(on?'var(--won)':'var(--acc)')+';border-radius:2px 2px 0 0;height:'+Math.round(cnt/maxH*28)+'px;min-height:'+(cnt?3:0)+'px"></div>'+
         '<span style="font-size:9px;font-weight:'+(on?'800':'400')+';color:'+(on?'var(--ink)':'var(--mut)')+'">'+n+'</span></div>'; }).join('');
     h+='<div class="stat" style="cursor:pointer;text-align:left;padding:12px'+(sel?';outline:2px solid var(--acc);outline-offset:-2px':'')+'" onclick="setSeqFocus(\''+q.id+'\')">'+
@@ -6819,9 +6843,9 @@ function renderSequences(){
   let list=active, title='Everyone in a sequence';
   if(seqFocus==='__paused'){ list=paused; title='Paused — pick these back up'; }
   else if(seqFocus){ const q=seqById(seqFocus); title='In "'+((q&&q.name)||seqFocus)+'"'; list=active.filter(c=>c.emailSeq&&c.emailSeq.seqId===seqFocus);
-    if(seqStepFocus!=null){ const sd=(q&&q.steps&&q.steps[seqStepFocus-1])||{}, kk=stepKind(sd), noun=kk==='call'?'Call':kk==='task'?'Task':'Email';
+    if(seqStepFocus!=null){ const fo=ordInSteps((q&&q.steps)||[],seqStepFocus);
       list=list.filter(c=>{ const N=cadNFor(c); return Math.min(Math.max(+((c.emailSeq&&c.emailSeq.step))||1,1),N)===seqStepFocus; });
-      title+=' · on '+noun+' '+seqStepFocus; } }
+      title+=' · on '+kindNoun(fo.kind)+' '+fo.i; } }
   list=list.slice().sort((a,b)=>((+((b.emailSeq&&b.emailSeq.lastSentAt))||0)-(+((a.emailSeq&&a.emailSeq.lastSentAt))||0)));
   // Step-filter chips (✉ Email 1/2 · 📞 Call 1/2 …) built from whoever's in the current list, so you
   // can narrow "Everyone" or the Paused list down to a single step.
