@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug13·z174';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug13·z175';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3088,7 +3088,9 @@ function lastTouchLabel(c){ const t=lastTouchTs(c); return t?fmtAgo(t):'never'; 
 /* ---- derived intent signals (drive Hot List heat + columns) ---- */
 function logTsBy(c,rx){ if(!c||!c.log||!c.log.length) return 0; let t=0; for(const l of c.log){ if(rx.test(l.txt||'')){ const ts=+l.ts||0; if(ts>t) t=ts; } } return t; }
 function lastCallTs(c){ let t=logTsBy(c,/📞|☎/); if(!t && c.callCount && c.lastContactedTs) t=+c.lastContactedTs; return t; }
-function lastSentTs(c){ return logTsBy(c,/📧|📤/); }
+// The log is the record of record (📧 lines carry the subject), but a send that predates the
+// lastEmailAt mark only exists as a log line, and vice versa — so take the later of the two.
+function lastSentTs(c){ const s=c&&c.emailSeq; return Math.max(logTsBy(c,/📧|📤/), (s&&+s.lastEmailAt)||0); }
 // Last time WE reached out by any channel (call or email sent) — powers the "just-worked, step aside"
 // cooldown so a lead you already touched doesn't reclaim the top of the queue for a while.
 function lastOutreachTs(c){ return Math.max(lastCallTs(c)||0,lastSentTs(c)||0); }
@@ -5738,6 +5740,12 @@ function advanceStep(c,n,by,logLine){ if(!c) return; const N=cadNFor(c); const s
   if(s.done && (+s.step||1)>n) return;                                // already past this step
   logAuto(c,logLine);
   s.lastBy=by; s.lastSentAt=Date.now(); if((+s.step||1)<=n) s.step=n+1; if(s.step>N) s.done=true;
+  /* 🔴 lastSentAt IS NOT A SEND — it is "last step worked". EVERY step kind advances through here,
+     and saving a call dispo calls advanceStep, so logging a no-answer stamped the very field the UI
+     printed as "sent". Measured on the live book: of 158 "sends" in one day, 153 were call dispos
+     and only 5 were email; 235 contacts showed a send date having never been emailed once, and
+     Dante's read "sent 3h ago" off a dial. Keep lastSentAt honest and mark email separately. */
+  if(stepKind(cadDefFor(c)[n-1]||{})==='email') s.lastEmailAt=Date.now();
   const tk=tasks().find(t=>t.emailCad&&t.contactId===c.id&&(+t.cadStep||0)===n&&!t.done); if(tk){ tk.done=true; tk.doneTs=Date.now(); }  // close this step's task
   if(!s.done) ensureEmailTask(c.id,n+1);                              // …and drop the next step's task
   stampU(c); }
@@ -6770,7 +6778,11 @@ function seqRowHtml(c){
   const done=!!s.done; const pct=Math.round((done?N:(step-1))/Math.max(N,1)*100);
   const a=acct(c.accountId); const stepDef=cadDefFor(c)[step-1]||{}; const lbl=stepDef.label||'';
   const kk=stepKind(stepDef), kIcon=kk==='call'?'📞 ':kk==='task'?'✅ ':'✉ ';
-  const last=s.lastSentAt?('sent '+fmtAgo(s.lastSentAt)+(s.lastBy?(' · '+esc(s.lastBy)):'')):'not sent yet';
+  // "sent" must mean an email actually went out. If the last thing that moved this play was a dial,
+  // say so — printing a call as "sent 2d ago" is what made the column unreadable.
+  const _et=lastSentTs(c), _who=s.lastBy?(' · '+esc(s.lastBy)):'';
+  const last=_et?('sent '+fmtAgo(_et)+_who)
+            :(s.lastSentAt?('worked '+fmtAgo(s.lastSentAt)+_who):'not sent yet');
   const owner=seqStarter(c);
   return '<tr onclick="openContact(\''+c.id+'\')" style="cursor:pointer">'+
     '<td><span class="tname">'+esc(cname(c))+'</span></td>'+
