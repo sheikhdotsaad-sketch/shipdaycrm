@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug13·z175';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug14·z176';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -917,6 +917,24 @@ function mergeLogs(a,b){ a=a||[]; b=b||[]; if(!a.length) return b.slice(); if(!b
    fairness cooldown buried him. Cleaning the history re-ranks both back to the truth.
    Only records that actually shrink get stamped, so a book that's already clean is a no-op and the
    sync push stays exactly as small as the damage was. */
+/* One-time repair, safe to re-run every boot. Closes cadence tasks the play has already moved past.
+   advanceStep now closes everything at-or-before the step it advances, but 178 of 579 open cadence
+   tasks were stranded by earlier builds that only ever closed the exact step — a contact on step 8
+   still had its "Call 6/10" open, so the dash grew faster than it could be worked.
+   Only touches emailCad tasks whose own cadStep is BEHIND the contact's pointer (or whose sequence
+   is finished/paused). A hand-made task has no cadStep and is never touched, and a task sitting ON
+   or AHEAD of the pointer is real work that hasn't happened yet — both left completely alone. */
+function sweepStaleCadTasks(){
+  let closed=0; const now=Date.now();
+  tasks().forEach(t=>{
+    if(!t||t.done||!t.emailCad||!t.cadStep) return;
+    const c=contact(t.contactId); if(!c) return;
+    const s=c.emailSeq; if(!s) return;
+    const past=s.done||s.paused||(+t.cadStep||0)<Math.min(+s.step||1,cadNFor(c));
+    if(past){ t.done=true; t.doneTs=now; t.autoClosed=true; closed++; }
+  });
+  return closed;
+}
 function dedupeLogs(){
   let recs=0, removed=0;
   [store.accounts,store.contacts,store.deals].forEach(map=>{
@@ -5746,7 +5764,13 @@ function advanceStep(c,n,by,logLine){ if(!c) return; const N=cadNFor(c); const s
      and only 5 were email; 235 contacts showed a send date having never been emailed once, and
      Dante's read "sent 3h ago" off a dial. Keep lastSentAt honest and mark email separately. */
   if(stepKind(cadDefFor(c)[n-1]||{})==='email') s.lastEmailAt=Date.now();
-  const tk=tasks().find(t=>t.emailCad&&t.contactId===c.id&&(+t.cadStep||0)===n&&!t.done); if(tk){ tk.done=true; tk.doneTs=Date.now(); }  // close this step's task
+  /* Close EVERY open cadence task at or before this step — not just step n's. The pointer can jump
+     more than one step: sendNextEmail() walks forward over call steps to find the next email,
+     advanceCallCadence() and setSeqStep() move it too. Each jump used to strand the skipped step's
+     task open forever, so the dash piled up work that the play had already passed. Measured on the
+     live book: 178 of 579 open cadence tasks were for steps already behind the pointer —
+     "just keeps piling on tasks even if theyre done". */
+  tasks().forEach(t=>{ if(t.emailCad&&t.contactId===c.id&&!t.done&&(+t.cadStep||0)<=n){ t.done=true; t.doneTs=Date.now(); } });
   if(!s.done) ensureEmailTask(c.id,n+1);                              // …and drop the next step's task
   stampU(c); }
 function markEmailStepSent(c,n,by){ if(!c) return; const N=cadNFor(c); const e=emailStep(c,n);
@@ -9524,6 +9548,7 @@ function boot(){
   try{ if(dedupeLogs().recs) save(); }catch(e){}
   try{ hydrateMine(); }catch(e){}   // show YOUR inbox and YOUR calendar, not whoever synced last
   try{ dedupeTasks(); }catch(e){}
+  try{ if(sweepStaleCadTasks()) save(); }catch(e){}   // drop cadence tasks the play already passed
   try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
   try{ clearAutoInterestDeals(); }catch(e){}   // pipeline entries nobody actually opened
   try{ linkOrphanContacts(); }catch(e){}       // contacts the importer left with no restaurant attached
