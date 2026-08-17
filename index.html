@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug14·z176';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug17·z177';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4522,10 +4522,41 @@ function leadOwner(c){
   let o=''; try{ o=seqOwner(c)||''; }catch(e){}
   return o || c.assignee || lastLogBy(c) || '';
 }
+/* DELIBERATE ownership only — a pin, a sequence, an assignment. Deliberately EXCLUDES lastLogBy:
+   "the last person who typed something here" is incidental, not a claim, and treating it as one is
+   what let a single old log line hold a lead in a lane nobody was working. */
+function leadOwnerStrong(c){
+  if(!c) return '';
+  const hf=c.hotFor||{}; const pins=Object.keys(hf); if(pins.length) return pins[0];
+  let o=''; try{ o=seqOwner(c)||''; }catch(e){}
+  return o || c.assignee || '';
+}
+/* AGED-OUT LANES — a lane is an allocation, not a lock-box. Saad: "yeah actually age them out."
+   Splitting the unowned pool stops two reps dialling the same restaurant, and that is right while a
+   lead is live work. But a lead NOBODY has dialled in a month is not live work in anyone's lane —
+   it is a number parked in a queue the assigned rep is never going to reach. Measured on the shared
+   Ohio book: of the 459 never-dialled Toast/Square contacts (the best-fit segment in the whole
+   territory) 217 sat in the other lane untouched while both reps were busy elsewhere. That is the
+   lane preventing a collision that was never going to happen, at the cost of half the best inventory.
+   ⚠️ I nearly "fixed" this by dropping the split for DORMANT crew — but Embert logs 226 activities a
+   week in this book, so he is not dormant and that change would have caused real double-dialling.
+   Ageing is the honest lever: it keys on the LEAD going unworked, never on the rep looking idle.
+   Real-time collision stays covered by the claim rows (30-min TTL) and dupDial() — exactly the
+   protection a solo book already runs on. */
+const LANE_FREE_DAYS=30;
+function laneIdleMs(c){
+  const lg=(c&&c.log)||[]; let first=0;
+  for(let i=0;i<lg.length;i++){ const t=+(lg[i]&&lg[i].ts)||0; if(t&&(!first||t<first)) first=t; }
+  return first?(Date.now()-first):Infinity;   // no log at all ⇒ sat here since import, the oldest there is
+}
+function laneAged(c){ return !dialTouched(c)&&laneIdleMs(c)>LANE_FREE_DAYS*_DAY; }
 function laneMine(c){
   const crew=bookCrew(); if(crew.length<2) return true;
   const me=repCanon(myRep()); const i=crew.indexOf(me); if(i<0) return true;   // unknown rep ⇒ don't hide the book
   if(hotForMe(c)) return true;                                                 // you pinned it: always yours
+  const strong=repCanon(leadOwnerStrong(c));
+  if(strong) return strong===me;                                               // a deliberate claim always wins
+  if(laneAged(c)) return true;                                                 // 30d, no dial by anyone ⇒ shared pool
   const own=repCanon(leadOwner(c));
   if(own) return own===me;                                                     // evidence beats the hash
   return (_idHash(c.id)%crew.length)===i;
