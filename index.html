@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug17·z177';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug17·z178';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -6933,7 +6933,12 @@ function renderSequences(){
   let body;
   if(!list.length) body='<div class="qempty">No contacts on this step'+(seqKindFilter?' — try another chip above':'')+'.</div>';
   else if(seqFocus==='__paused') body='<table><thead><tr><th>Contact</th><th>Account</th><th>Was in</th><th>Last on</th><th>Owner</th><th></th></tr></thead><tbody>'+list.slice().sort((a,b)=>esc(cname(a)).localeCompare(cname(b))).map(pausedRowHtml).join('')+'</tbody></table>';
-  else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Owner</th><th>Sequence</th><th>Step</th><th>Progress</th><th>Last email</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
+  /* "Last activity", not "Last email". z175 made the CELL honest — it prints "sent 5d ago" only when a
+     real email went out, "worked 5d ago" when the thing that last moved the play was a call dispo, and
+     "not sent yet" when neither — but the HEADER was left saying Last email, so a row reading
+     "worked 6d ago" sat under a column claiming it was an email. Saad, pointing at exactly that:
+     "this thing still says last email for what". Fixing the value and leaving the label is half a fix. */
+  else body='<table><thead><tr><th>Contact</th><th>Account</th><th>Owner</th><th>Sequence</th><th>Step</th><th>Progress</th><th title="Last email sent, or the last step worked if the most recent move was a call">Last activity</th></tr></thead><tbody>'+list.map(seqRowHtml).join('')+'</tbody></table>';
   h+='<div class="panel"><div class="ph"><h3>👥 '+esc(title)+esc(kindLbl)+esc(repLbl)+'</h3><span class="sub">'+list.length+' contact'+(list.length===1?'':'s')+clr+'</span></div>'+repBar+chipBar+body+'</div>';
   el('view-sequences').innerHTML=h;
 }
