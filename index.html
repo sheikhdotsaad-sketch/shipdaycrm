@@ -626,7 +626,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z186';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z187';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3465,9 +3465,18 @@ function demoBooked(c){ if(!c) return false;
    past Booked Demo (10 Closed Deal, 13 No Show, 6 Follow Up), so the list was quietly offering to
    start email cadences on ten signed customers.
    🔑 Closed Lost is the one stage that stays re-prospectable — that is a no for now, not a no
-   forever, and a restaurant that passed in March is a fair conversation in September. */
+   forever, and a restaurant that passed in March is a fair conversation in September.
+   🔑 So is No Show — Saad, immediately: "ono no shows in dial list". He is right and z186 was wrong
+   to sweep them up with the rest. A no-show is not a deal in flight, it is a deal that FELL, and it
+   is the most winnable call on the page: they already agreed to the meeting once. 20 contacts sit on
+   a No Show and nothing else, 15 of them with a real phone, and z186 had just made all 20 invisible.
+   They come back as their own bucket (k:'noshow') — a dial, never a cold cadence. Any OTHER live
+   stage on the same account still excludes, so a rebooked demo wins over its own no-show. */
 function liveDealFor(c){ if(!c) return null;
-  return deals().find(d=>d.stage!=='Closed Lost'&&
+  return deals().find(d=>d.stage!=='Closed Lost'&&d.stage!=='No Show'&&
+    (d.contactId===c.id||(c.accountId&&d.accountId===c.accountId)))||null; }
+function noShowFor(c){ if(!c||liveDealFor(c)) return null;
+  return deals().find(d=>d.stage==='No Show'&&
     (d.contactId===c.id||(c.accountId&&d.accountId===c.accountId)))||null; }
 /* ---- account-level rollups + plain-English "AI read" for the drawers ---- */
 function acctHeat(a){ const cs=contactsOf(a.id).filter(c=>!c.internal); return cs.length?Math.max(...cs.map(heat)):0; }
@@ -7316,7 +7325,9 @@ function pgOpened(c){ return lastOpenTs(c)>0&&openMine(c); }
    has gone. A demo held in February is not a close deal, and the decay is what says so. */
 const PG_STAGE=[
   {k:'demo',   s:1000, t:'demo held',       m:c=>/demo held/i.test(String(c.dispo||c.status||''))},
-  {k:'noshow', s:880,  t:'booked then ghosted', m:c=>/no show|reschedul/i.test(String(c.dispo||c.status||''))},
+  /* The deal RECORD is the reliable witness here — a dispo string only says "no show" if he happened
+     to type it, and 13 of his no-shows live only as a deal stage. Read both. */
+  {k:'noshow', s:880,  t:'booked then ghosted', m:c=>!!noShowFor(c)||/no show|reschedul/i.test(String(c.dispo||c.status||''))},
   {k:'reply',  s:760,  t:'wrote back',      m:c=>!!(c.replied||+c.lastReplyTs)},
   {k:'conn',   s:560,  t:'you talked',      m:c=>!!(c.dispo&&!_NOCONN_D.test(String(c.dispo))&&!/not interested|dnc|wrong/i.test(String(c.dispo)))},
   {k:'reading',s:380,  t:'reading your mail', m:c=>openCount(c)>=2},
@@ -7388,6 +7399,9 @@ function dataGaps(c){
    bucket turns into 2,000 rows of homework and gets ignored like everything else that did. */
 function worthQualifying(c){
   const a=acct(c.accountId)||{}, r=[];
+  // A no-show with no number on file is the single best reason to go find one — they agreed to a
+  // meeting and there is currently no way to reach them. Five of his twenty are exactly this.
+  if(noShowFor(c)) r.push('booked a demo then no-showed');
   if(lastOpenTs(c)&&openMine(c)) r.push('opened your email '+fmtAgo(lastOpenTs(c)));
   let locs=0; try{ locs=sameBrand(a).length; }catch(e){}
   if(locs>=1) r.push((locs+1)+' locations');
@@ -7409,6 +7423,7 @@ function pgSkipCadence(cid){ const c=contact(cid); if(!c) return; const prev=+c.
   renderHotList(); }
 const PG_KINDS={
   reply:   {icon:'↩️', verb:'Answer it',          panel:'↩️ They wrote back',      hint:'a human replied — nothing on this page is closer to money'},
+  noshow:  {icon:'🔁', verb:'Rebook it',           panel:'🔁 Ghosted your demo',    hint:'they already picked a time once — this is the shortest way back to a meeting'},
   owed:    {icon:'📞', verb:'Call — owed',        panel:'📞 Calls you owe',        hint:'the play moved on without these; the dial is still worth making'},
   research:{icon:'🔎', verb:'Qualify it',          panel:'🔎 Good account, missing data', hint:'worth hitting, but you can\u2019t reach them yet — each row says what to go get'},
   call:    {icon:'☎️', verb:'Dial',                panel:'☎️ Dial',                 hint:'every one of these earned it — an open or a real fit, never a due date'},
@@ -7428,6 +7443,14 @@ function nextAction(c){
   const rep=+c.lastReplyTs||0;
   if((c.replied||rep)&&(!rep||now-rep<45*864e5))
     return {k:'reply',rank:2000+heat(c),why:'Replied'+(rep?' '+fmtAgo(rep):'')+' — this one is a conversation, not a step'};
+  /* ── THEY ALREADY SAID YES ONCE ──
+     Saad: "ono no shows in dial list". A no-show is the shortest path back to a demo on the calendar
+     — the pitch already landed, they picked a time, the day just got away from them. It outranks
+     every earned dial and sits under only a reply. It is deliberately NOT an enrolment: dropping
+     someone who ghosted your meeting into a cold email play is the wrong message at the wrong time. */
+  const ns=noShowFor(c);
+  if(ns&&ph) return {k:'noshow',rank:1600+heat(c),
+    why:'No-showed the demo'+(+ns.updatedAt?' '+fmtAgo(+ns.updatedAt):'')+' — they picked the time themselves, get it rebooked'};
   // A dial the cadence asked for and never got. It comes first because it is the only bucket where
   // the CRM already decided this call was worth making — it just stopped blocking the emails.
   if(c.owedCall&&ph) return {k:'owed',rank:heat(c)+200,
@@ -7471,6 +7494,9 @@ function nextAction(c){
     // He said not a fit. callIntent already had its say further up, so anyone who had earned a dial
     // never reached this line — which makes the honest answer nothing, and nothing is a result.
     if(+c.noCad>now) return null;
+    // Unreachable no-show (no phone above meant no dial). Still not a cold cadence — the answer to
+    // a missed meeting is a conversation, and the research bucket already asked for their number.
+    if(ns) return null;
     const end=cadEndedTs(c);
     if(end&&now-end<CAD_COOLDOWN){
       const nm=((seqById((c.emailSeq||{}).seqId)||{}).name)||'the last play';
@@ -7523,7 +7549,7 @@ function pipelineQueue(){
   pool.forEach(c=>{ const act=nextAction(c); if(!act) return;
     // A number that was just worked rests, exactly as it does in the call queue — otherwise the
     // "dynamic" list would hand him this morning's voicemails again this afternoon.
-    if((act.k==='call'||act.k==='owed')&&(dialHold(c)>Date.now()||(+c.nextCallAt>Date.now()))) return;
+    if((act.k==='call'||act.k==='owed'||act.k==='noshow')&&(dialHold(c)>Date.now()||(+c.nextCallAt>Date.now()))) return;
     // Proximity leads the sort, the bucket's own rank breaks ties. "whats gonna measure the closest
     // deal" — this is the answer, and it's why two people in the same bucket aren't in book order.
     const px=dealProx(c); c._pgProx=px;
@@ -7571,6 +7597,7 @@ function pgRow(c,kind){
       // Saad: "there should be an option to not put in a cadence". A suggestion you can't decline is
       // an instruction, and an instruction you disagree with is how a list stops being read.
       +' <button class="btn sm gh" title="Don\u2019t suggest a cadence for this one" onclick="event.stopPropagation();pgSkipCadence(\''+c.id+'\')">Not a fit</button>'
+    :kind==='noshow'?'<button class="btn sm pri" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')">🔁 '+esc(telNum(c))+'</button>'
     :(kind==='call'||kind==='owed')?'<button class="btn sm pri" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')">📞 '+esc(telNum(c))+'</button>'
     :kind==='email'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">📧 Send step</button>'
     :'<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ▸</button>';
@@ -7615,7 +7642,7 @@ function pgNowCard(by){
    Hunting a missing direct line is desk work — it belongs with the email block, not between dials. */
 const PG_MODES={all:{t:'⚡ Everything',ks:null},
   email:{t:'📧 Email only',ks:['reply','email','enroll','research','cooling','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
-  call:{t:'☎️ Call only',ks:['reply','owed','call'],sub:'phone block — every dial here was earned by an open or a fit, not by a due date'}};
+  call:{t:'☎️ Call only',ks:['reply','noshow','owed','call'],sub:'phone block — every dial here was earned by an open or a fit, not by a due date'}};
 function pgMode(){ const m=UI.pgMode||'all'; return PG_MODES[m]?m:'all'; }
 function setPgMode(m){ UI.pgMode=m; try{ localStorage.setItem('pgMode',m); }catch(e){} renderHotList(); }
 try{ const _m=localStorage.getItem('pgMode'); if(_m&&PG_MODES[_m]) UI.pgMode=_m; }catch(e){}
@@ -7632,8 +7659,8 @@ function pgPanels(by,budget){
   const allow=PG_MODES[pgMode()].ks;
   // Replies first, then dials that were EARNED. Cooling sits near the bottom as a visible "leave
   // these alone" — hiding them would just look like the list forgot people it used to show.
-  const order=['reply','call','owed','research','email','enroll','cooling','nurture'].filter(k=>!allow||allow.includes(k));
-  const caps={reply:10,owed:8,research:10,enroll:10,email:25,call:budget,cooling:6,nurture:5};
+  const order=['reply','noshow','call','owed','research','email','enroll','cooling','nurture'].filter(k=>!allow||allow.includes(k));
+  const caps={reply:10,noshow:10,owed:8,research:10,enroll:10,email:25,call:budget,cooling:6,nurture:5};
   // Call-only means CALL ONLY. Saad: "just to hammer out calls" — so the dial bucket stops competing
   // with buckets that aren't on screen and gets the whole day's budget.
   if(pgMode()==='call'){ caps.call=Math.max(budget,25); caps.owed=25; }
