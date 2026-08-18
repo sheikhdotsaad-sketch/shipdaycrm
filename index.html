@@ -626,7 +626,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z182';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z183';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -6013,8 +6013,14 @@ function seqLib(){ const ov=myLib();
   if(!Array.isArray(ov)||!ov.length) out=SEQ_LIB.slice();
   else { out=SEQ_LIB.slice(); const idx={}; out.forEach((q,i)=>{ idx[q.id]=i; });
     ov.forEach(q=>{ if(!q||!q.id) return; if(idx[q.id]!=null) out[idx[q.id]]=q; else { idx[q.id]=out.length; out.push(q); } }); }
-  return out.map(q=>q.noAutoCall?Object.assign({},q,{steps:(q.steps||[]).slice()})   // email-only plays stay email-only
-    :Object.assign({},q,{steps:withCallSteps(q.steps)})); }                          // every other play gets calls interleaved
+  /* z183 · A SEQUENCE IS AN EMAIL SEQUENCE. Saad: "email sequences can just be that ... and if they
+     have a good hit rate or theyre a good icp than the intent tells you to call ... and thats where
+     the call list is nurtured." So calls stop being STEPS. A step that needs a human to pick up the
+     phone is a step that stops the whole play when he's in a demo — measured: 375 of his 439 live
+     plays were parked on a call step, 302 of them past three days, p90 21 days, and their next email
+     was never going to send. The dial didn't disappear; it moved to where it belongs, earned by what
+     the emails reveal (callIntent). Legacy enrolments keep their interleaved def — see cadDefFor. */
+  return out.map(q=>Object.assign({},q,{steps:(q.steps||[]).slice()})); }
 function seqById(id){ if(id==='custom'){ const cu=myCad(); return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return seqLib().find(q=>q.id===id)||null; }
 // Suggest the play that matches the account's stack; rep can always override in the picker.
 /* z182 · CUISINE ROUTES FIRST. The vertical plays open with proof from the prospect's own category
@@ -6043,7 +6049,12 @@ function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'')
 // fully replaces the built-in templates below.
 function cadDef(){ const c=myCad(); return (Array.isArray(c)&&c.length)?c:EMAIL_CADENCE; }
 // Per-contact step set: the sequence the contact was enrolled in (SEQ_LIB), else custom paste, else default.
-function cadDefFor(c){ const s=c&&c.emailSeq; if(s&&s.seqId){ const q=seqById(s.seqId); if(q&&q.steps&&q.steps.length) return q.steps; } return cadDef(); }
+/* `s.calls` is a LEGACY MARKER, not a setting. Anyone enrolled before z183 has a step pointer that
+   counts an interleaved def — step 8 of 10 means "Call 4" only if the calls are still in the list.
+   Drop the calls out from under them and every one of those pointers silently lands on the wrong
+   email. So the flag is stamped once at boot on existing enrolments and never set again; new
+   enrolments have no flag and run pure email. */
+function cadDefFor(c){ const s=c&&c.emailSeq; if(s&&s.seqId){ const q=seqById(s.seqId); if(q&&q.steps&&q.steps.length) return s.calls?withCallSteps(q.steps):q.steps.filter(x=>stepKind(x)!=='call'); } return cadDef(); }
 function cadNFor(c){ return cadDefFor(c).length; }
 function isCustomCad(){ const c=myCad(); return !!(Array.isArray(c)&&c.length); }
 function cadN(){ return cadDef().length; }
@@ -7285,11 +7296,76 @@ function pgOpened(c){ return lastOpenTs(c)>0&&openMine(c); }
 /* One contact in, one action out. Ordered by what makes money soonest, and every branch names the
    evidence in `why` — a list that tells you to do something without saying why gets ignored, which
    is how the call script died. `rank` sorts WITHIN a bucket; buckets never compete on it. */
+/* ── WHAT MEASURES THE CLOSEST DEAL ──
+   Saad: "whats gonna measure the closest deal". heat() answers a different question — how INTERESTED
+   is this person — and I already proved on his own 645 dispositioned dials that interest does not
+   predict a connect (every warmth band landed 54–64%). Proximity is how far through the buying
+   motion they actually are, times how big the thing is if it lands, minus how stale that position
+   has gone. A demo held in February is not a close deal, and the decay is what says so. */
+const PG_STAGE=[
+  {k:'demo',   s:1000, t:'demo held',       m:c=>/demo held/i.test(String(c.dispo||c.status||''))},
+  {k:'noshow', s:880,  t:'booked then ghosted', m:c=>/no show|reschedul/i.test(String(c.dispo||c.status||''))},
+  {k:'reply',  s:760,  t:'wrote back',      m:c=>!!(c.replied||+c.lastReplyTs)},
+  {k:'conn',   s:560,  t:'you talked',      m:c=>!!(c.dispo&&!_NOCONN_D.test(String(c.dispo))&&!/not interested|dnc|wrong/i.test(String(c.dispo)))},
+  {k:'reading',s:380,  t:'reading your mail', m:c=>openCount(c)>=2},
+  {k:'opened', s:230,  t:'opened once',     m:c=>lastOpenTs(c)>0},
+  {k:'cold',   s:0,    t:'cold',            m:()=>true}
+];
+function dealStage(c){ for(const s of PG_STAGE){ try{ if(s.m(c)) return s; }catch(e){} } return PG_STAGE[PG_STAGE.length-1]; }
+function dealProx(c){
+  if(!c) return {n:0,stage:PG_STAGE[PG_STAGE.length-1],locs:0};
+  const a=acct(c.accountId)||{}, st=dealStage(c); let n=st.s;
+  let locs=0; try{ locs=sameBrand(a).length; }catch(e){}
+  if(locs>=2) n+=130; else if(locs===1) n+=65;          // more doors on one contract
+  if(isOwner(c)) n+=90;                                  // the person who can actually sign
+  if(posOf(a)) n+=40;                                    // known stack = a known integration path
+  const last=Math.max(lastOpenTs(c),+c.lastReplyTs||0,+c.dispoTs||0,+c.lastDialAt||0);
+  if(last) n-=Math.min(320,((Date.now()-last)/864e5)*4); // a stale stage is not a close one
+  if(/not interested|dnc/i.test(String(c.dispo||''))) n-=600;
+  return {n:Math.round(n),stage:st,locs:locs};
+}
+/* ── THE CALL LIST IS NURTURED BY THE EMAILS ──
+   His design, in his words: "if they have a good hit rate or theyre a good icp than the intent tells
+   you to call / and thats where the call list is nurtured." So a dial is EARNED, not scheduled. Two
+   independent ways to earn it — they keep opening (hit rate), or they're the shape of customer that
+   closes (ICP). Returns null when neither is true, and that null is the point: it is what stops the
+   list being 2,000 names deep and therefore ignored. */
+function callIntent(c){
+  if(!c||!pgHasPhone(c)) return null;
+  const now=Date.now(), open=lastOpenTs(c), opens=openCount(c), mine=pgOpened(c);
+  const a=acct(c.accountId)||{};
+  const fresh=open&&(now-open<10*864e5);
+  if(mine&&opens>=2&&fresh) return {n:520+opens*12,why:'Opened '+opens+'× · last '+fmtAgo(open)+' — they keep reading, ring them'};
+  if(mine&&fresh)           return {n:380,why:'Opened '+fmtAgo(open)+' — still warm'};
+  // ICP: the shape that closes. Deliberately weaker than a real open, and it only earns a dial when
+  // there is nothing warmer, which is exactly what "nurtured" has to mean or the list is just noise.
+  let icp=0,bits=[];
+  const pos=posOf(a); if(pos){ icp+=2; bits.push(pos); }
+  if(isOwner(c)){ icp+=2; bits.push('owner'); }
+  let locs=0; try{ locs=sameBrand(a).length; }catch(e){}
+  if(locs>=1){ icp+=2; bits.push((locs+1)+' locations'); }
+  if(open){ icp+=1; bits.push('opened '+fmtAgo(open)); }
+  if(icp>=4) return {n:200+icp*20,why:'Strong fit — '+bits.join(' · ')};
+  return null;
+}
+// A play that has ended. seqActive() goes false the instant it does, which is exactly why the router
+// used to hand completed cadences straight back as "start a cadence" the next morning.
+const CAD_COOLDOWN=30*864e5;
+function cadEndedTs(c){ const s=(c&&c.emailSeq)||null; if(!s||(!s.done&&!s.paused)) return 0;
+  return Math.max(+s.lastEmailAt||0,+s.lastSentAt||0,+s.startedAt||0); }
+/* Saad: "there should be an option to not put in a cadence". Six months, not forever — a permanent
+   no already has a name in this CRM (DNC / drop from queue) and shouldn't be spelled two ways. */
+function pgSkipCadence(cid){ const c=contact(cid); if(!c) return; const prev=+c.noCad||0;
+  c.noCad=Date.now()+180*864e5; logAuto(c,'🚫 Not for a cadence — skipped from the pipeline list'); stampU(c); save();
+  toast('Won\u2019t suggest a cadence for '+cname(c),function(){ if(prev)c.noCad=prev; else delete c.noCad; stampU(c); save(); renderHotList(); });
+  renderHotList(); }
 const PG_KINDS={
+  reply:   {icon:'↩️', verb:'Answer it',          panel:'↩️ They wrote back',      hint:'a human replied — nothing on this page is closer to money'},
   owed:    {icon:'📞', verb:'Call — owed',        panel:'📞 Calls you owe',        hint:'the play moved on without these; the dial is still worth making'},
   research:{icon:'🔎', verb:'Find the number',     panel:'🔎 Find a direct line',   hint:'they opened your email and there is no way to ring them'},
   call:    {icon:'☎️', verb:'Dial',                panel:'☎️ Dial',                 hint:'reachable and due'},
-  enroll:  {icon:'➕', verb:'Start a cadence',      panel:'➕ Put into a cadence',    hint:'phone and email on file, no play running'},
+  enroll:  {icon:'➕', verb:'Start a cadence',      panel:'➕ Put into a cadence',    hint:'phone and email on file, and nothing has been sent to them lately'},
+  cooling: {icon:'🧊', verb:'Leave it',             panel:'🧊 Just came off a play', hint:'do not re-enrol these — the last cadence is still sitting in their inbox'},
   email:   {icon:'📧', verb:'Send the step',        panel:'📧 Cadence emails due',   hint:'runs whether or not you get to the phone'},
   nurture: {icon:'✉️', verb:'Keep emailing',        panel:'✉️ Email-only',           hint:'no phone and no open yet — not worth research time'}
 };
@@ -7298,6 +7374,12 @@ function nextAction(c){
   const a=acct(c.accountId)||{};
   const ph=pgHasPhone(c), em=pgHasEmail(c), op=pgOpened(c), seq=seqActive(c);
   const now=Date.now(), openTs=lastOpenTs(c), fresh=openTs&&(now-openTs<7*864e5);
+  // Somebody answered you. Nothing else on this page is closer to money, and nothing is more
+  // embarrassing to follow with an automated step — Zach Donabedian's second reply was
+  // "Should I leave this alone?" while the list queued him for another cadence.
+  const rep=+c.lastReplyTs||0;
+  if((c.replied||rep)&&(!rep||now-rep<45*864e5))
+    return {k:'reply',rank:2000+heat(c),why:'Replied'+(rep?' '+fmtAgo(rep):'')+' — this one is a conversation, not a step'};
   // A dial the cadence asked for and never got. It comes first because it is the only bucket where
   // the CRM already decided this call was worth making — it just stopped blocking the emails.
   if(c.owedCall&&ph) return {k:'owed',rank:heat(c)+200,
@@ -7305,16 +7387,43 @@ function nextAction(c){
   // Opened, unreachable. The whole reason this list exists.
   if(op&&!ph) return {k:'research',rank:(fresh?900:400)+heat(c),
     why:'Opened '+fmtAgo(openTs)+(a.website?' · try '+esc(String(a.website).replace(/^https?:\/\/(www\.)?/,'').split('/')[0]):'')+' — no phone on file'};
+  /* ── A DIAL IS EARNED, NEVER SCHEDULED ──
+     Saad, calling his own list: "im calling people in sequences right now and its all just
+     gatekeepers because theyve been in cadence, theyre next due / but theres no reason to call."
+     That is the whole indictment of a step-driven call queue: "step 6 came up" is a fact about the
+     calendar, not about the prospect, and a gatekeeper is the correct answer to it. callIntent asks
+     the only question worth dialling on — has this person shown me something? — and returns null
+     when they haven't. "in terms of priority - email opens show the most intent / multiple opens."  */
+  const ci=callIntent(c);
+  if(ci) return {k:'call',rank:ci.n+heat(c)*0.2,why:ci.why};
+  // The play keeps running underneath all of it. It never waits on him picking up a phone.
   if(seq){
     const def=cadDefFor(c), n=Math.min(Math.max(+c.emailSeq.step||1,1),def.length);
-    const k=stepKind(def[n-1]);
-    if(k==='call'&&ph) return {k:'call',rank:heat(c)+100,why:stepLabel(c,n,'/')+' is the step that\u2019s due'};
-    if(k==='email') return {k:'email',rank:heat(c)+50,why:stepLabel(c,n,'/')+' is queued'+(fresh?' · opened '+fmtAgo(openTs):'')};
+    if(stepKind(def[n-1])==='email') return {k:'email',rank:heat(c)+50,
+      why:stepLabel(c,n,'/')+' is queued'+(fresh?' · opened '+fmtAgo(openTs):'')};
   }
-  if(ph&&em) return {k:'enroll',rank:heat(c)+(op?150:0),
-    why:'Phone and email, nothing running'+(op?' · already opened '+fmtAgo(openTs):'')};
-  if(ph) return {k:'call',rank:heat(c),
-    why:(+c.lastDialAt?'Last dialled '+fmtAgo(+c.lastDialAt):'Never dialled')+' — no email address to warm it up'};
+  /* ── WHY THIS IS NOT AN ENROLMENT ──
+     Saad: "zach donabedian, they just were in a cadence / why tf would i put them in another
+     cadence". Zach had finished all ten steps AND written back twice — the second reply literally
+     read "Should I leave this alone?" — and the list was offering to start him on another play.
+     Measured on the live book: 118 of 443 enrol candidates had just finished or paused one, 26 of
+     them inside a week. seqActive() goes false the moment a play ends, so a completed cadence came
+     back round as a fresh lead the next morning. Three gates now: he said no, they replied (handled
+     above), or the last play is still warm in their inbox. */
+  if(ph&&em){
+    // He said not a fit. callIntent already had its say further up, so anyone who had earned a dial
+    // never reached this line — which makes the honest answer nothing, and nothing is a result.
+    if(+c.noCad>now) return null;
+    const end=cadEndedTs(c);
+    if(end&&now-end<CAD_COOLDOWN){
+      const nm=((seqById((c.emailSeq||{}).seqId)||{}).name)||'the last play';
+      return {k:'cooling',rank:800-((now-end)/864e5)*10,
+        why:'Finished '+esc(nm)+' '+fmtAgo(end)+' — no reply. Another cadence now just burns them.'};
+    }
+    return {k:'enroll',rank:heat(c)+(op?150:0),
+      why:end?'Last play ended '+fmtAgo(end)+' — cooled off, fair to restart'
+             :'Phone and email, never enrolled'+(op?' · opened '+fmtAgo(openTs):'')};
+  }
   if(em) return {k:'nurture',rank:heat(c)-100,why:'Email only, no open yet'};
   return null;
 }
@@ -7358,7 +7467,10 @@ function pipelineQueue(){
     // A number that was just worked rests, exactly as it does in the call queue — otherwise the
     // "dynamic" list would hand him this morning's voicemails again this afternoon.
     if((act.k==='call'||act.k==='owed')&&(dialHold(c)>Date.now()||(+c.nextCallAt>Date.now()))) return;
-    c._pgWhy=act.why; c._pgRank=act.rank; by[act.k].push(c); });
+    // Proximity leads the sort, the bucket's own rank breaks ties. "whats gonna measure the closest
+    // deal" — this is the answer, and it's why two people in the same bucket aren't in book order.
+    const px=dealProx(c); c._pgProx=px;
+    c._pgWhy=act.why; c._pgRank=Math.round(px.n+act.rank*0.4); by[act.k].push(c); });
   Object.keys(by).forEach(k=>by[k].sort((x,y)=>y._pgRank-x._pgRank));
   return by;
 }
@@ -7387,25 +7499,56 @@ function pgCalBar(){
 }
 // One row of the plan. Deliberately NOT the dataTable: these rows exist to be acted on, so the
 // action is the row, and the reason is printed next to it in the contact's own evidence.
+function pgStageChip(c){
+  const p=c._pgProx||dealProx(c); if(!p||!p.stage||p.stage.k==='cold') return '';
+  const hot=p.n>=600?'var(--sig)':'var(--mut)';
+  return ' <span style="font-size:11px;color:'+hot+';border:1px solid '+hot+';border-radius:999px;padding:0 6px;white-space:nowrap">'+esc(p.stage.t)+
+    (p.locs>=1?' · '+(p.locs+1)+' loc':'')+'</span>';
+}
 function pgRow(c,kind){
-  const a=acct(c.accountId)||{}, K=PG_KINDS[kind];
-  const cta=kind==='research'?'<button class="btn sm pri" onclick="event.stopPropagation();promptDirectLine(\''+c.id+'\')">＋ Add number</button>'
+  const a=acct(c.accountId)||{};
+  const cta=kind==='reply'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">↩️ Open the thread</button>'
+    :kind==='research'?'<button class="btn sm pri" onclick="event.stopPropagation();promptDirectLine(\''+c.id+'\')">＋ Add number</button>'
+    :kind==='cooling'?'<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ▸</button>'
     :kind==='enroll'?'<button class="btn sm pri" onclick="event.stopPropagation();startEmailCadence(\''+c.id+'\')">➕ '+esc((seqById(suggestSeq(c))||{}).name||'Start play')+'</button>'
+      // Saad: "there should be an option to not put in a cadence". A suggestion you can't decline is
+      // an instruction, and an instruction you disagree with is how a list stops being read.
+      +' <button class="btn sm gh" title="Don\u2019t suggest a cadence for this one" onclick="event.stopPropagation();pgSkipCadence(\''+c.id+'\')">Not a fit</button>'
     :(kind==='call'||kind==='owed')?'<button class="btn sm pri" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')">📞 '+esc(telNum(c))+'</button>'
     :kind==='email'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">📧 Send step</button>'
     :'<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ▸</button>';
   const site=(kind==='research'&&a.website)?' <a href="'+esc(/^https?:/.test(a.website)?a.website:'https://'+a.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--sig)">site ↗</a>':'';
-  return '<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')"><td class="tname">'+esc(cname(c))+
+  return '<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')"><td class="tname">'+esc(cname(c))+pgStageChip(c)+
     '<div class="tsub">'+esc(a.name||'')+site+'</div></td>'+
     '<td style="font-size:12px;color:var(--mut)">'+(c._pgWhy||'')+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+cta+'</td></tr>';
+}
+/* ── DO THIS RIGHT NOW ──
+   Saad: "i just need this to look more dynamic / like what to DO RIGHT NOW". Six panels is a report.
+   One name with one button is an instruction. This is the single highest-proximity action on the
+   page, pulled out above everything so the answer to "what now" is readable without a decision. */
+function pgNowCard(by){
+  const allow=PG_MODES[pgMode()].ks;
+  let best=null;
+  Object.keys(by).forEach(k=>{ if(k==='cooling') return; if(allow&&!allow.includes(k)) return;
+    (by[k]||[]).forEach(c=>{ if(!best||c._pgRank>best.c._pgRank) best={c:c,k:k}; }); });
+  if(!best) return '';
+  const c=best.c, a=acct(c.accountId)||{}, K=PG_KINDS[best.k];
+  return '<div class="panel" style="border-color:var(--sig);background:rgba(90,160,255,.06)">'+
+    '<div style="padding:12px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
+    '<div style="flex:1;min-width:240px">'+
+      '<div style="font-size:11px;letter-spacing:.08em;color:var(--sig)">DO THIS NOW · '+esc(K.verb.toUpperCase())+'</div>'+
+      '<div style="font-size:17px;font-weight:600;margin:2px 0">'+esc(cname(c))+pgStageChip(c)+'</div>'+
+      '<div style="font-size:12px;color:var(--mut)">'+esc(a.name||'')+' — '+(c._pgWhy||'')+'</div>'+
+    '</div>'+pgRow.call(null,c,best.k).replace(/^[\s\S]*?<td style="text-align:right[^>]*>/,'').replace(/<\/td><\/tr>$/,'')+
+    '</div></div>';
 }
 /* ── MODES ── Saad: "what if we had an email only mode / or a call only mode".
    The split is not by tool, it's by POSTURE: either you're on the phone or you're at the desk.
    Hunting a missing direct line is desk work — it belongs with the email block, not between dials. */
 const PG_MODES={all:{t:'⚡ Everything',ks:null},
-  email:{t:'📧 Email only',ks:['email','enroll','research','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
-  call:{t:'☎️ Call only',ks:['owed','call'],sub:'phone block — dials only'}};
+  email:{t:'📧 Email only',ks:['reply','email','enroll','research','cooling','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
+  call:{t:'☎️ Call only',ks:['reply','owed','call'],sub:'phone block — every dial here was earned by an open or a fit, not by a due date'}};
 function pgMode(){ const m=UI.pgMode||'all'; return PG_MODES[m]?m:'all'; }
 function setPgMode(m){ UI.pgMode=m; try{ localStorage.setItem('pgMode',m); }catch(e){} renderHotList(); }
 try{ const _m=localStorage.getItem('pgMode'); if(_m&&PG_MODES[_m]) UI.pgMode=_m; }catch(e){}
@@ -7420,8 +7563,10 @@ function pgPanels(by,budget){
   // where the contact has already raised their hand; dials last because they are the bottomless one
   // and would otherwise eat the whole day before anything else got a seat.
   const allow=PG_MODES[pgMode()].ks;
-  const order=['owed','research','enroll','email','call','nurture'].filter(k=>!allow||allow.includes(k));
-  const caps={owed:8,research:10,enroll:10,email:25,call:budget,nurture:5};
+  // Replies first, then dials that were EARNED. Cooling sits near the bottom as a visible "leave
+  // these alone" — hiding them would just look like the list forgot people it used to show.
+  const order=['reply','call','owed','research','email','enroll','cooling','nurture'].filter(k=>!allow||allow.includes(k));
+  const caps={reply:10,owed:8,research:10,enroll:10,email:25,call:budget,cooling:6,nurture:5};
   // Call-only means CALL ONLY. Saad: "just to hammer out calls" — so the dial bucket stops competing
   // with buckets that aren't on screen and gets the whole day's budget.
   if(pgMode()==='call'){ caps.call=Math.max(budget,25); caps.owed=25; }
@@ -7527,7 +7672,7 @@ function renderHotList(){
   // like leads are disappearing, which is the exact complaint the block was built to answer.
   const skipN=skipLive()?skipIds.filter(id=>due.some(c=>c.id===id)).length:0;
   const skipLink=skipN?' · <span onclick="clearSkips();renderHotList();toast(\'Skipped leads back in rotation\')" style="cursor:pointer;color:var(--sig)">⏭ '+skipN+' skipped this block — bring back</span>':'';
-  h+=pgPanels(_by,_budget);
+  h+=pgNowCard(_by)+pgPanels(_by,_budget);
   if(!_quiet) h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+skipLink+'</span><button class="btn sm gh" onclick="recalcQueue()" title="Pull fresh opens/replies and re-rank the whole queue" style="margin-left:auto">↻ Resync &amp; recalc</button>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
   if(snoozed.length&&!_quiet){
     const t2=dataTable('hotlist2',chosenCols('hotlist2'),snoozed,r=>"openContact('"+r.id+"')",snoozeCell);
@@ -10529,6 +10674,12 @@ function boot(){
   try{ hydrateMine(); }catch(e){}   // show YOUR inbox and YOUR calendar, not whoever synced last
   try{ dedupeTasks(); }catch(e){}
   try{ if(sweepStaleCadTasks()) save(); }catch(e){}   // drop cadence tasks the play already passed
+  /* z183 · ONE-TIME POINTER RESCUE. Sequences are email-only from here, but everyone already
+     enrolled has a step number that counts an interleaved def. Stamp them so cadDefFor keeps
+     rebuilding the def they were enrolled against; nothing sets this flag ever again, so the
+     population can only shrink. Runs before releaseStalledCalls, which reads those same defs. */
+  try{ let _m=0; contacts().forEach(c=>{ const s=c&&c.emailSeq; if(s&&s.seqId&&s.calls===undefined){ s.calls=true; _m++; } });
+    if(_m){ save(); console.log('[z183] '+_m+' existing enrolments kept their interleaved step map'); } }catch(e){}
   try{ const _r=releaseStalledCalls(); if(_r){ save(); console.log('[z182] '+_r+' cadences un-stalled off unmade calls'); } }catch(e){}
   try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
   try{ clearAutoInterestDeals(); }catch(e){}   // pipeline entries nobody actually opened
