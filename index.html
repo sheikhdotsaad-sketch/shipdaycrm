@@ -626,7 +626,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z183';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z184';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -7348,6 +7348,38 @@ function callIntent(c){
   if(icp>=4) return {n:200+icp*20,why:'Strong fit — '+bits.join(' · ')};
   return null;
 }
+/* ── A GOOD ACCOUNT WITH NO DATA IS A JOB, NOT A DEAD END ──
+   Saad: "even if its a good account, doesnt have data, oh lets fucking add to it / tell us step by
+   step what to do / to make sure that account is good to hit up." The old list silently dropped
+   these — no phone meant no row — so the accounts most worth fixing were the ones it hid. Measured
+   across the team: 48% of accounts have no contact at all, 90% of contacts have no title, and
+   David's whole book is 2% city / 4% website. This returns the gaps in the order that unblocks
+   outreach soonest, each with the actual move, so the row is a task and not a complaint. */
+function dataGaps(c){
+  const a=acct(c.accountId)||{}, g=[];
+  const site=String(a.website||'').replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
+  const q=[a.name,a.city].filter(Boolean).join(' ');
+  if(!pgHasPhone(c)) g.push({k:'phone',t:'Get a phone number',how:site?'Their site → Contact / footer':'Google "'+q+'" → the Google Business panel has it'});
+  if(!pgHasEmail(c)) g.push({k:'email',t:'Get an email',how:site?'Site footer, then ask reception for the owner\u2019s':'Find the site first'});
+  if(!String(c.title||'').trim()) g.push({k:'title',t:'Confirm who this person is',how:'LinkedIn or the About page — you want the owner or GM, not a shift lead'});
+  if(!site) g.push({k:'website',t:'Find the website',how:'Google "'+q+'"'});
+  if(!posOf(a)) g.push({k:'pos',t:'Identify the POS',how:'Open their online-ordering link — Toast / Square / Clover is in the URL or the footer'});
+  if(!String(a.city||'').trim()) g.push({k:'city',t:'Add the city',how:'Google Maps'});
+  return g;
+}
+/* Is this worth the ten minutes? Only if something already says the account is real. A thin row with
+   no signal at all is not a research job, it's a name — and sending him to enrich those is how the
+   bucket turns into 2,000 rows of homework and gets ignored like everything else that did. */
+function worthQualifying(c){
+  const a=acct(c.accountId)||{}, r=[];
+  if(lastOpenTs(c)&&openMine(c)) r.push('opened your email '+fmtAgo(lastOpenTs(c)));
+  let locs=0; try{ locs=sameBrand(a).length; }catch(e){}
+  if(locs>=1) r.push((locs+1)+' locations');
+  if(c.dispo&&!_NOCONN_D.test(String(c.dispo))&&!/not interested|dnc|wrong/i.test(String(c.dispo))) r.push('you already spoke to them');
+  if(isOwner(c)) r.push('this is the owner');
+  if(posOf(a)) r.push(posOf(a));
+  return r;
+}
 // A play that has ended. seqActive() goes false the instant it does, which is exactly why the router
 // used to hand completed cadences straight back as "start a cadence" the next morning.
 const CAD_COOLDOWN=30*864e5;
@@ -7362,8 +7394,8 @@ function pgSkipCadence(cid){ const c=contact(cid); if(!c) return; const prev=+c.
 const PG_KINDS={
   reply:   {icon:'↩️', verb:'Answer it',          panel:'↩️ They wrote back',      hint:'a human replied — nothing on this page is closer to money'},
   owed:    {icon:'📞', verb:'Call — owed',        panel:'📞 Calls you owe',        hint:'the play moved on without these; the dial is still worth making'},
-  research:{icon:'🔎', verb:'Find the number',     panel:'🔎 Find a direct line',   hint:'they opened your email and there is no way to ring them'},
-  call:    {icon:'☎️', verb:'Dial',                panel:'☎️ Dial',                 hint:'reachable and due'},
+  research:{icon:'🔎', verb:'Qualify it',          panel:'🔎 Good account, missing data', hint:'worth hitting, but you can\u2019t reach them yet — each row says what to go get'},
+  call:    {icon:'☎️', verb:'Dial',                panel:'☎️ Dial',                 hint:'every one of these earned it — an open or a real fit, never a due date'},
   enroll:  {icon:'➕', verb:'Start a cadence',      panel:'➕ Put into a cadence',    hint:'phone and email on file, and nothing has been sent to them lately'},
   cooling: {icon:'🧊', verb:'Leave it',             panel:'🧊 Just came off a play', hint:'do not re-enrol these — the last cadence is still sitting in their inbox'},
   email:   {icon:'📧', verb:'Send the step',        panel:'📧 Cadence emails due',   hint:'runs whether or not you get to the phone'},
@@ -7384,9 +7416,18 @@ function nextAction(c){
   // the CRM already decided this call was worth making — it just stopped blocking the emails.
   if(c.owedCall&&ph) return {k:'owed',rank:heat(c)+200,
     why:'Cadence wanted '+esc(c.owedCall.label||'a call')+' '+fmtAgo(+c.owedCall.since)+' — emails kept going'};
-  // Opened, unreachable. The whole reason this list exists.
-  if(op&&!ph) return {k:'research',rank:(fresh?900:400)+heat(c),
-    why:'Opened '+fmtAgo(openTs)+(a.website?' · try '+esc(String(a.website).replace(/^https?:\/\/(www\.)?/,'').split('/')[0]):'')+' — no phone on file'};
+  /* Unreachable, but the account is real. An open used to be the only thing that got you in here,
+     which meant a five-location brand you'd already spoken to sat invisible because nobody had ever
+     typed a phone number into the row. Any evidence the account is worth having qualifies it now;
+     the open just ranks highest, because it's a person raising their hand rather than a shape. */
+  if(!ph||!em){
+    const gaps=dataGaps(c), reasons=worthQualifying(c);
+    if(gaps.length&&reasons.length){
+      c._pgGaps=gaps;
+      return {k:'research',rank:(op?(fresh?900:500):200)+reasons.length*40+heat(c)*0.3,
+        why:'Worth it — '+esc(reasons.slice(0,3).join(' · '))+'. Missing: '+gaps.map(g=>g.k).join(', ')};
+    }
+  }
   /* ── A DIAL IS EARNED, NEVER SCHEDULED ──
      Saad, calling his own list: "im calling people in sequences right now and its all just
      gatekeepers because theyve been in cadence, theyre next due / but theres no reason to call."
@@ -7518,10 +7559,20 @@ function pgRow(c,kind){
     :kind==='email'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">📧 Send step</button>'
     :'<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ▸</button>';
   const site=(kind==='research'&&a.website)?' <a href="'+esc(/^https?:/.test(a.website)?a.website:'https://'+a.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--sig)">site ↗</a>':'';
+  /* Saad: "tell us step by step what to do / to make sure that account is good to hit up." Naming
+     the missing field is a complaint; naming where to go and get it is a task. Numbered, capped at
+     three, in unblock order — the fourth thing to look up is a thing he'll never do today. */
+  let steps='';
+  if(kind==='research'){
+    const g=c._pgGaps||dataGaps(c);
+    if(g.length) steps='<div style="margin-top:5px;font-size:12px;line-height:1.55">'+
+      g.slice(0,3).map((x,i)=>'<div><span style="color:var(--sig)">'+(i+1)+'.</span> <b>'+esc(x.t)+'</b> — <span style="color:var(--mut)">'+esc(x.how)+'</span></div>').join('')+
+      (g.length>3?'<div style="color:var(--mut)">+ '+(g.length-3)+' more once those are in</div>':'')+'</div>';
+  }
   return '<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')"><td class="tname">'+esc(cname(c))+pgStageChip(c)+
     '<div class="tsub">'+esc(a.name||'')+site+'</div></td>'+
-    '<td style="font-size:12px;color:var(--mut)">'+(c._pgWhy||'')+'</td>'+
-    '<td style="text-align:right;white-space:nowrap">'+cta+'</td></tr>';
+    '<td style="font-size:12px;color:var(--mut)">'+(c._pgWhy||'')+steps+'</td>'+
+    '<td style="text-align:right;white-space:nowrap;vertical-align:top">'+cta+'</td></tr>';
 }
 /* ── DO THIS RIGHT NOW ──
    Saad: "i just need this to look more dynamic / like what to DO RIGHT NOW". Six panels is a report.
