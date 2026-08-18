@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug17·z178';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z179';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -9598,7 +9598,24 @@ function boot(){
   // Refresh live opens/replies from Gmail on load; the cloud pull preserves whichever sync is newer
   // (see initSync), so this fresh number is never reverted to the stale saved one.
   const gmailStart=(SYNC_FN&&typeof syncGmail==='function')?Promise.resolve(syncGmail(true)).catch(()=>0):Promise.resolve(0);
-  Promise.allSettled([cloudStart,gmailStart]).then(()=>{ todayCountReady=true; if(syncSeqTasks())save(); renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); hideBootVeil(); });
+  /* THE SWEEP HAS TO RUN AFTER THE CLOUD LANDS, NOT BEFORE IT.
+     z176 added sweepStaleCadTasks() at line ~9587, above, and it has never once closed a task on the
+     live book — Saad, three builds later: "task dash still looks like absolute ass". The logic was
+     right; the placement made it a guaranteed no-op. __tasks is one of the whole-array
+     last-writer-wins fields in mergeStores (see the list at ~970, and the comment at ~5757 saying so
+     out loud), so the boot order was: sweep the local copy → save → initSync() pulls the server row →
+     store.__tasks is REPLACED wholesale with the server's un-swept array → every task it just closed
+     is open again, before the first paint. Nothing downstream re-ran it: the .then() below called
+     syncSeqTasks() but not the sweep. Measured on the live row this morning: of 337 open tasks on his
+     dash, 189 are cadence steps the contact has already moved past — a contact on step 8 still
+     showing its Call 6/10 — which is the entire pile he keeps seeing.
+     Running it here, against the merged book, and save()ing so the closures actually go back up. The
+     boot-time call above stays: it makes the first paint honest for whatever was already local, and
+     the function is idempotent, so a second pass over an already-clean book closes nothing. */
+  Promise.allSettled([cloudStart,gmailStart]).then(()=>{ todayCountReady=true; let d=0;
+    try{ d=sweepStaleCadTasks(); }catch(e){}
+    if(syncSeqTasks()|d) save();
+    renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); hideBootVeil(); });
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
 
