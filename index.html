@@ -620,7 +620,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z179';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z180';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -934,6 +934,43 @@ function sweepStaleCadTasks(){
     if(past){ t.done=true; t.doneTs=now; t.autoClosed=true; closed++; }
   });
   return closed;
+}
+/* ===== FIZZLE OUT DEAD SEQUENCES =====================================
+   Saad: "just fizzle out the ones that he hasnt talked to in 30 days as open."
+   MEASURED on the live book: Embert holds **300 active sequences, 178 of them parked on a call
+   step, and 140 with no call ever logged** — never dialled, not "no answer". Only 2 replies and
+   15 opens across the whole 300. The emails keep sending (median step moved 5d ago), so the play
+   looks alive while nobody has ever spoken to the restaurant. That is what filled the dashboard
+   and what hid the inventory.
+   🔑 A SEQUENCE START AND AN AUTO-SEND ARE NOT "TALKING TO SOMEONE." lastTalkTs counts only a
+   dial, a reply, an open or a disposition — the things that need a human on one end. Counting
+   the outbound email would make every dead sequence look worked, which is the exact illusion
+   being cleaned up here.
+   What it does NOT do: it does not touch the contact, the phone, the history, or the account,
+   and it does not mark any call as made. It ends the play, clears that play's tasks, and lets
+   go of the lane — so the lead becomes open inventory anyone can pick up. */
+const SEQ_FIZZLE_DAYS=30;
+function lastTalkTs(c){
+  let best=0;
+  const lg=(c&&c.log)||[];
+  for(let i=0;i<lg.length;i++){ const e=lg[i]||{}, tx=String(e.txt||''), ts=+e.ts||0;
+    if(ts<=best) continue;
+    if(/^(📞|☎)/.test(tx)||/👀|💬|📥|↩️?\s*Repl/.test(tx)) best=ts; }
+  ['lastReplyTs','lastEmailOpenTs','dispoTs','lastDialAt','lastContactedTs'].forEach(k=>{
+    const v=+((c||{})[k])||0; if(v>best) best=v; });
+  return best;
+}
+function fizzleDeadSeqs(){
+  const cut=Date.now()-SEQ_FIZZLE_DAYS*_DAY; let n=0;
+  contacts().forEach(c=>{ const s=c&&c.emailSeq; if(!s||s.done||s.paused) return;
+    if(lastTalkTs(c)>=cut) return;                       // somebody actually spoke to them recently
+    s.done=true; s.fizzled=true; s.fizzledAt=Date.now();
+    // Let go of the lane. A play nobody ever worked must not keep holding the lead.
+    if(c.assignee) c.assignee='';
+    clearEmailTasks(c.id);
+    logAuto(c,'💤 Sequence fizzled — no call, reply or open in '+SEQ_FIZZLE_DAYS+' days. Released as open.');
+    stampU(c); n++; });
+  return n;
 }
 function dedupeLogs(){
   let recs=0, removed=0;
@@ -1427,13 +1464,112 @@ const TIER_META={
   D:{lbl:'D',c:'var(--mut)',  t:'Thin record or poor fit'},
   X:{lbl:'X',c:'var(--hot)',  t:'National chain — cannot buy, excluded from queues'},
 };
-function acctTier(a){ const t=((a&&a.tier)||'').toUpperCase(); return TIER_META[t]?t:''; }
+/* ===== LIVE FIT SCORING ==============================================
+   Saad, looking at three Soul 2 Go rows sitting on a blank Tier and a blank Shipday fit:
+   "thats why i say the data fucking sucks / i spent so much time on this" — and earlier,
+   "i think the crm needs to realize whats a good fit and whats not".
+   🔑 THE DATA DID NOT SUCK. THE ROW ALREADY KNEW. That Soul 2 Go row carries
+   pos:Toast, delivery:"DoorDash, UberEats, Grubhub (Big-3: All 3)", a website and a city —
+   a three-location Toast operator paying all three marketplaces, which is an A by the very
+   rubric written above. It rendered "—" because `tier` and `integrated` are STORED FIELDS
+   that only the Ohio importer ever wrote (see OHIO_STAMP ~8273 and the write at ~8574), and
+   acctTier() did nothing but read a.tier back. Soul 2 Go came in from a call log, so it was
+   never stamped, and nothing has ever recomputed it. MEASURED on the live book:
+   **1,906 of 3,260 accounts (58%) carry no tier at all — and 1,528 of those have a POS, a
+   delivery string or a website sitting right there. 376 of the unscored are literally Toast.**
+   So: score it live from what the record knows. Stored/manual values ALWAYS win (an import
+   with real crawl evidence, or a tier Saad set by hand, beats a guess off three fields), and
+   this only ever fills a blank. Nothing is written to the record — it is computed at render,
+   memoised per row, so there is no migration and no way for a guess to harden into "data". */
+const NATIVE_POS=[
+  [/toast/i,'Toast'],[/square(?!space)/i,'Square'],[/clover/i,'Clover'],[/shopify/i,'Shopify'],
+  [/woocommerce|woo\b/i,'WooCommerce'],[/wix/i,'Wix'],[/squarespace/i,'Squarespace'],
+  [/bentobox/i,'BentoBox'],[/gloriafood/i,'GloriaFood'],[/flipdish/i,'Flipdish'],[/otter/i,'Otter'],
+  [/deliverect/i,'Deliverect'],[/cuboh/i,'Cuboh'],[/chowly/i,'Chowly'],[/zuppler/i,'Zuppler'],
+  [/menufy/i,'Menufy'],[/chownow/i,'ChowNow'],[/lightspeed/i,'Lightspeed'],[/revel/i,'Revel'],
+  [/touchbistro/i,'TouchBistro'],[/spoton/i,'SpotOn'],[/upmenu/i,'UpMenu'],[/restolabs/i,'Restolabs'],
+  [/owner\.com|^owner$/i,'Owner.com'],[/popmenu/i,'Popmenu'],[/lunchbox/i,'Lunchbox'],
+  [/checkmate/i,'Checkmate'],[/ordering\.co/i,'Ordering.co'],[/slice/i,'Slice'],[/aldelo/i,'Aldelo'],
+];
+/* Runs real online ordering but there is NO native connector — still a conversation, just an
+   API one, so it must not read as a green ✓. Olo is the one he called out by name:
+   "we also dont integrate iwth olo right now". */
+const NONNATIVE_POS=[[/\bolo\b/i,'Olo'],[/oracle|micros/i,'Oracle MICROS'],[/ncr|aloha/i,'NCR Aloha'],
+  [/hungerrush|revention/i,'HungerRush'],[/speedline/i,'SpeedLine'],[/focus pos/i,'Focus POS']];
+// The POS column doubles as a scratch pad — "Left VM", "Not interested", "Connected" all live
+// there. Those are call outcomes, not a stack, and must never score as one.
+const POS_NOISE=/^(left ?vm|voicemail|not interested|do not call|dnc|connected|reached out|no answer|called|owner|uber|n\/?a|none|-+)$/i;
+function posStack(a){ const p=String((a&&a.pos)||'').trim(); if(!p||POS_NOISE.test(p)) return null;
+  for(const [re,lbl] of NATIVE_POS) if(re.test(p)) return {name:lbl,native:true};
+  for(const [re,lbl] of NONNATIVE_POS) if(re.test(p)) return {name:lbl,native:false};
+  return {name:p,native:false}; }
+// "DoorDash, UberEats, Grubhub (Big-3: All 3)" → 3. Marketplace spend is the single best proxy
+// for the thing he actually qualifies on: "thye just need to do a lot of online ordering".
+function bigThree(a){ const d=String((a&&a.delivery)||'');
+  if(!d||/^none/i.test(d)) return 0;
+  if(/all ?3/i.test(d)) return 3;
+  if(/partial/i.test(d)) return 2;
+  let n=0; if(/doordash/i.test(d))n++; if(/uber ?eats|ubereats/i.test(d))n++; if(/grubhub/i.test(d))n++;
+  return n; }
+const DELIVERY_CUISINE=/pizza|burger|wing|chinese|thai|mexican|sushi|indian|sandwich|deli|bbq|barbec|chicken|taco|noodle|ramen|poke|breakfast|bakery|dessert|italian|greek|mediterran|american|southern|soul|seafood|vegan|salad|bowl/i;
+const _fitMemo={};
+function liveFit(a){
+  if(!a) return {tier:'',score:0,why:'',integrated:'',notIntegrated:''};
+  const ck=a.id+'|'+(a._u||0);
+  if(_fitMemo[ck]) return _fitMemo[ck];
+  let s=0; const why=[]; let integrated='',notIntegrated='';
+  const st=posStack(a);
+  if(st&&st.native){ const core=/^(toast|square)$/i.test(st.name);
+    s+=core?45:30; integrated=st.name;
+    why.push(core?st.name.toUpperCase()+' — core ICP, native integration':'native integration ('+st.name+')'); }
+  else if(st){ s+=18; notIntegrated=st.name; why.push('online ordering but NOT integrated ('+st.name+')'); }
+  const b3=bigThree(a);
+  if(b3>=3){ s+=25; why.push('on all Big-3 — paying full commission'); }
+  else if(b3===2){ s+=14; why.push('on 2 of the Big-3'); }
+  else if(b3===1){ s+=8; why.push('on one marketplace'); }
+  /* Count LIKELY as well as LINKED — a three-storefront operator is worth the same call whether
+     the book proved the link or inferred it, and z171's linked-only rule is precisely why the
+     Soul 2 Go rows scored as three singletons. `sure` tracks which it was so the column can
+     render the inferred ones as a question.
+     One expansion hop, because the prefix relation is ASYMMETRIC: "soul2go" is a prefix of both
+     siblings, but "soul2goexpress" is a prefix of neither, so the same brand reported 3 / 2 / 1
+     and the column would have looked broken. Pulling in each sibling's siblings settles all three
+     on the same number. One hop only — this runs per row on a 3,000-row table. */
+  let locs=0,sure=false;
+  try{ const sb=sameBrand(a), seen={}; seen[a.id]=1;
+    sb.forEach(x=>{ seen[x.a.id]=1; if(x.k==='linked') sure=true; });
+    sb.forEach(x=>sameBrand(x.a).forEach(y=>{ seen[y.a.id]=1; }));
+    locs=Object.keys(seen).length-1; }catch(e){}
+  if(locs>=1){ s+=12; why.push((locs+1)+' locations'); }
+  if(String(a.website||'').trim()){ s+=6; why.push('has a site'); }
+  if(String(a.phone||'').trim()) s+=6;
+  if(DELIVERY_CUISINE.test(String(a.cuisine||''))){ s+=6; why.push('delivery-friendly cuisine'); }
+  const tier=a.excluded?'X':s>=70?'A':s>=50?'B':s>=30?'C':'D';
+  const out={tier:tier,score:s,why:why.join('; '),integrated:integrated,notIntegrated:notIntegrated,locs:locs,locsSure:sure};
+  _fitMemo[ck]=out; return out;
+}
+/* Stored ALWAYS wins — a crawl-backed import tier and a hand-set tier are both better evidence
+   than a guess off three columns. This only ever fills a blank. */
+function acctTier(a){ const t=((a&&a.tier)||'').toUpperCase(); if(TIER_META[t]) return t;
+  return liveFit(a).tier; }
+// True when the letter on screen was inferred rather than imported — the UI dims those so a
+// guess never looks like a measured fact.
+function tierInferred(a){ return !TIER_META[((a&&a.tier)||'').toUpperCase()] && !!liveFit(a).tier; }
+function fitIntegrated(a){ return (a&&a.integrated)||liveFit(a).integrated||''; }
+function fitNotIntegrated(a){ return (a&&a.notIntegrated)||liveFit(a).notIntegrated||''; }
+function tierWhyOf(a){ return (a&&a.tierWhy)||liveFit(a).why||''; }
 // Hard exclusion. Chains stay visible/searchable in Accounts but never enter a queue.
 function isDeadChain(a){ return acctTier(a)==='X'; }
+/* An inferred letter renders dashed + dimmed and says so in the tooltip. It is still the same
+   letter — it has to be, or it can't sort or filter with the rest — but it must never be
+   mistaken for the crawl-backed ones. A guess that looks identical to a measurement is how you
+   end up trusting the wrong row. */
 function tierBadge(a){ const t=acctTier(a); if(!t) return '<span class="tsub">—</span>';
-  const m=TIER_META[t];
-  return '<span class="tag" style="border-color:'+m.c+';color:'+m.c+'" title="'+esc(a.tierWhy||m.t)+'">'+
-    (a.isToast?'★ ':'')+m.lbl+'</span>'; }
+  const m=TIER_META[t], inf=tierInferred(a);
+  const why=tierWhyOf(a)||m.t;
+  return '<span class="tag" style="border-color:'+m.c+';color:'+m.c+(inf?';border-style:dashed;opacity:.72':'')+'" title="'+
+    esc(inf?'Inferred from this record: '+why+' — not from the enrichment crawl':why)+'">'+
+    ((a.isToast||/^toast$/i.test(String(a.pos||'')))?'★ ':'')+m.lbl+(inf?'?':'')+'</span>'; }
 function matchTier(a){ if(!UI.tier.size) return true; return UI.tier.has(acctTier(a)||'?'); }
 function matchPosCui(a){
   if(!matchTier(a)) return false;
@@ -3352,6 +3488,20 @@ function chosenCols(v){
   const out=saved.map(k=>reg.find(c=>c.k===k)).filter(Boolean);
   return out.length?out:reg.slice(0,5);
 }
+/* A saved column set is a snapshot of the columns that existed the day it was saved, so a NEW
+   column is invisible to everyone who has ever touched the picker — it isn't hidden, it simply
+   isn't in their list. Saad has a saved accounts layout, so "Locations" would have shipped to
+   him switched off with no way to discover it. Add genuinely new keys once, in place, and leave
+   every deliberate choice alone; the flag means a column he then hides stays hidden. */
+const COL_ADDITIONS={accounts:[['sibs','fit']]};   // [newKey, insertAfterKey]
+function migrateCols(){ const c=store.__cols; if(!c) return 0; let n=0;
+  Object.keys(COL_ADDITIONS).forEach(v=>{ const cur=c[v]; if(!Array.isArray(cur)) return;
+    COL_ADDITIONS[v].forEach(([k,after])=>{
+      if(cur.indexOf(k)>=0) return;
+      if((store.__colsAdded||{})[v+'.'+k]) return;                 // added once already, then hidden — respect that
+      const i=cur.indexOf(after); cur.splice(i<0?cur.length:i+1,0,k);
+      store.__colsAdded=store.__colsAdded||{}; store.__colsAdded[v+'.'+k]=1; n++; }); });
+  return n; }
 function toggleCol(v,k){ store.__cols=store.__cols||{};
   let cur=(store.__cols[v]||COLDEF[v]||colReg(v).map(c=>c.k)).slice();
   if(cur.includes(k)) cur=cur.filter(x=>x!==k); else cur.push(k);
@@ -4525,10 +4675,19 @@ function leadOwner(c){
 /* DELIBERATE ownership only — a pin, a sequence, an assignment. Deliberately EXCLUDES lastLogBy:
    "the last person who typed something here" is incidental, not a claim, and treating it as one is
    what let a single old log line hold a lead in a lane nobody was working. */
+/* ⚠️ ONLY A LIVE SEQUENCE IS A CLAIM — my own z177 regression, found by Saad asking
+   "embert still has 300 leads and youre telling me those are legit?".
+   seqOwner() answers "who started the play", and it answers that for a play that finished six
+   weeks ago just as confidently as for one sent this morning. Because the strong-owner branch
+   below returns before the 30-day ageing test can run, a dead sequence became a PERMANENT lock:
+   Embert's 300 — including 74 Toast/Square — could never age back into the shared pool no matter
+   how long nobody touched them. A finished or fizzled play is a record of what was tried, not a
+   claim on the lead. Paused still counts as owned: that is a deliberate "hands off, I'll resume". */
 function leadOwnerStrong(c){
   if(!c) return '';
   const hf=c.hotFor||{}; const pins=Object.keys(hf); if(pins.length) return pins[0];
-  let o=''; try{ o=seqOwner(c)||''; }catch(e){}
+  const s=c.emailSeq;
+  let o=''; if(s&&!s.done){ try{ o=seqOwner(c)||''; }catch(e){} }
   return o || c.assignee || '';
 }
 /* AGED-OUT LANES — a lane is an allocation, not a lock-box. Saad: "yeah actually age them out."
@@ -5457,7 +5616,7 @@ const _realHost=u=>{ const h=_webHost(u); return (h&&h.indexOf('.')>0&&!_AGGHOST
 let _SIBIX=null;
 function _sibIx(){
   if(_SIBIX) return _SIBIX;
-  const byHost={},byCity={},byPfx={};
+  const byHost={},byCity={},byPfx={},byStem={};
   accounts().forEach(a=>{
     const h=_realHost(a.website); if(h)(byHost[h]=byHost[h]||[]).push(a);
     const n=_nblob(a.name),ct=String(a.city||'').trim().toLowerCase();
@@ -5466,8 +5625,9 @@ function _sibIx(){
     // characters, so bucketing on those 10 finds every such pair without comparing the book
     // against itself.
     if(n.length>=10)(byPfx[n.slice(0,10)]=byPfx[n.slice(0,10)]||[]).push(a);
+    const st=_brandStem(a); if(st.length>=STEM_MIN)(byStem[st.slice(0,STEM_MIN)]=byStem[st.slice(0,STEM_MIN)]||[]).push(a);
   });
-  _SIBIX={byHost,byCity,byPfx};
+  _SIBIX={byHost,byCity,byPfx,byStem};
   Promise.resolve().then(()=>{ _SIBIX=null; });
   return _SIBIX;
 }
@@ -5482,6 +5642,23 @@ function _sibIx(){
    the entire feature off for him (2 hits in 2,183 rows) while his book was quietly holding
    SEVEN "24 Seven Tacos" storefronts. A long stem is its own evidence when nothing else exists;
    8 characters is not, which is why the shorter stems still have to agree on a city. */
+/* THE PREFIX TEST ONLY EVER CAUGHT ONE SHAPE OF CHAIN. Saad, on the Accounts table: "and also
+   just like the multi loc thing / theres tons of multi locs / in the list", with three Soul 2 Go
+   rows on screen showing nothing. z171's rule needs one whole normalised name to be a prefix of
+   the other — perfect for "lunabakery" ⊂ "lunabakerycafe", useless the moment BOTH rows carry
+   their own location suffix. "Soul 2 Go - University District" / "Soul 2 Go Café - Downtown" /
+   "Soul 2 Go Express - Gahanna" share only "soul2go", and none is a prefix of another, so all
+   three sat unlinked while the brand name was right there in every one of them.
+   So: compare the STEM — the part before the location separator — instead of the whole string.
+   Stems are "soul2go" / "soul2gocafe" / "soul2goexpress", and now the prefix relationship holds.
+   🔑 THE SEPARATOR IS ITSELF THE EVIDENCE. "Brand - Neighbourhood" is a naming convention
+   restaurants only use when there is more than one of them, which is what lets this run at a
+   7-char stem where the whole-name rule needed 10: at least one side must actually HAVE a
+   location suffix. Without that guard "soulfood" would marry two unrelated kitchens.
+   Still 'likely', never 'linked' — it renders as a question, and it writes nothing. */
+const STEM_MIN=7;
+function _brandStem(a){ const raw=String((a&&a.name)||'').split(/\s[-–—|@]\s|\s*\(/)[0]; return _nblob(raw); }
+function _hasLocSuffix(a){ return _brandStem(a)!==_nblob(String((a&&a.name)||'')); }
 function sameBrand(a){
   if(!a) return [];
   const ix=_sibIx(),out={};
@@ -5494,6 +5671,12 @@ function sameBrand(a){
   const pfx=x=>{ const m=_nblob(x.name); if(m===n||m.indexOf(n)===0||n.indexOf(m)===0) add(x,'likely'); };
   if(ct)(ix.byCity[ct]||[]).forEach(pfx);
   if(n.length>=10)(ix.byPfx[n.slice(0,10)]||[]).forEach(pfx);
+  const st=_brandStem(a), mine=_hasLocSuffix(a);
+  if(st.length>=STEM_MIN)(ix.byStem[st.slice(0,STEM_MIN)]||[]).forEach(x=>{
+    const ms=_brandStem(x); if(ms.length<STEM_MIN) return;
+    if(!(ms===st||ms.indexOf(st)===0||st.indexOf(ms)===0)) return;
+    if(!mine&&!_hasLocSuffix(x)) return;          // neither row is named like a chain — not evidence
+    add(x,'likely'); });
   return Object.keys(out).map(k=>out[k]);
 }
 function sibsHtml(a){
@@ -7027,10 +7210,22 @@ const A_COLS=[
   {k:'name',t:'Account',val:a=>a.name,cell:a=>'<span class="tname">'+esc(a.name)+'</span>'+(isBrand(a)?' <span class="tsub">🏢'+childLocs(a.id).length+'</span>':isLocation(a)?' <span class="tsub">📍</span>':'')},
   // Sorts A,B,C,D then X, unscored last — so "sort by Tier" surfaces best-fit first.
   {k:'tier',t:'Tier',val:a=>({A:1,B:2,C:3,D:4,X:8}[acctTier(a)]||9),cell:a=>tierBadge(a)},
-  {k:'fit',t:'Shipday fit',val:a=>a.integrated||a.notIntegrated||'',
-   cell:a=>a.integrated?'<span class="tag cust" title="Native connector on shipday.com/integrations">✓ '+esc(a.integrated)+'</span>'
-        :a.notIntegrated?'<span class="tag" title="Runs online ordering, but no native Shipday connector — custom/API conversation">⚠ '+esc(a.notIntegrated)+'</span>'
-        :'<span class="tsub">—</span>'},
+  {k:'fit',t:'Shipday fit',val:a=>fitIntegrated(a)||fitNotIntegrated(a)||'',
+   cell:a=>{ const i=fitIntegrated(a), ni=fitNotIntegrated(a), inf=!a.integrated&&!a.notIntegrated;
+     const dim=inf?';opacity:.72;border-style:dashed':'';
+     return i?'<span class="tag cust" style="'+dim.slice(1)+'" title="'+esc((inf?'Read off this record\u2019s POS field. ':'')+'Native connector on shipday.com/integrations')+'">✓ '+esc(i)+'</span>'
+       :ni?'<span class="tag" style="'+dim.slice(1)+'" title="'+esc((inf?'Read off this record\u2019s POS field. ':'')+'Runs online ordering, but no native Shipday connector — custom/API conversation')+'">⚠ '+esc(ni)+'</span>'
+       :'<span class="tsub">—</span>'; }},
+  /* Multi-location as a COLUMN, not just a line on the call card. Saad: "and also just like the
+     multi loc thing / theres tons of multi locs / in the list" — sameBrand() has found them since
+     z171 but only ever drew inside the drawer, so in the table his three Soul 2 Go rows looked
+     like three unrelated strangers. Sorts by group size so the operators float to the top. */
+  {k:'sibs',t:'Group',val:a=>-(liveFit(a).locs||0),
+   cell:a=>{ const f=liveFit(a), n=f.locs||0; if(!n) return '<span class="tsub">—</span>';
+     return '<span class="tag"'+(f.locsSure?'':' style="border-style:dashed;opacity:.72"')+
+       ' title="'+esc(f.locsSure?'Same brand elsewhere in your book — one conversation can cover all of them'
+         :'Looks like the same brand (matched on the name) — worth checking before you pitch it as a group')+
+       '">🏢 '+(n+1)+(f.locsSure?'':'?')+'</span>'; }},
   {k:'cuisine',t:'Cuisine',val:a=>a.cuisine||''},
   {k:'loc',t:'Location',val:a=>[a.city,a.state].filter(Boolean).join(', ')},
   {k:'address',t:'Address',val:a=>a.address||''},
@@ -7045,7 +7240,7 @@ const A_COLS=[
   {k:'source',t:'Source',val:a=>a.source||''},
   {k:'assigned',t:'Assigned to',val:a=>a.assignee||'',cell:a=>a.assignee?'<span class="tag">'+esc(a.assignee)+'</span>':'<span class="tsub">—</span>'}
 ];
-COLDEF.accounts=['name','tier','fit','loc','pos','delivery','contacts','type'];
+COLDEF.accounts=['name','tier','fit','sibs','loc','pos','delivery','contacts','type'];
 COLDEF.closed=['name','onboard','pos','contacts','mrr'];
 COLDEF.live=['name','onboard','mrr','pos','contacts'];
 function renderAccounts(){
@@ -9612,9 +9807,11 @@ function boot(){
      Running it here, against the merged book, and save()ing so the closures actually go back up. The
      boot-time call above stays: it makes the first paint honest for whatever was already local, and
      the function is idempotent, so a second pass over an already-clean book closes nothing. */
-  Promise.allSettled([cloudStart,gmailStart]).then(()=>{ todayCountReady=true; let d=0;
+  Promise.allSettled([cloudStart,gmailStart]).then(()=>{ todayCountReady=true; let d=0,f=0;
+    try{ f=fizzleDeadSeqs(); }catch(e){}      // dead plays first, so the sweep sees them as finished
     try{ d=sweepStaleCadTasks(); }catch(e){}
-    if(syncSeqTasks()|d) save();
+    let m=0; try{ m=migrateCols(); }catch(e){}
+    if(syncSeqTasks()|d|f|m) save();
     renderCounts(); renderStats(); renderTaskWidget(); if(UI.tab==='today')renderToday(); hideBootVeil(); });
   if(window.__seedAdopted) toast('Loaded the latest imported data'); }
 if(AUTH_ON){ gateInit(); } else { el('app').style.display='block'; boot(); }
