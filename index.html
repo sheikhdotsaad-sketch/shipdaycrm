@@ -512,6 +512,7 @@ small.hint{color:var(--dim);font-size:11px}
       <div class="fsec" data-tabs="hotlist contacts leads"><h4 style="margin:12px 0 6px">Contact info</h4><div class="frow" id="f-have"></div></div>
       <div class="fsec" data-tabs="hotlist contacts"><h4 style="margin:12px 0 6px">Email opens</h4><div class="frow" id="f-opens"></div></div>
       <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">ICP tier</h4><div class="frow" id="f-tier"></div></div>
+      <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">Cadence</h4><div class="frow" id="f-cad"></div></div>
       <div class="fsec" data-tabs="accounts closed live"><h4 style="margin:12px 0 6px">Locations</h4><div class="frow" id="f-loc"></div></div>
       <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">POS</h4><div class="frow" id="f-pos"></div></div>
       <div class="fsec" data-tabs="hotlist contacts accounts closed live"><h4 style="margin:12px 0 6px">Cuisine</h4><div class="frow" id="f-cuisine"></div></div>
@@ -620,7 +621,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z180';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z181';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1387,7 +1388,7 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), hours:new Set(), tier:new Set(), tab:'today' };
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), hours:new Set(), tier:new Set(), cad:new Set(), tab:'today' };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
@@ -1407,6 +1408,16 @@ function buildFilters(){
       '<span class="fchip '+(UI.tier.has(k)?'on':'')+'" onclick="tgl(\'tier\',\''+k+'\')">'+lbl+
       ' <span style="opacity:.55">'+(tc[k]||0)+'</span></span>').join('')
       ||'<span class="tsub">import Ohio data to score</span>'; }
+  // Cadence chips — counted over CONTACTS (the thing a cadence actually runs on), so the numbers
+  // read the same whichever tab you're on. 'none' first: it's the untouched inventory.
+  { const cb=el('f-cad'); if(cb){ const cc={};
+      contacts().forEach(c=>{ if(c.internal) return; const k=seqState(c).k; cc[k]=(cc[k]||0)+1; });
+      const CB=[['none','— Not in cadence'],['active','▶ In cadence'],['call','📞 On a call step'],
+                ['paused','⏸ Paused'],['fizzled','💤 Fizzled'],['done','✓ Finished']];
+      cb.innerHTML=CB.filter(([k])=>cc[k]||UI.cad.has(k)).map(([k,lbl])=>
+        '<span class="fchip '+(UI.cad.has(k)?'on':'')+'" onclick="tgl(\'cad\',\''+k+'\')">'+lbl+
+        ' <span style="opacity:.55">'+(cc[k]||0)+'</span></span>').join('')
+        ||'<span class="tsub">no cadences running</span>'; } }
   const lc=el('f-loc'); if(lc){ const LC=[['multi','🏢 Multi-location'],['single','📍 Single location']];
     lc.innerHTML=LC.map(([k,lbl])=>'<span class="fchip '+(UI.loc.has(k)?'on':'')+'" onclick="tgl(\'loc\',\''+k+'\')">'+lbl+'</span>').join(''); }
   const asg=el('f-assignee'); if(asg){ const AS=[['__none','Unassigned'],...team().map(n=>[n,n])];
@@ -1571,6 +1582,13 @@ function tierBadge(a){ const t=acctTier(a); if(!t) return '<span class="tsub">�
     esc(inf?'Inferred from this record: '+why+' — not from the enrichment crawl':why)+'">'+
     ((a.isToast||/^toast$/i.test(String(a.pos||'')))?'★ ':'')+m.lbl+(inf?'?':'')+'</span>'; }
 function matchTier(a){ if(!UI.tier.size) return true; return UI.tier.has(acctTier(a)||'?'); }
+// On the ACCOUNTS table a cadence chip means "does this account have anyone in that state" —
+// picking "Not in cadence" must show accounts where NOBODY is being worked, not accounts that
+// merely happen to contain one idle contact alongside a live one.
+function matchCadA(a){ if(!UI.cad.size) return true;
+  const st=acctCad(a);
+  if(UI.cad.has('none')&&(st.k==='none'||st.k==='nocontacts')) return true;
+  return UI.cad.has(st.k); }
 function matchPosCui(a){
   if(!matchTier(a)) return false;
   if(UI.pos.size && !UI.pos.has(posOf(a))) return false;
@@ -1958,9 +1976,18 @@ async function autoSyncTick(){
    The opens panel only exists on the Today tab, and it hides itself entirely when empty, so
    from anywhere else in the app there was no way to know somebody had just opened your email.
    The header is the one thing on screen no matter which tab you're on, so the count lives there. */
-function sigUnseen(){ return (store.__signals||[]).filter(s=>!s.seen&&Date.now()-(+s.ts||0)<7*864e5&&contact(s.cid)); }
+/* Saad: "why does it keep saying i have 1 notification but theres no actual notification".
+   Because these two were counted by DIFFERENT rules. The badge took any unseen signal <7d whose
+   contact still existed; the popup takes 30 days AND drops signals belonging to another rep AND
+   groups them one-row-per-person. So another rep's unseen open scored a badge and then rendered
+   nothing — a bell you can never clear by looking at it.
+   The fix is structural, not a tweak to the numbers: the badge now counts THE ROWS THE POPUP WILL
+   ACTUALLY DRAW, so the two cannot drift apart again no matter how either filter changes. */
+function sigUnseen(){ const now=Date.now();
+  return (store.__signals||[]).filter(s=>!s.seen&&now-(+s.ts||0)<7*864e5&&contact(s.cid)
+    &&(!s.by||!myRep()||repSame(s.by,myRep()))); }
 function renderBell(){ const b=el('bellN'), btn=el('bell'); if(!b||!btn) return;
-  const n=sigUnseen().length;
+  const n=sigGroups().filter(g=>!g.seen).length;
   b.textContent=n?String(n):'';
   btn.classList.toggle('has', n>0);
   btn.title=n?(n+' new open'+(n>1?'s':'')+'/repl'+(n>1?'ies':'y')+' — click to see who'):'No new opens since the last check';
@@ -3208,6 +3235,14 @@ const COL={
   warmth:{k:'warmth',t:'Warmth',val:c=>c.warmth||'Cold',cell:c=>warmBadge(c.warmth)},
   name:{k:'name',t:'Contact',val:c=>cname(c),cell:c=>'<div class="tname">'+esc(cname(c))+'</div><div class="tsub">'+esc(c.title||'')+'</div>'},
   title:{k:'title',t:'Title',val:c=>c.title||''},
+  // Saad: "would be cool to see if an account or a contact is in a cadence, not in a cadence."
+  // Sorts live cadences first, untouched last, so one click on the header answers either question.
+  cad:{k:'cad',t:'Cadence',val:c=>({call:1,active:2,paused:3,fizzled:4,done:5,none:6}[seqState(c).k]||9),
+    cell:c=>{ const s=seqState(c), m=CAD_META[s.k]||CAD_META.none;
+      if(s.k==='none') return '<span class="tsub">— not in cadence</span>';
+      let nm=''; try{ const q=seqById((c.emailSeq||{}).seqId); nm=(q&&q.name)||''; }catch(e){}
+      return '<span class="tag" style="border-color:'+m.c+';color:'+m.c+'" title="'+esc(nm||m.lbl)+'">'+m.ic+' '+m.lbl+'</span>'+
+        (s.n?' <span class="tsub">'+s.step+'/'+s.n+'</span>':''); }},
   acct:{k:'acct',t:'Account',val:_acctName,cell:c=>'<span class="tsub">'+esc(_acctName(c))+'</span>'},
   cuisine:{k:'cuisine',t:'Cuisine',val:_acctCuisine},
   email:{k:'email',t:'Email',val:c=>((c.email||'')+' '+(c.email2||'')).trim(),cell:c=>'<span class="tsub">'+esc(c.email||'')+(c.email2?'<br><span style="opacity:.65">'+esc(c.email2)+'</span>':'')+'</span>'},
@@ -3477,11 +3512,11 @@ const aiLine=txt=>'<div style="border:1px solid var(--bd);border-left:3px solid 
 const LEAD_COLS=[COL.warmth,COL.name,COL.acct,COL.phone,COL.status,COL.next];
 const CONTACT_COLS=[COL.warmth,COL.name,COL.acct,COL.email,COL.phone,COL.status];
 /* ---- customizable columns ---- */
-const CONTACT_REG=[COL.warmth,COL.heat,COL.intent,COL.tier,COL.name,COL.owner,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.score,COL.angle,COL.last,COL.lastcall,COL.sent,COL.open,COL.opens,COL.dispo,COL.callnote,COL.assigned,COL.next];
+const CONTACT_REG=[COL.warmth,COL.heat,COL.intent,COL.tier,COL.name,COL.owner,COL.title,COL.acct,COL.cuisine,COL.email,COL.phone,COL.mobile,COL.status,COL.cad,COL.score,COL.angle,COL.last,COL.lastcall,COL.sent,COL.open,COL.opens,COL.dispo,COL.callnote,COL.assigned,COL.next];
 const COLDEF={ leads:['warmth','name','acct','phone','status','next'],
   hotlist:['tier','heat','intent','name','owner','acct','phone','lastcall','open','opens','dispo'],
   hotlist2:['tier','heat','intent','name','owner','acct','phone','lastcall','open','opens','dispo'],
-  contacts:['warmth','tier','intent','name','owner','acct','email','phone','status','opens'] };
+  contacts:['warmth','tier','intent','name','owner','acct','email','phone','status','cad','opens'] };
 function colReg(v){ return (v==='accounts'||v==='closed'||v==='live')?A_COLS:CONTACT_REG; }
 function chosenCols(v){
   const reg=colReg(v); const saved=(store.__cols&&store.__cols[v])||COLDEF[v]||reg.map(c=>c.k);
@@ -3493,7 +3528,7 @@ function chosenCols(v){
    isn't in their list. Saad has a saved accounts layout, so "Locations" would have shipped to
    him switched off with no way to discover it. Add genuinely new keys once, in place, and leave
    every deliberate choice alone; the flag means a column he then hides stays hidden. */
-const COL_ADDITIONS={accounts:[['sibs','fit']]};   // [newKey, insertAfterKey]
+const COL_ADDITIONS={accounts:[['sibs','fit'],['cad','sibs']],contacts:[['cad','status']]};   // [newKey, insertAfterKey]
 function migrateCols(){ const c=store.__cols; if(!c) return 0; let n=0;
   Object.keys(COL_ADDITIONS).forEach(v=>{ const cur=c[v]; if(!Array.isArray(cur)) return;
     COL_ADDITIONS[v].forEach(([k,after])=>{
@@ -3527,6 +3562,7 @@ function prefilter(list){ return list.filter(c=>{
     if(UI.opens.has('none')&&op) return false; }
   if(UI.owner.size){ const own=isOwner(c); if(UI.owner.has('own')&&!own) return false; if(UI.owner.has('non')&&own) return false; }
   if(UI.assignee.size){ const who=c.assignee||''; const ok=(UI.assignee.has('__none')&&!who)||(who&&UI.assignee.has(who)); if(!ok) return false; }
+  if(UI.cad.size&&!UI.cad.has(seqState(c).k)) return false;
   if((UI.pos.size||UI.cuisine.size||UI.hours.size||UI.tier.size)&&!matchPosCui(acct(c.accountId))) return false;
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.email2||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
@@ -5484,6 +5520,38 @@ function seqPaused(c){ const s=c&&c.emailSeq; return !!(s&&s.paused&&!s.done); }
 function onCallStep(c){ const s=c&&c.emailSeq; if(!s||s.done||s.paused) return false;
   const def=cadDefFor(c); if(!def||!def.length) return false;
   const st=def[Math.min(Math.max(+s.step||1,1),def.length)-1]; return stepKind(st)==='call'; }
+/* Saad: "would be cool to see if an account or a contact is in a cadence, not in a cadence."
+   Until now the ONLY way to know was to open the drawer, so a table of 2,400 names gave no clue
+   which ones were already being worked — and that is exactly how you re-enrol someone Embert is
+   already emailing. One state function, read by a column on both tables and by a filter chip.
+   'none' is the answer he actually wants most: it is the untouched inventory. */
+const CAD_META={ active:{lbl:'In cadence', ic:'▶', c:'var(--ok,#4ade80)'},
+                 call  :{lbl:'Call step',  ic:'📞', c:'var(--warm,#fbbf24)'},
+                 paused:{lbl:'Paused',     ic:'⏸', c:'var(--mut,#8b93a7)'},
+                 fizzled:{lbl:'Fizzled',   ic:'💤', c:'var(--mut,#8b93a7)'},
+                 done  :{lbl:'Finished',   ic:'✓', c:'var(--mut,#8b93a7)'},
+                 none  :{lbl:'Not in cadence', ic:'—', c:'var(--mut,#8b93a7)'} };
+function seqState(c){
+  const s=c&&c.emailSeq;
+  if(!s) return {k:'none',step:0,n:0};
+  const n=cadNFor(c)||0, step=Math.min(Math.max(+s.step||1,1),n||99);
+  if(s.done) return {k:s.fizzled?'fizzled':'done',step:step,n:n};
+  if(s.paused) return {k:'paused',step:step,n:n};
+  return {k:onCallStep(c)?'call':'active',step:step,n:n};
+}
+// An ACCOUNT is "in a cadence" if any of its people are. Reports the strongest state its
+// contacts are in, plus how many of them — "2/5 in cadence" is the useful shape.
+function acctCad(a){
+  if(!a) return {k:'none',live:0,total:0};
+  const cs=contactsOf(a.id).filter(x=>!x.internal);
+  if(!cs.length) return {k:'nocontacts',live:0,total:0};
+  const RANK=['none','done','fizzled','paused','active','call'];
+  let best='none',live=0;
+  cs.forEach(x=>{ const k=seqState(x).k;
+    if(k==='active'||k==='call') live++;
+    if(RANK.indexOf(k)>RANK.indexOf(best)) best=k; });
+  return {k:best,live:live,total:cs.length};
+}
 // A sequence is an INDIVIDUAL working list: a contact in a sequence belongs to whoever RUNS its
 // cadence — the sequence OWNER (seqStarter: emailSeq.owner → start-log author → assignee), NOT just
 // whoever the contact record is assigned to. This is what keeps another rep's cadence (e.g. one whose
@@ -7226,6 +7294,15 @@ const A_COLS=[
        ' title="'+esc(f.locsSure?'Same brand elsewhere in your book — one conversation can cover all of them'
          :'Looks like the same brand (matched on the name) — worth checking before you pitch it as a group')+
        '">🏢 '+(n+1)+(f.locsSure?'':'?')+'</span>'; }},
+  /* Account-level roll-up of the same signal. "2/5" is the shape that matters — it says someone
+     is being worked here AND that three people at this account are still untouched. */
+  {k:'cad',t:'Cadence',val:a=>{const s=acctCad(a);return ({call:1,active:2,paused:3,fizzled:4,done:5}[s.k]||6)*1000-s.live;},
+   cell:a=>{ const s=acctCad(a);
+     if(s.k==='nocontacts') return '<span class="tsub">no contacts</span>';
+     if(s.k==='none') return '<span class="tsub">— none of '+s.total+'</span>';
+     const m=CAD_META[s.k]||CAD_META.none;
+     return '<span class="tag" style="border-color:'+m.c+';color:'+m.c+'" title="'+esc(m.lbl)+'">'+m.ic+' '+
+       (s.live?s.live+'/'+s.total:m.lbl)+'</span>'; }},
   {k:'cuisine',t:'Cuisine',val:a=>a.cuisine||''},
   {k:'loc',t:'Location',val:a=>[a.city,a.state].filter(Boolean).join(', ')},
   {k:'address',t:'Address',val:a=>a.address||''},
@@ -7240,17 +7317,17 @@ const A_COLS=[
   {k:'source',t:'Source',val:a=>a.source||''},
   {k:'assigned',t:'Assigned to',val:a=>a.assignee||'',cell:a=>a.assignee?'<span class="tag">'+esc(a.assignee)+'</span>':'<span class="tsub">—</span>'}
 ];
-COLDEF.accounts=['name','tier','fit','sibs','loc','pos','delivery','contacts','type'];
+COLDEF.accounts=['name','tier','fit','sibs','cad','loc','pos','delivery','contacts','type'];
 COLDEF.closed=['name','onboard','pos','contacts','mrr'];
 COLDEF.live=['name','onboard','mrr','pos','contacts'];
 function renderAccounts(){
-  let recs=activeAccts().filter(a=>matchLoc(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')+' '+(a.state||'')));
+  let recs=activeAccts().filter(a=>matchLoc(a)&&matchCadA(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')+' '+(a.state||'')));
   if(!(TSORT.accounts&&TSORT.accounts.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('accounts',chosenCols('accounts'),recs,r=>"openAccount('"+r.id+"')");
   el('view-accounts').innerHTML='<div class="panel"><div class="ph"><h3>Accounts</h3><span class="sub">'+t.count+' active prospects — customers live on the Closed / Live tabs</span>'+colMenu('accounts')+'</div>'+t.html+'</div>'; restoreFlt();
 }
 function renderClosed(){
-  let recs=closedAccts().filter(a=>matchLoc(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')));
+  let recs=closedAccts().filter(a=>matchLoc(a)&&matchCadA(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')));
   if(!(TSORT.closed&&TSORT.closed.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('closed',chosenCols('closed'),recs,r=>"openAccount('"+r.id+"')");
   el('view-closed').innerHTML='<div class="panel"><div class="ph"><h3>Closed Won</h3><span class="sub">'+t.count+' closed — set Onboarding to “Live” once onboarded</span>'+colMenu('closed')+'</div>'+t.html+'</div>'; restoreFlt();
@@ -7282,7 +7359,7 @@ function liveDash(){
     '</div></div></div>';
 }
 function renderLive(){
-  let recs=liveAccts().filter(a=>matchLoc(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')));
+  let recs=liveAccts().filter(a=>matchLoc(a)&&matchCadA(a)&&matchPosCui(a)&&matchQ(a.name+' '+(a.city||'')));
   if(!(TSORT.live&&TSORT.live.key)) recs.sort((a,b)=>a.name.localeCompare(b.name));
   const t=dataTable('live',chosenCols('live'),recs,r=>"openAccount('"+r.id+"')");
   el('view-live').innerHTML=liveDash()+'<div class="panel"><div class="ph"><h3>Live Accounts</h3><span class="sub">'+t.count+' onboarded & running</span>'+colMenu('live')+'</div>'+t.html+'</div>'; restoreFlt();
