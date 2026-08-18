@@ -593,7 +593,12 @@ small.hint{color:var(--dim);font-size:11px}
   <div class="df" id="drawer-foot"></div>
 </div>
 
-<button id="taskfab" onclick="toggleTaskWidget()" title="Tasks">✅<span id="taskfab-badge">0</span></button>
+<!-- Ships HIDDEN. The markup used to hard-code a literal 0 and the CSS paints this display:flex, so a
+     red "0" bubble was painted at first render and stayed until something happened to call
+     renderTaskWidget() — a notification badge, with nothing in it, that you cannot clear by clicking
+     it. Saad: "i still get the notification even if theres nothing there idk why". renderTaskWidget
+     sets display itself on every pass, so hiding it here costs nothing when there IS work. -->
+<button id="taskfab" onclick="toggleTaskWidget()" title="Tasks">✅<span id="taskfab-badge" style="display:none"></span></button>
 <div id="taskwidget">
   <div class="tw-head"><h3>✅ Tasks</h3><button class="tw-x" onclick="toggleTaskWidget(false)">×</button></div>
   <div class="tw-body" id="taskwidget-body"></div>
@@ -621,7 +626,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z181';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z182';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -2777,7 +2782,17 @@ function claimLegacyTasks(){ let n=0;
     if(own){ t.by=own; n++; } });
   if(n){ try{ stampU&&stampU(); }catch(e){} save(); }
   return n; }
-function openTaskCount(){ return tasks().filter(t=>!t.done&&taskMine(t)).length; }
+/* Saad, again: "i still get the notification even if theres nothing there idk why".
+   Same structural bug the 🔔 had in z181, in the other widget — and the same fix, because the cause
+   was never the numbers, it was TWO COUNTS OF THE SAME THING. This counted every open task of mine;
+   taskWidgetInner() deliberately draws only overdue + due-today and parks future-dated steps under
+   "Upcoming" (a cadence email due Thursday is not work you can do now). So a future-dated step
+   scored a badge and then rendered nothing you could clear by looking at it.
+   Measured on the live book: 458 open tasks, 453 due today or overdue, 5 future-dated — a badge of
+   5 over an empty dashboard. Now it counts THE ROWS THE WIDGET WILL ACTUALLY DRAW, so the two
+   cannot drift again regardless of how either filter changes later. */
+function openTaskCount(){ const end=today0().getTime()+864e5;
+  return tasks().filter(t=>!t.done&&taskMine(t)&&+t.due<end).length; }
 let twFilter='all';
 function setTwFilter(f){ twFilter=f; renderTaskWidget(); }
 let twSort='due';  // 'due' = soonest first · 'step' = batch by email step (1,2,3…)
@@ -4056,7 +4071,11 @@ function noteDial(cid){ const c=contact(cid); if(!c) return;
   // button. Same attempt either way, so a second tap inside two minutes just refreshes the clock.
   if(Date.now()-(+c.lastDialAt||0) < 2*60000){ c.lastDialAt=Date.now(); save(); return; }
   c.lastDialAt=Date.now(); c.dialCount=(+c.dialCount||0)+1;
-  bumpDial();                                  // counted here, inside the dedupe, so it matches real attempts
+  // The debt releaseStalledCalls() recorded is paid the moment the phone actually rings. Clearing it
+  // here (not on the disposition) is deliberate: he owes the ATTEMPT, not an outcome, and gating it
+  // on a dispo would keep re-serving people he has already rung — the exact pile-up of z176.
+  if(c.owedCall) delete c.owedCall;
+  bumpDial();                                // counted here, inside the dedupe, so it matches real attempts
   try{ stampU(c); }catch(e){}
   save(); }
 /* How long a number rests before the queue offers it back.
@@ -5472,6 +5491,420 @@ Either way, appreciate your time and I hope {{company}} is having a strong seaso
 Best,
 Saad`},
  ]},
+
+/* ===== z182 · VERTICAL OUTREACH CADENCES — from Saad's "Shipday Vertical Outreach Cadences" playbook.
+   Six plays, one per cuisine vertical, 5 emails on days 1/3/6/10/15 with calls on days 1, 6 and 15.
+   🔑 The call steps are AUTHORED HERE, not auto-interleaved. withCallSteps() only injects calls into a
+   play that has none, and it injects one after EVERY email — which would give 5 calls, not the 3 the
+   playbook specifies. Writing them explicitly is what pins the schedule to the doc.
+   `d` is DAYS AFTER THE PRIOR STEP (see ensureEmailTask ~6004), so the day-1/3/6/10/15 schedule is
+   0,0,2,3,0,4,5,0 — the zeros are the same-day call that rides along with that morning's email.
+   Sign-off stays "{{rep}}" so applySig() swaps in whoever is actually sending; the playbook's literal
+   "Saad" would put his name at the bottom of Embert's mail. ===== */
+
+ {id:'v-pizza', name:'Pizza — vertical', match:'pizza', steps:[
+  {d:0,type:'new',label:'Email 1 — Ohio pizza trends',subj:"Pizza delivery trends in Ohio",body:`Hey {{first_name}},
+
+We work with pizza brands like Romeo's and Zeppe's, and the pattern across Ohio is clear: the shops growing delivery long term have a strong direct channel outside of DoorDash and Uber Eats.
+
+Third-party marketplaces are useful for discovery. But when a regular customer already knows {{company}}, it makes no sense to give away 20-30% every time they reorder.
+
+Shipday lets customers order through your existing website or POS and automatically dispatches a third-party driver when needed. You keep the order direct without having to build a full driver fleet.
+
+If growing direct delivery is on your radar, pick any time from the calendar link in my signature and I'll map it to {{company}}.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 1 — same day as Email 1',body:`Dial {{first_name}} at {{company}}. Opener: pizza is the strongest fit we have — Romeo's and Zeppe's run direct delivery alongside the marketplaces. Ask who's handling delivery today and how much repeat business goes through {{apps}}. Go for 15 minutes. No answer? Short voicemail, try the alternate line.`},
+  {d:2,type:'new',label:'Email 2 — not a marketplace',subj:"DoorDash without the marketplace",body:`Hey {{first_name}},
+
+Quick clarification because this is where Shipday sometimes gets misunderstood.
+
+We're not another marketplace where customers go to find your restaurant.
+
+The customer orders directly from {{company}} through your website or POS. Shipday then dispatches a DoorDash or Uber Eats driver and sends branded tracking updates to the customer.
+
+To the customer, it feels like {{company}} delivery from checkout to the doorstep. To your team, it is reliable driver coverage without building a fleet.
+
+If you want to see that flow end to end, grab any time that works from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:3,type:'new',label:'Email 3 — Romeo\'s & Zeppe\'s proof',subj:"What Romeo's and Zeppe's have in common",body:`Hey {{first_name}},
+
+Romeo's and Zeppe's understand something important about pizza delivery: a marketplace may bring the first order, but repeat customers should have a reason to order directly from the restaurant.
+
+Shipday helps make that direct channel reliable with in-house and third-party drivers in one system, automatic dispatch, branded live tracking, text updates, issue resolution, and customer feedback capture.
+
+The goal is not to remove DoorDash or Uber Eats. It is to stop paying marketplace commission every time an existing customer wants pizza.
+
+To compare this with your current setup, book a time through the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 2 — same day as Email 3',body:`Second dial to {{first_name}} at {{company}}. Reference the Romeo's / Zeppe's note. Ask what percentage of their delivery volume is repeat customers — that's the number the whole pitch turns on. Book 15 minutes.`},
+  {d:4,type:'new',label:'Email 4 — the math',subj:"The math on five pizza orders",body:`Hey {{first_name}},
+
+Five $30 pizza orders per day equals roughly $4,500 in monthly sales.
+
+At a 20% marketplace commission, that is about $900 per month tied up in marketplace fees.
+
+If those repeat customers order direct, the restaurant can keep more of that revenue and still dispatch a third-party driver when needed.
+
+The point is not to eliminate the marketplaces. It is to avoid paying customer-acquisition fees forever on customers who already know {{company}}.
+
+If the math is worth exploring, pick a time from my calendar below and we'll plug in your actual volume.
+
+Best,
+{{rep}}`},
+  {d:5,type:'new',label:'Email 5 — breakup',subj:"Direct delivery at {{company}}",body:`Hey {{first_name}},
+
+I'm not sure if building up direct delivery is a priority for {{company}} right now.
+
+I reached out because we're already helping pizza brands like Romeo's and Zeppe's use marketplaces for discovery while giving their regular customers a better way to order direct.
+
+You keep the customer and the order. We handle the driver dispatch, tracking, and delivery experience behind the scenes.
+
+If it's worth a look, my calendar is in the signature below. If not, reply 'not a priority' and I'll close the loop.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 3 — final attempt',body:`Final dial to {{first_name}} at {{company}}. Breakup email just went out. If you reach them, ask straight out whether direct delivery is on the roadmap this year — a clean no is worth more than another 15 days of silence. No answer: mark the outcome and let the play close.`},
+ ]},
+
+ {id:'v-burger', name:'Burgers — vertical', match:'burger', steps:[
+  {d:0,type:'new',label:'Email 1 — Ohio burger trends',subj:"Burger delivery trends in Ohio",body:`Hey {{first_name}},
+
+The burger concepts growing off-premise sales in Ohio tend to have one thing in common: they make it easy for regular customers to order direct instead of sending every repeat order through a marketplace.
+
+DoorDash and Uber Eats can be useful for discovery. But when a customer already knows {{company}}, the direct channel is where you keep the customer, control the experience, and protect more of the margin.
+
+Shipday connects with your existing online ordering system and dispatches a third-party driver behind the scenes when needed. No full-time fleet required.
+
+If you want to see what that could look like for {{company}}, pick a time from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 1 — same day as Email 1',body:`Dial {{first_name}} at {{company}}. Angle: repeat local demand. Ask how much of their delivery is regulars vs new customers, and what they're paying {{apps}} on those repeats. Go for 15 minutes.`},
+  {d:2,type:'new',label:'Email 2 — no new drivers',subj:"Direct delivery without more drivers",body:`Hey {{first_name}},
+
+A lot of burger operators avoid direct delivery because they assume it means recruiting, scheduling, and managing more drivers.
+
+That is the piece Shipday removes.
+
+Customers order directly from {{company}}, then Shipday automatically dispatches a DoorDash or Uber Eats driver to the restaurant. You can also use your own drivers when available and manage everything in the same place.
+
+You get the flexibility of a third-party fleet without giving the marketplace the order.
+
+To see how the model would fit your current ordering setup, grab a time from my calendar in the signature below.
+
+Best,
+{{rep}}`},
+  {d:3,type:'new',label:'Email 3 — delivery experience',subj:"The delivery experience matters",body:`Hey {{first_name}},
+
+With burgers, the delivery experience decides whether someone orders again. Cold fries, an uncertain ETA, or no way to reach the driver still reflects on the restaurant, even when someone else handled the delivery.
+
+Shipday gives customers branded live tracking, automatic text updates, an accurate ETA, and the ability to contact the driver directly. Your team can also see every delivery in one dashboard and resolve issues quickly.
+
+It makes direct delivery feel as dependable as the marketplace, while keeping {{company}} front and center.
+
+If you want to see the customer experience for yourself, book a walkthrough through the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 2 — same day as Email 3',body:`Second dial to {{first_name}} at {{company}}. Reference the delivery-experience note. Ask whether they get complaints about cold food or late orders on marketplace deliveries — that's the wedge. Book 15 minutes.`},
+  {d:4,type:'new',label:'Email 4 — the math',subj:"The math on five burger orders",body:`Hey {{first_name}},
+
+Five $25 burger orders per day equals roughly $3,750 in monthly sales.
+
+At a 20% marketplace commission, that is about $750 per month in marketplace fees.
+
+Moving even that small amount of repeat business to a direct channel gives the restaurant far more control over the margin and the customer relationship. A third-party driver can still fulfill every order.
+
+If you want to run the same math using {{company}}'s actual volume, pick a time from my calendar below.
+
+Best,
+{{rep}}`},
+  {d:5,type:'new',label:'Email 5 — breakup',subj:"Burger delivery at {{company}}",body:`Hey {{first_name}},
+
+I've reached out a few times because {{company}} looked like a strong fit for direct delivery.
+
+The model is simple: use the marketplaces to get discovered, give regular customers an easier way to order directly, and use DoorDash or Uber Eats drivers behind the scenes when you need coverage.
+
+If off-premise growth is not a focus right now, no problem.
+
+If it's worth a look, my calendar is in the signature below. If not, reply 'not a priority' and I'll close the loop.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 3 — final attempt',body:`Final dial to {{first_name}} at {{company}}. Breakup email just went out. Ask directly whether off-premise growth is a priority this year. A clean no closes the loop cleanly.`},
+ ]},
+
+ {id:'v-asian', name:'Sushi & Asian — vertical', match:'sushi|asian|japanese|chinese|thai|ramen|hibachi', steps:[
+  {d:0,type:'new',label:'Email 1 — Ohio Asian trends',subj:"Delivery trends for Asian restaurants in Ohio",body:`Hey {{first_name}},
+
+The sushi and Asian restaurants growing delivery in Ohio tend to have one thing in common: they're building a direct channel alongside the marketplaces.
+
+These restaurants already tend to have strong takeout demand, loyal repeat customers, and higher average tickets. That makes paying a percentage of every repeat order to a marketplace especially expensive.
+
+Shipday lets customers order through your existing website or POS, then dispatches a DoorDash or Uber Eats driver when needed. The order stays direct without requiring your own fleet.
+
+If you want to see how this could work for {{company}}, pick a time from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 1 — same day as Email 1',body:`Dial {{first_name}} at {{company}}. Angle: high average ticket. Ask their typical delivery order size — on a $60 ticket a 20% commission is $12 before anyone drives anywhere. Go for 15 minutes.`},
+  {d:2,type:'new',label:'Email 2 — high-ticket orders',subj:"High-ticket orders should stay direct",body:`Hey {{first_name}},
+
+A 20% commission on a $60 sushi or family-style order is $12 before the delivery is even considered. When the customer already knows the restaurant, that is a costly way to process a repeat order.
+
+With Shipday, the guest orders directly from {{company}}. We handle driver dispatch, live tracking, and customer updates in the background.
+
+You keep the customer relationship and more of the order value without hiring drivers.
+
+If growing direct ordering is on your radar, grab a time from my calendar below and I'll show you the full flow.
+
+Best,
+{{rep}}`},
+  {d:3,type:'new',label:'Email 3 — drivers vs marketplace',subj:"Third-party drivers, direct customers",body:`Hey {{first_name}},
+
+The driver and the marketplace do not have to be the same thing.
+
+Customers can order from {{company}} through your existing online ordering channel. Shipday then sends a DoorDash or Uber Eats driver, provides branded live tracking, and keeps the customer updated automatically.
+
+Your staff can manage deliveries, communicate with drivers, resolve issues, and keep the customer data in one place.
+
+It is the convenience of third-party fulfillment without handing over the customer.
+
+To see how this would fit your current setup, book a time through the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 2 — same day as Email 3',body:`Second dial to {{first_name}} at {{company}}. Make the split concrete: they can keep using DoorDash drivers and stop paying DoorDash the commission on their own regulars. Book 15 minutes.`},
+  {d:4,type:'new',label:'Email 4 — the math',subj:"The math on three sushi orders",body:`Hey {{first_name}},
+
+Three $50 orders per day equals roughly $4,500 in monthly sales.
+
+At a 20% marketplace commission, that is about $900 per month in marketplace fees.
+
+If those are repeat customers who already know {{company}}, moving only that volume direct can create a meaningful difference. The deliveries can still be fulfilled by DoorDash or Uber Eats drivers.
+
+If the math is worth exploring, pick a time from my calendar below and we'll use your actual numbers.
+
+Best,
+{{rep}}`},
+  {d:5,type:'new',label:'Email 5 — breakup',subj:"Direct delivery at {{company}}",body:`Hey {{first_name}},
+
+I'm not sure if improving direct delivery is a priority for {{company}} right now.
+
+I reached out because sushi and Asian restaurants usually have exactly what makes this model work: loyal customers, frequent takeout orders, and enough ticket value for marketplace commission to add up quickly.
+
+If the timing is off, reply 'not a priority' and I'll close the loop. If it is worth a look, my calendar is in the signature below.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 3 — final attempt',body:`Final dial to {{first_name}} at {{company}}. Breakup email just went out. Ask whether direct ordering is on the roadmap. Take the clean no if that's the answer.`},
+ ]},
+
+ {id:'v-bbq', name:'BBQ — vertical (Terry Black\'s proof)', match:'bbq|barbecue|smokehouse', steps:[
+  {d:0,type:'new',label:'Email 1 — Ohio BBQ trends',subj:"BBQ delivery trends in Ohio",body:`Hey {{first_name}},
+
+We work with Terry Black's across its Texas locations. The reason BBQ is such a strong fit for direct delivery is simple: family meals, large group orders, and catering make every percentage point matter.
+
+Marketplaces can help with discovery. But when a customer already knows {{company}}, sending the repeat order through a 20-30% commission channel becomes expensive quickly.
+
+Shipday lets customers order directly from your existing website or POS, then dispatches the right delivery provider behind the scenes.
+
+If you want to see what that could look like for {{company}}, pick a time from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 1 — same day as Email 1',body:`Dial {{first_name}} at {{company}}. Lead with Terry Black's. Ask whether they do catering and how those orders get delivered today — catering is usually the fastest yes in BBQ. Go for 15 minutes.`},
+  {d:2,type:'new',label:'Email 2 — Terry Black\'s',subj:"Terry Black's and direct delivery",body:`Hey {{first_name}},
+
+We support Terry Black's across its locations in Texas with the delivery side of its direct operation.
+
+BBQ is not a low-ticket impulse category. A family pack or catering order can be worth hundreds of dollars, and the restaurant should not have to give up a percentage of the food sale just to find a driver.
+
+With Shipday, the order stays with {{company}}. We handle the dispatch, branded tracking, customer updates, and delivery management behind the scenes.
+
+To see the model end to end, grab any time that works from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:3,type:'new',label:'Email 3 — catering',subj:"Catering without the delivery headache",body:`Hey {{first_name}},
+
+For BBQ restaurants, everyday delivery is only part of the opportunity. Catering and large scheduled orders are where driver reliability matters even more.
+
+Shipday can route standard orders to DoorDash or Uber Eats drivers while helping larger catering orders get fulfilled through specialized catering delivery providers. Your team manages the order, driver, tracking, and customer communication from one place.
+
+That means you can grow catering without turning the restaurant staff into a delivery department.
+
+If catering delivery is still taking too much staff time, book a walkthrough through the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 2 — same day as Email 3',body:`Second dial to {{first_name}} at {{company}}. Catering angle. Ask who currently drives their catering orders and what happens when that person calls off. Book 15 minutes.`},
+  {d:4,type:'new',label:'Email 4 — the math',subj:"The math on one catering order",body:`Hey {{first_name}},
+
+One $500 catering order per week equals roughly $2,000 in monthly sales.
+
+At a 20% marketplace commission, that is about $400 per month on only four orders.
+
+Keeping those orders direct gives {{company}} more control over the margin and the customer relationship. Shipday can still coordinate the driver and delivery experience separately.
+
+That is before accounting for everyday family and individual delivery orders.
+
+If the math is worth exploring, pick a time from my calendar below and we'll use your actual catering volume.
+
+Best,
+{{rep}}`},
+  {d:5,type:'new',label:'Email 5 — breakup',subj:"Direct delivery at {{company}}",body:`Hey {{first_name}},
+
+I reached out because BBQ restaurants tend to have the right mix for direct delivery: loyal local customers, larger average tickets, family orders, and catering.
+
+We're already supporting Terry Black's across its Texas locations with this model, and {{company}} looked like it could benefit from a similar setup.
+
+If delivery growth is not a focus right now, no problem.
+
+If it's worth a look, my calendar is in the signature below. If not, reply 'not a priority' and I'll close the loop.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 3 — final attempt',body:`Final dial to {{first_name}} at {{company}}. Breakup email just went out. Ask about catering one more time — it's the highest-value reason for them to say yes. Otherwise take the no.`},
+ ]},
+
+ {id:'v-bar', name:'Bars & Grills — vertical', match:'bar|grill|pub|tavern|brewery|wings', steps:[
+  {d:0,type:'new',label:'Email 1 — Ohio bars & grills',subj:"Delivery trends for Ohio bars and grills",body:`Hey {{first_name}},
+
+Many Ohio bars and grills already have the hard part: a loyal local following. What they often don't have is a strong direct delivery operation behind it.
+
+When regular customers want wings, burgers, or dinner at home, the marketplace often owns the order even though the restaurant already earned the customer.
+
+Shipday lets guests order directly through your existing website or POS and dispatches a DoorDash or Uber Eats driver when needed. No full-time fleet and no marketplace commission on the food sale.
+
+If you want to see what this could look like for {{company}}, pick a time from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 1 — same day as Email 1',body:`Dial {{first_name}} at {{company}}. Angle: game days and weekend spikes. Ask what their busiest off-premise night looks like and whether they can staff drivers for it. Go for 15 minutes.`},
+  {d:2,type:'new',label:'Email 2 — no added payroll',subj:"Delivery without adding drivers",body:`Hey {{first_name}},
+
+A lot of bars and grills hold off on direct delivery because it sounds like more payroll, more schedules, and another part of the operation to manage.
+
+Shipday removes that hurdle.
+
+Customers order directly from {{company}}. Shipday sends an available third-party driver, tracks the delivery, updates the customer, and gives your team one place to manage the order.
+
+You can add a direct delivery channel without adding a permanent driver fleet.
+
+To see how this would fit your current operation, grab a time from my calendar in the signature below.
+
+Best,
+{{rep}}`},
+  {d:3,type:'new',label:'Email 3 — game day',subj:"Game-day delivery at {{company}}",body:`Hey {{first_name}},
+
+Game days, Friday nights, and bad weather can create a rush of off-premise demand. A fixed driver fleet is difficult because you either have too many drivers on slow nights or not enough when demand spikes.
+
+Shipday gives {{company}} flexible coverage. Orders flow in from your direct channel, a driver is dispatched when needed, and customers receive branded live tracking and updates.
+
+You can capture the busy nights without carrying the same labor cost every day.
+
+If flexible coverage would help during your peak periods, book a walkthrough through the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 2 — same day as Email 3',body:`Second dial to {{first_name}} at {{company}}. Game-day angle. Ask what happens on a Saturday when orders spike and they have one driver. Book 15 minutes.`},
+  {d:4,type:'new',label:'Email 4 — the math',subj:"The math on five direct orders",body:`Hey {{first_name}},
+
+Five $35 orders per day equals roughly $5,250 in monthly sales.
+
+At a 20% marketplace commission, that is about $1,050 per month in marketplace fees.
+
+If those are customers who already know {{company}}, shifting even that small amount of volume direct can make off-premise sales far more valuable. You can still use a third-party driver for the delivery.
+
+If you want to run this against your current numbers, pick a time from my calendar below.
+
+Best,
+{{rep}}`},
+  {d:5,type:'new',label:'Email 5 — breakup',subj:"Off-premise sales at {{company}}",body:`Hey {{first_name}},
+
+I reached out because {{company}} already appears to have the local presence needed to make direct delivery work. The missing piece for many bars and grills is simply reliable fulfillment.
+
+Shipday gives regular customers a way to order direct while letting the restaurant use DoorDash or Uber Eats drivers behind the scenes whenever coverage is needed.
+
+If off-premise growth is not a priority right now, I can close the loop.
+
+If it is, my calendar is in the signature below. Pick any time that works and I'll map it to {{company}}.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 3 — final attempt',body:`Final dial to {{first_name}} at {{company}}. Breakup email just went out. Ask whether off-premise is a priority this year and take the answer either way.`},
+ ]},
+
+ {id:'v-latin', name:'Latin — vertical', match:'mexican|latin|taco|taqueria|caribbean|peruvian|cuban', steps:[
+  {d:0,type:'new',label:'Email 1 — Ohio Latin trends',subj:"Delivery trends for Latin restaurants in Ohio",body:`Hey {{first_name}},
+
+The Latin restaurants growing delivery in Ohio tend to have the same foundation: loyal local customers, strong takeout demand, and larger family or group orders.
+
+Marketplaces can help new customers discover {{company}}. But when a regular already knows your restaurant, giving away 20-30% on every reorder gets expensive quickly.
+
+Shipday lets customers order through your existing website or POS, then automatically dispatches a DoorDash or Uber Eats driver when needed. The order stays direct without requiring you to build a full driver fleet.
+
+If you want to see what that could look like for {{company}}, pick a time from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 1 — same day as Email 1',body:`Dial {{first_name}} at {{company}}. Angle: loyal regulars and family-size orders. Ask how many of their delivery orders are repeat customers. Go for 15 minutes.`},
+  {d:2,type:'new',label:'Email 2 — regulars order direct',subj:"Your regulars should order direct",body:`Hey {{first_name}},
+
+A marketplace may introduce someone to {{company}}. It should not own that customer forever.
+
+Your regulars are coming back for your food, not for the marketplace. Shipday gives them the same convenience through your direct channel: online checkout, professional delivery, branded live tracking, and automatic text updates.
+
+You keep the customer data, the branded experience, and more of the order value. The driver can still come from DoorDash or Uber Eats.
+
+To see the flow end to end, grab any time that works from the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:3,type:'new',label:'Email 3 — family & catering',subj:"Family orders without the delivery headache",body:`Hey {{first_name}},
+
+Family meals, party trays, office lunches, and catering can turn one order into hundreds of dollars. That also makes reliable delivery and communication far more important.
+
+Shipday gives {{company}} one place to dispatch the right driver, monitor the order, send branded tracking, update the customer, and resolve an issue before it becomes a bad review.
+
+Your team can grow direct and catering orders without turning the restaurant into a delivery department.
+
+If larger orders are still difficult to fulfill, book a walkthrough through the calendar link in my signature.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 2 — same day as Email 3',body:`Second dial to {{first_name}} at {{company}}. Family and catering angle — party trays and office lunches. Ask how those get delivered today. Book 15 minutes.`},
+  {d:4,type:'new',label:'Email 4 — the math',subj:"The math on five direct orders",body:`Hey {{first_name}},
+
+Five $35 orders per day equals roughly $5,250 in monthly sales.
+
+At a 20% marketplace commission, that is about $1,050 per month in marketplace fees.
+
+If those are regular customers who already know {{company}}, moving even that small amount of volume direct can make a meaningful difference. A DoorDash or Uber Eats driver can still handle the delivery.
+
+If you want to run the same math using your actual numbers, pick a time from my calendar below.
+
+Best,
+{{rep}}`},
+  {d:5,type:'new',label:'Email 5 — breakup',subj:"Direct delivery at {{company}}",body:`Hey {{first_name}},
+
+I reached out because {{company}} looks like the kind of restaurant that could benefit from a stronger direct delivery channel: loyal customers, repeat takeout demand, and larger family or catering orders.
+
+The model is simple. Use marketplaces for discovery, give regulars an easier way to order direct, and dispatch third-party drivers behind the scenes when coverage is needed.
+
+If it is worth a look, my calendar is in the signature below. If not, reply 'not a priority' and I'll close the loop.
+
+Best,
+{{rep}}`},
+  {d:0,type:'call',label:'Call 3 — final attempt',body:`Final dial to {{first_name}} at {{company}}. Breakup email just went out. Ask whether direct delivery is on the roadmap and take the clean no if that's the answer.`},
+ ]},
 ];
 // A step's KIND drives how it's worked: 'email' (new/reply — sent + tracked), 'call' (dial + log),
 // 'task' (any manual to-do). 'new'/'reply' are email subtypes; reply threads onto the prior email.
@@ -5584,7 +6017,22 @@ function seqLib(){ const ov=myLib();
     :Object.assign({},q,{steps:withCallSteps(q.steps)})); }                          // every other play gets calls interleaved
 function seqById(id){ if(id==='custom'){ const cu=myCad(); return (Array.isArray(cu)&&cu.length)?{id:'custom',name:'Custom (your pasted copy)',steps:cu}:null; } return seqLib().find(q=>q.id===id)||null; }
 // Suggest the play that matches the account's stack; rep can always override in the picker.
+/* z182 · CUISINE ROUTES FIRST. The vertical plays open with proof from the prospect's own category
+   ("we work with pizza brands like Romeo's and Zeppe's"), which beats a POS angle as a first line —
+   the POS plays still win when the stack is the story, so they stay as the fallback below.
+   Only 40 of 3,260 accounts carry a bare "bbq" but 14 say "barbecue" and 9 "barbecue restaurant", so
+   these match on substrings of the cuisine string rather than equality. Order matters: "bar & grill"
+   would be caught by the bar test and "sushi bar" by the same one, so asian is tested first. */
+function cuisineSeq(a){ const q=(((a&&a.cuisine)||'')+' '+((a&&a.name)||'')).toLowerCase();
+  if(/sushi|ramen|hibachi|japanese|chinese|thai|korean|pho|vietnamese|asian/.test(q)) return 'v-asian';
+  if(/bbq|barbecue|barbeque|smokehouse/.test(q)) return 'v-bbq';
+  if(/pizza|pizzeria|stromboli|calzone/.test(q)) return 'v-pizza';
+  if(/taco|taqueria|mexican|latin|burrito|cantina|cuban|peruvian|caribbean/.test(q)) return 'v-latin';
+  if(/burger|smashburger|patty/.test(q)) return 'v-burger';
+  if(/bar & grill|bar and grill|\bpub\b|tavern|brewery|brewing|\bsaloon\b|sports bar|wings/.test(q)) return 'v-bar';
+  return ''; }
 function suggestSeq(c){ const a=acct(c&&c.accountId); const pos=((a&&a.pos)||'').toLowerCase(), dl=((a&&a.delivery)||'').toLowerCase();
+  const cs=cuisineSeq(a); if(cs) return cs;
   if(/square/.test(pos)) return 'square';
   if(/owner/.test(pos)) return 'owner';
   if(/doordash|uber|grubhub/.test(dl)) return 'dd-ue';
@@ -6058,6 +6506,49 @@ function advanceStep(c,n,by,logLine){ if(!c) return; const N=cadNFor(c); const s
 function markEmailStepSent(c,n,by){ if(!c) return; const N=cadNFor(c); const e=emailStep(c,n);
   advanceStep(c,n,by,'📧 '+stepLabel(c,n,'/')+' sent by '+by+' — '+e.subj); }
 // completeSeqStep: mark a call/task step done (no send). Advances the cadence just like a sent email.
+/* ===== z182 · AN UNMADE CALL MUST NOT HOLD THE EMAILS HOSTAGE =====
+   withCallSteps() puts a call after every email, and the pointer only moves when a dispo is saved or
+   completeSeqStep is pressed. Nothing times out. So a call he never got to freezes the whole play:
+   MEASURED on the live book — 262 of 385 active sequence contacts (68%) parked on a call step, 226
+   with no call logged at all since the step began, p90 stuck 16 days. Their next email was never
+   going to send. Saad: "the sequences are good just as email sequences cause if theyre not then
+   people dont call ... i dont call all the time, im stuck in demos".
+   🔑 This does NOT mark the call done — that would fake activity he never did, and 39.5% of his
+   logged calls already have no dispo, so inventing outcomes is the last thing this book needs.
+   It moves the POINTER past the call to the next email, writes an honest log line, and records the
+   debt on `owedCall` so the pipeline generator can still offer the dial as a live activity. The call
+   stops being a GATE and becomes an OPTION.
+   GRACE is deliberately generous: the play wants the call the same day, but a step that has only
+   been sitting a day or two is real work he might still do this afternoon. Only once a call step is
+   CAL_GRACE past due do the emails route around it. */
+/* Simulated against the live book before shipping: 439 active sequences, 375 parked on a call step,
+   302 of them stalled past the grace — median 6.2d, p90 21.1d, max 29d. I built a 40/day drip first
+   and Saad said "dont cap it", so all 302 release on his next load. That is safe because releasing a
+   pointer SENDS NOTHING — it moves the step and files a task. Every one of those emails still goes
+   out only when he sends it, so the volume decision stays his, where it belongs. */
+const CALL_GRACE=3*864e5;
+function releaseStalledCalls(){ let moved=0; const now=Date.now();
+  contacts().forEach(c=>{ if(!seqActive(c)) return;
+    const def=cadDefFor(c), N=def.length; if(!N) return;
+    let n=Math.min(Math.max(+c.emailSeq.step||1,1),N);
+    if(stepKind(def[n-1])!=='call') return;                       // only a CALL can stall this way
+    // How long has this step been the current one? The step's own task carries the due date the
+    // play set; with no task fall back to the last time anything advanced this sequence.
+    const tk=tasks().find(t=>t.emailCad&&t.contactId===c.id&&(+t.cadStep||0)===n&&!t.done);
+    const since=(tk&&+tk.due)||(+c.emailSeq.lastSentAt)||(+c.emailSeq.startedAt)||0;
+    if(!since||now-since<CALL_GRACE) return;
+    // Walk to the next EMAIL. If the rest of the play is calls only, there is nothing to unblock —
+    // leave it alone rather than silently completing a sequence he never finished.
+    let m=n+1; while(m<=N&&stepKind(def[m-1])!=='email') m++;
+    if(m>N) return;
+    const days=Math.max(1,Math.round((now-since)/864e5));
+    // Remember the debt BEFORE the pointer moves, so the pipeline list can still offer the dial.
+    c.owedCall={step:n,since:since,label:(def[n-1]&&def[n-1].label)||('Call '+n)};
+    logAuto(c,'⏭ '+stepLabel(c,n,'/')+' not made in '+days+'d — cadence moved on to '+stepLabel(c,m,'/')+'. The call is still owed; it just stopped holding the emails.');
+    c.emailSeq.step=m;
+    tasks().forEach(t=>{ if(t.emailCad&&t.contactId===c.id&&!t.done&&(+t.cadStep||0)<m){ t.done=true; t.doneTs=now; t.skipped=true; } });
+    ensureEmailTask(c.id,m); stampU(c); moved++; });
+  return moved; }
 function completeSeqStep(id){ const c=contact(id); if(!c) return; const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
   const N=cadNFor(c); const n=Math.min(+s.step||1,N); const def=cadDefFor(c)[n-1]||{}; const k=stepKind(def); const by=senderName();
   const icon=k==='call'?'📞':'✅'; const lbl=def.label?(' — '+def.label):'';
@@ -6562,43 +7053,21 @@ function callBrief(c){ if(!c) return '';
   if(a){ if(a.pos) snap.push('POS <b>'+esc(a.pos)+'</b>'); if(a.cuisine) snap.push(esc(a.cuisine));
     const locs=acctLocs(a); if(locs>1) snap.push('🏢 <b>'+locs+' locations</b>');
     if(a.delivery) snap.push('on '+esc(a.delivery)); if(a.city) snap.push(esc([a.city,a.state].filter(Boolean).join(', '))); }
-  const an=aname(a), apps=(a&&a.delivery)?esc(a.delivery):'DoorDash/Uber Eats';
-  const locs=a?(isBrand(a)?childLocs(a.id).length:(+a.employees||0)):0;
-  const ang=posAngle(a)||((a&&a.delivery)?'They\'re paying 15-30% to '+esc(a.delivery)+' — Shipday lets them keep that margin with their own drivers.':'Position Shipday as their own delivery ops: dispatch, live tracking, no third-party fees.');
-  // Discovery questions — tailored to what we know about the account
-  const disc=[];
-  disc.push('Who\'s running delivery for you now — your own drivers or '+apps+'?');
-  disc.push('Roughly how many delivery orders a week'+(locs>1?' across your '+locs+' locations':'')+'?');
-  disc.push('What are third-party commissions costing you a month right now?');
-  disc.push('If you owned that delivery, what would you do with the margin back?');
-  // Likely objection + rebuttal
-  const obj='<b>"We already use '+apps+'."</b> → Keep them for discovery — but Shipday runs delivery on the orders you already get direct (web, phone, QR), so you stop paying 15-30% on those and you own the customer + the data.';
-  // Close
-  const close='"Can I grab <b>15 minutes</b> later this week to show exactly what this would look like for '+esc(an)+'? What does '+(new Date().getDay()<4?'Thursday':'Monday')+' look like?"';
-  // Cadence status nudge
-  const cs=cadState(c); let cad;
-  if(cs==='manual'){ const q=seqById(c.emailSeq.seqId); cad='✉️ In "<b>'+esc((q&&q.name)||'email sequence')+'</b>" (Email '+Math.min(+c.emailSeq.step||1,cadNFor(c))+' of '+cadNFor(c)+') — reference the thread, don\'t restart cold.'; }
-  else if(cs==='done') cad='✉️ Email sequence complete — this call is the follow-through.';
-  else cad='⚠️ Not in a sequence yet — after the call, start the matching email sequence from the contact drawer.';
-  // Call-cadence status: where this contact sits in the 5-step dialer sequence (if enrolled).
-  const ccadOpen=tasks().filter(t=>t.cadence&&!t.done&&(t.contactId===c.id||(a&&t.accountId===a.id))).sort((x,y)=>(+x.due)-(+y.due));
-  const ccad=ccadOpen.length?'📞 <b>'+esc(ccadOpen[0].title.replace(' (cadence)',''))+'</b> due '+fmtWhen(+ccadOpen[0].due)+' — logging this call clears the step and queues the next.':'';
+  // 🔑 z182 — Saad: "no one uses the call script". The old brief printed eight sections on EVERY card,
+  // and five of them were byte-identical every time (same 4 discovery questions, same objection, same
+  // close). It was always expanded, so the one thing he actually needs after hanging up — the dispo bar
+  // — sat below the fold. 39.5% of his logged calls carry no disposition. Only what VARIES per contact
+  // survives here: why this call, what we know, the one line he says out loud, and the POS angle.
+  // The static playbook is not lost, it just isn't reprinted 100× a day — see the sequence step bodies.
+  const ang=posAngle(a)||((a&&a.delivery)?'Paying 15-30% to '+esc(a.delivery)+' — Shipday keeps that margin with their own drivers.':'');
   const od=(a?dealsOf(a.id):[]).filter(d=>!CLOSED.includes(d.stage))[0];
   const dealLine=od?'<div style="margin-top:5px">📌 Open deal: <b>'+esc(od.stage)+'</b>'+(od.demoDate?' · demo '+esc(fmtD(new Date(+od.demoDate))):'')+'</div>':'';
   const noteLine=c.notes?'<div style="margin-top:5px;color:var(--mut)">📝 '+esc(c.notes)+'</div>':'';
-  const K='color:var(--mut);text-transform:uppercase;font-size:10px;letter-spacing:.04em;font-weight:700;margin-right:5px';
-  const SEC='margin-top:7px';
-  return '<div style="background:var(--panel2);border-left:3px solid var(--sig);border-radius:8px;padding:11px 13px;margin-top:10px;font-size:12.5px;line-height:1.5">'+
-    '<div style="color:var(--sig);font-weight:800;font-size:11px;letter-spacing:.05em;margin-bottom:6px">✦ AI CALL BRIEF · '+esc(an)+'</div>'+
+  return '<div style="background:var(--panel2);border-left:3px solid var(--sig);border-radius:8px;padding:9px 12px;margin-top:10px;font-size:12.5px;line-height:1.45">'+
     '<div>'+head+'</div>'+
-    (snap.length?'<div style="margin-top:5px;color:#cdd6e0">'+snap.join(' · ')+'</div>':'')+
-    '<div style="'+SEC+'"><span style="'+K+'">Open</span>'+opener+'</div>'+
-    '<div style="'+SEC+'"><span style="'+K+'">Angle</span>'+ang+'</div>'+
-    '<div style="'+SEC+'"><span style="'+K+'">Discovery</span></div><ul style="margin:2px 0 0;padding-left:16px">'+disc.map(q=>'<li>'+esc(q)+'</li>').join('')+'</ul>'+
-    '<div style="'+SEC+'"><span style="'+K+'">If they push back</span>'+obj+'</div>'+
-    '<div style="'+SEC+'"><span style="'+K+'">Close for the demo</span>'+close+'</div>'+
-    '<div style="'+SEC+';color:var(--mut)"><span style="'+K+'">Cadence</span>'+cad+'</div>'+
-    (ccad?'<div style="'+SEC+';color:var(--mut)"><span style="'+K+'">Call step</span>'+ccad+'</div>':'')+
+    (snap.length?'<div style="margin-top:4px;color:#cdd6e0">'+snap.join(' · ')+'</div>':'')+
+    '<div style="margin-top:6px">'+opener+'</div>'+
+    (ang?'<div style="margin-top:5px;color:var(--mut)">'+ang+'</div>':'')+
     dealLine+noteLine+'</div>';
 }
 function showBrief(cid){ const c=contact(cid); const box=el('brief-c'+cid); if(!c||!box) return;
@@ -6782,6 +7251,191 @@ setInterval(function(){ if(UI.tab!=='hotlist'||drawerOpen()) return; const box=e
 // 30s reconcile: re-rank the queue so a lead a teammate just claimed drops off yours even if
 // a realtime claim event was missed. Skipped while you're typing so notes aren't wiped.
 setInterval(function(){ if(UI.tab!=='hotlist'||drawerOpen()) return; const ae=document.activeElement; if(ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName||'')) return; renderHotList(); },30000);
+/* ══════════════════ z182 · PIPELINE GENERATOR ══════════════════
+   Saad: "instead of a hot list, what if we had a pipeline generator list ... we can figure out what
+   the next revenue generating activity should be ... if they dont have a call number, the activity
+   should be find the direct line or owner number since they opened your email ... but if they have
+   both email address and a number we can put them in a cadence that has both ... i want this crm to
+   be dynamic, that was the whole idea, and its the opposite of that right now."
+
+   The hot list ranked INTEREST. Measured on his own book, interest does not predict a connect:
+   645 dispositioned dials, 58% baseline, and every segment lands between 54% and 64% — warmth Hot
+   62% vs Cold 64%, has-open 64% vs no-open 57%. Ranking that signal harder was never going to work.
+   What actually varies is COVERAGE and what he's able to do with a given row, so this asks a
+   different question per contact: given what I have on this person, what is the one move that
+   creates pipeline? Measured across his 1,947 active contacts:
+     1,200  phone, no email        -> dial
+       458  phone + email, no play -> enroll in a mixed cadence
+       159  opened, NO phone       -> find the direct line   ← pure upside, previously invisible
+        90  both, already running  -> work the step that's due
+        38  email, never opened    -> keep emailing, don't spend research time
+   🔑 The 159 are the point. They read the email and there was no way to ring them, so the old queue
+   (which required a phone) could not show them at all — the hottest people in the book were the
+   ones it was structurally blind to. */
+function pgHasPhone(c){ return String(telNum(c)||'').replace(/\D/g,'').length>=10; }
+function pgHasEmail(c){ return /@/.test(String((c&&c.email)||'')); }
+/* Saad: "just make sure for email opens its just my email opens i see / and same thing for every
+   other rep." lastEmailOpenTs is ONE field on the contact — it does not know who sent the mail that
+   got opened — so without a gate, Embert's open would have surfaced as Saad's "they raised their
+   hand, go find their number", and every research minute spent on it would be spent on someone
+   else's prospect. openMine() is the existing per-rep answer: it prefers the recorded emailOwner,
+   falls back to the book's actual emailer, and returns true only when the open is provably yours or
+   provably nobody's. It reads myRep(), so this is symmetric for every rep with no per-rep config. */
+function pgOpened(c){ return lastOpenTs(c)>0&&openMine(c); }
+/* One contact in, one action out. Ordered by what makes money soonest, and every branch names the
+   evidence in `why` — a list that tells you to do something without saying why gets ignored, which
+   is how the call script died. `rank` sorts WITHIN a bucket; buckets never compete on it. */
+const PG_KINDS={
+  owed:    {icon:'📞', verb:'Call — owed',        panel:'📞 Calls you owe',        hint:'the play moved on without these; the dial is still worth making'},
+  research:{icon:'🔎', verb:'Find the number',     panel:'🔎 Find a direct line',   hint:'they opened your email and there is no way to ring them'},
+  call:    {icon:'☎️', verb:'Dial',                panel:'☎️ Dial',                 hint:'reachable and due'},
+  enroll:  {icon:'➕', verb:'Start a cadence',      panel:'➕ Put into a cadence',    hint:'phone and email on file, no play running'},
+  email:   {icon:'📧', verb:'Send the step',        panel:'📧 Cadence emails due',   hint:'runs whether or not you get to the phone'},
+  nurture: {icon:'✉️', verb:'Keep emailing',        panel:'✉️ Email-only',           hint:'no phone and no open yet — not worth research time'}
+};
+function nextAction(c){
+  if(!c) return null;
+  const a=acct(c.accountId)||{};
+  const ph=pgHasPhone(c), em=pgHasEmail(c), op=pgOpened(c), seq=seqActive(c);
+  const now=Date.now(), openTs=lastOpenTs(c), fresh=openTs&&(now-openTs<7*864e5);
+  // A dial the cadence asked for and never got. It comes first because it is the only bucket where
+  // the CRM already decided this call was worth making — it just stopped blocking the emails.
+  if(c.owedCall&&ph) return {k:'owed',rank:heat(c)+200,
+    why:'Cadence wanted '+esc(c.owedCall.label||'a call')+' '+fmtAgo(+c.owedCall.since)+' — emails kept going'};
+  // Opened, unreachable. The whole reason this list exists.
+  if(op&&!ph) return {k:'research',rank:(fresh?900:400)+heat(c),
+    why:'Opened '+fmtAgo(openTs)+(a.website?' · try '+esc(String(a.website).replace(/^https?:\/\/(www\.)?/,'').split('/')[0]):'')+' — no phone on file'};
+  if(seq){
+    const def=cadDefFor(c), n=Math.min(Math.max(+c.emailSeq.step||1,1),def.length);
+    const k=stepKind(def[n-1]);
+    if(k==='call'&&ph) return {k:'call',rank:heat(c)+100,why:stepLabel(c,n,'/')+' is the step that\u2019s due'};
+    if(k==='email') return {k:'email',rank:heat(c)+50,why:stepLabel(c,n,'/')+' is queued'+(fresh?' · opened '+fmtAgo(openTs):'')};
+  }
+  if(ph&&em) return {k:'enroll',rank:heat(c)+(op?150:0),
+    why:'Phone and email, nothing running'+(op?' · already opened '+fmtAgo(openTs):'')};
+  if(ph) return {k:'call',rank:heat(c),
+    why:(+c.lastDialAt?'Last dialled '+fmtAgo(+c.lastDialAt):'Never dialled')+' — no email address to warm it up'};
+  if(em) return {k:'nurture',rank:heat(c)-100,why:'Email only, no open yet'};
+  return null;
+}
+/* ── THE DAY SIZES ITSELF OFF THE CALENDAR ──
+   Saad: "so that basically it fits right in to the schedule ... and syncs with your schedule ... if
+   your schedule says demo - it can be like oh it looks like youre on a demo ... but even in that, it
+   can be like demo? okay good luck, take notes here about the account whatever ... if not, then just
+   continue, cause we get so many no shows."
+   🔑 So a demo is a HEADS-UP, never a lock. The list keeps working underneath it — he asked for that
+   explicitly and gave the reason: the no-show rate means a booked hour is often a free hour. */
+function pgDayShape(){
+  const evs=((store.__cal||{}).events)||[], now=Date.now();
+  const d0=today0().getTime(), d1=d0+864e5;
+  const WORK_S=d0+9*36e5, WORK_E=d0+17*36e5;                       // 9am-5pm is the sellable day
+  let busy=0, cur=null, next=null;
+  const mine=evs.map(e=>({e,s:new Date(e.start).getTime()||0,x:new Date(e.end).getTime()||0}))
+    .filter(o=>o.s>=d0&&o.s<d1&&(e=>String(e.status||'')!=='cancelled')(o.e))
+    .sort((p,q)=>p.s-q.s);
+  mine.forEach(o=>{
+    const s=Math.max(o.s,WORK_S), x=Math.min(o.x,WORK_E);
+    if(x>s) busy+=(x-s)/60000;
+    if(now>=o.s&&now<o.x&&!cur) cur=o;
+    if(o.s>now&&!next) next=o;
+  });
+  const leftMs=Math.max(0,WORK_E-Math.max(now,WORK_S));
+  const freeMin=Math.max(0,Math.round(leftMs/60000-busy*(leftMs/Math.max(1,WORK_E-WORK_S))));
+  return {busyMin:Math.round(busy),freeMin,cur,next,meetings:mine.length};
+}
+/* Plan size. He asked for this in as many words: "doesnt have to be 40 dials". A dial with a note
+   after it is about four minutes, so the day's free minutes divide straight into a target. Floored
+   at 6 so a fully-booked day still hands him something, capped at 45 so an empty calendar doesn't
+   produce a list nobody could finish — an unfinishable list is the same as no list. */
+function pgTarget(free){ return Math.max(6,Math.min(45,Math.round(free/4))); }
+function pipelineQueue(){
+  const me=repCanon(myRep()||'');
+  const pool=prefilter(contacts().filter(c=>
+    !c.internal&&!c.queueOut&&!isCustC(c)&&!['In Pipeline','Customer'].includes(c.status)
+    &&!demoBooked(c)&&!isDNC(c)&&!isDeadChain(acct(c.accountId))&&laneMine(c)&&seqMine(c)&&!claimedByOther(c)));
+  const by={}; Object.keys(PG_KINDS).forEach(k=>by[k]=[]);
+  pool.forEach(c=>{ const act=nextAction(c); if(!act) return;
+    // A number that was just worked rests, exactly as it does in the call queue — otherwise the
+    // "dynamic" list would hand him this morning's voicemails again this afternoon.
+    if((act.k==='call'||act.k==='owed')&&(dialHold(c)>Date.now()||(+c.nextCallAt>Date.now()))) return;
+    c._pgWhy=act.why; c._pgRank=act.rank; by[act.k].push(c); });
+  Object.keys(by).forEach(k=>by[k].sort((x,y)=>y._pgRank-x._pgRank));
+  return by;
+}
+/* The schedule bar. It NEVER hides the list — see pgDayShape's note. If he's in a demo right now it
+   says so, names who, and puts the notes one click away; if the guest no-shows he is already looking
+   at the work. */
+function pgCalBar(){
+  const D=pgDayShape(); if(!D.meetings&&!D.cur) return {html:'',D:D};
+  let h='';
+  if(D.cur){
+    const e=D.cur.e, c=matchEventContact(e), a=c?acct(c.accountId):null;
+    const who=c?(cname(c)+(a?' · '+a.name:'')):esc(e.summary||'a meeting');
+    const notes=c?'<button class="btn sm pri" onclick="openContact(\''+c.id+'\')">Take notes ▸</button>'
+      :(a?'<button class="btn sm pri" onclick="openAccount(\''+a.id+'\')">Open account ▸</button>':'');
+    h+='<div class="panel" style="border-color:var(--sig)"><div style="padding:10px 14px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+      '<span>'+(looksLikeDemoTitle(e)?'🎤 <b>On a demo</b>':'📅 <b>In a meeting</b>')+' — '+esc(who)+' until '+esc(new Date(D.cur.x).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}))+'. Good luck.</span>'+
+      notes+'<span style="color:var(--mut);margin-left:auto">List stays live — no-shows happen.</span>'+
+      '</div></div>';
+  } else if(D.next){
+    const e=D.next.e, c=matchEventContact(e);
+    const mins=Math.round((D.next.s-Date.now())/60000);
+    h+='<div class="panel"><div style="padding:9px 14px;font-size:13px;color:var(--mut)">📅 Next up in '+mins+'m — <b>'+esc(e.summary||(c?cname(c):'meeting'))+'</b>'+
+      ' · '+D.meetings+' meeting'+(D.meetings>1?'s':'')+' today ('+D.busyMin+'m booked)</div></div>';
+  }
+  return {html:h,D:D};
+}
+// One row of the plan. Deliberately NOT the dataTable: these rows exist to be acted on, so the
+// action is the row, and the reason is printed next to it in the contact's own evidence.
+function pgRow(c,kind){
+  const a=acct(c.accountId)||{}, K=PG_KINDS[kind];
+  const cta=kind==='research'?'<button class="btn sm pri" onclick="event.stopPropagation();promptDirectLine(\''+c.id+'\')">＋ Add number</button>'
+    :kind==='enroll'?'<button class="btn sm pri" onclick="event.stopPropagation();startEmailCadence(\''+c.id+'\')">➕ '+esc((seqById(suggestSeq(c))||{}).name||'Start play')+'</button>'
+    :(kind==='call'||kind==='owed')?'<button class="btn sm pri" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')">📞 '+esc(telNum(c))+'</button>'
+    :kind==='email'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">📧 Send step</button>'
+    :'<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ▸</button>';
+  const site=(kind==='research'&&a.website)?' <a href="'+esc(/^https?:/.test(a.website)?a.website:'https://'+a.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--sig)">site ↗</a>':'';
+  return '<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')"><td class="tname">'+esc(cname(c))+
+    '<div class="tsub">'+esc(a.name||'')+site+'</div></td>'+
+    '<td style="font-size:12px;color:var(--mut)">'+(c._pgWhy||'')+'</td>'+
+    '<td style="text-align:right;white-space:nowrap">'+cta+'</td></tr>';
+}
+/* ── MODES ── Saad: "what if we had an email only mode / or a call only mode".
+   The split is not by tool, it's by POSTURE: either you're on the phone or you're at the desk.
+   Hunting a missing direct line is desk work — it belongs with the email block, not between dials. */
+const PG_MODES={all:{t:'⚡ Everything',ks:null},
+  email:{t:'📧 Email only',ks:['email','enroll','research','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
+  call:{t:'☎️ Call only',ks:['owed','call'],sub:'phone block — dials only'}};
+function pgMode(){ const m=UI.pgMode||'all'; return PG_MODES[m]?m:'all'; }
+function setPgMode(m){ UI.pgMode=m; try{ localStorage.setItem('pgMode',m); }catch(e){} renderHotList(); }
+try{ const _m=localStorage.getItem('pgMode'); if(_m&&PG_MODES[_m]) UI.pgMode=_m; }catch(e){}
+function pgModeBar(){
+  const cur=pgMode();
+  return '<div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
+    Object.keys(PG_MODES).map(m=>'<span onclick="setPgMode(\''+m+'\')" style="cursor:pointer;padding:3px 10px;border-radius:999px;font-size:12px;border:1px solid '+(m===cur?'var(--sig)':'var(--bd)')+';background:'+(m===cur?'rgba(90,160,255,.15)':'transparent')+'">'+PG_MODES[m].t+'</span>').join('')+
+    (PG_MODES[cur].sub?'<span style="color:var(--mut);font-size:12px">'+PG_MODES[cur].sub+'</span>':'')+'</div>';
+}
+function pgPanels(by,budget){
+  // Budget order = payoff order. Research first because it is the smallest bucket and the only one
+  // where the contact has already raised their hand; dials last because they are the bottomless one
+  // and would otherwise eat the whole day before anything else got a seat.
+  const allow=PG_MODES[pgMode()].ks;
+  const order=['owed','research','enroll','email','call','nurture'].filter(k=>!allow||allow.includes(k));
+  const caps={owed:8,research:10,enroll:10,email:25,call:budget,nurture:5};
+  // Call-only means CALL ONLY. Saad: "just to hammer out calls" — so the dial bucket stops competing
+  // with buckets that aren't on screen and gets the whole day's budget.
+  if(pgMode()==='call'){ caps.call=Math.max(budget,25); caps.owed=25; }
+  let h='',used=0;
+  order.forEach(k=>{ const list=by[k]||[]; if(!list.length) return;
+    const take=Math.max(0,Math.min(caps[k],list.length,Math.max(0,budget+20-used)));
+    if(!take) return; used+=take;
+    const K=PG_KINDS[k];
+    h+='<div class="panel"><div class="ph"><h3>'+K.panel+'</h3><span class="sub">'+
+      (list.length>take?take+' of '+list.length+' — ':list.length+' — ')+K.hint+'</span></div>'+
+      '<table><tbody>'+list.slice(0,take).map(c=>pgRow(c,k)).join('')+'</tbody></table></div>';
+  });
+  return h;
+}
 function renderHotList(){
   let {due,snoozed}=hotQueue();
   // Freeze the ORDER for this calling block (membership is still 100% hotQueue's call).
@@ -6845,10 +7499,27 @@ function renderHotList(){
     winBar='<div class="panel" style="border-color:var(--sig)"><div style="padding:10px 16px;font-size:13px">'+
       '🎯 <b>Golden window</b> — between lunch and dinner rush. Best connect rate of the day. Dial hard.</div></div>';
   }
-  let h = idBar + scoreHtml(sess) + winBar + exhaust + (cur ? callCard(cur,due.length,snoozed.length)
+  /* ── THE PLAN ──
+     Built from nextAction(), sized off the calendar, and printed ABOVE the dial card so the first
+     thing he sees is the whole day's shape rather than one more phone number. The dial card stays
+     exactly as it was — it is the piece that works, and pinning/claiming/dispo all hang off it. */
+  const _cal=pgCalBar(), _by=pipelineQueue(), _budget=pgTarget(_cal.D.freeMin);
+  const _n=k=>(_by[k]||[]).length;
+  const _plan=[['🔎',_n('research'),'find a line'],['➕',_n('enroll'),'to enroll'],['📞',_n('owed'),'owed calls'],['📧',_n('email'),'emails due'],['☎️',_n('call'),'dialable']]
+    .filter(x=>x[1]).map(x=>x[0]+' <b>'+x[1]+'</b> '+x[2]).join(' · ');
+  const planBar='<div class="panel" style="border-color:var(--sig)"><div style="padding:11px 15px;font-size:13px;line-height:1.55">'+
+    '⚡ <b>Pipeline generator</b> — '+(_cal.D.freeMin>0?'about <b>'+Math.round(_cal.D.freeMin/60*10)/10+'h</b> of selling time left'+(_cal.D.busyMin?' ('+_cal.D.busyMin+'m booked)':'')+', so today\u2019s target is <b>'+_budget+'</b> activities.':'Day\u2019s booked out — here\u2019s what to grab between meetings.')+
+    (_plan?'<br><span style="color:var(--mut)">'+_plan+'</span>':'')+
+    pgModeBar()+'</div></div>';
+  /* Email-only means the phone is off. Leaving the dial card and the 150-row call table on screen
+     under an "email only" heading is the same non-answer the old tab gave — the mode has to actually
+     change what's in front of him, or it's a label. The queue itself is untouched; it comes straight
+     back when he flips the chip. */
+  const _quiet=(pgMode()==='email');
+  let h = idBar + _cal.html + planBar + (_quiet?'':scoreHtml(sess) + winBar + exhaust) + (_quiet?'':cur ? callCard(cur,due.length,snoozed.length)
     : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
   // Leads teammates are actively on — live box, ticks every second (see onCallsHtml + ticker below).
-  h+='<div id="onCallsBox">'+onCallsHtml()+'</div>';
+  h+='<div id="onCallsBox">'+(_quiet?'':onCallsHtml())+'</div>';
   const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
   const droppedN=contacts().filter(c=>c.queueOut).length;
   const restoreLink=droppedN?' · <span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span>':'';
@@ -6856,8 +7527,9 @@ function renderHotList(){
   // like leads are disappearing, which is the exact complaint the block was built to answer.
   const skipN=skipLive()?skipIds.filter(id=>due.some(c=>c.id===id)).length:0;
   const skipLink=skipN?' · <span onclick="clearSkips();renderHotList();toast(\'Skipped leads back in rotation\')" style="cursor:pointer;color:var(--sig)">⏭ '+skipN+' skipped this block — bring back</span>':'';
-  h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+skipLink+'</span><button class="btn sm gh" onclick="recalcQueue()" title="Pull fresh opens/replies and re-rank the whole queue" style="margin-left:auto">↻ Resync &amp; recalc</button>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
-  if(snoozed.length){
+  h+=pgPanels(_by,_budget);
+  if(!_quiet) h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+skipLink+'</span><button class="btn sm gh" onclick="recalcQueue()" title="Pull fresh opens/replies and re-rank the whole queue" style="margin-left:auto">↻ Resync &amp; recalc</button>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
+  if(snoozed.length&&!_quiet){
     const t2=dataTable('hotlist2',chosenCols('hotlist2'),snoozed,r=>"openContact('"+r.id+"')",snoozeCell);
     h+='<div class="panel"><div class="ph"><h3>💤 Scheduled</h3><span class="sub">'+snoozed.length+' snoozed by disposition — soonest first</span>'+colMenu('hotlist2')+'</div>'+t2.html+'</div>';
   }
@@ -9857,6 +10529,7 @@ function boot(){
   try{ hydrateMine(); }catch(e){}   // show YOUR inbox and YOUR calendar, not whoever synced last
   try{ dedupeTasks(); }catch(e){}
   try{ if(sweepStaleCadTasks()) save(); }catch(e){}   // drop cadence tasks the play already passed
+  try{ const _r=releaseStalledCalls(); if(_r){ save(); console.log('[z182] '+_r+' cadences un-stalled off unmade calls'); } }catch(e){}
   try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
   try{ clearAutoInterestDeals(); }catch(e){}   // pipeline entries nobody actually opened
   try{ linkOrphanContacts(); }catch(e){}       // contacts the importer left with no restaurant attached
