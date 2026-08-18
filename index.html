@@ -626,7 +626,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z184';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug18·z185';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -7358,11 +7358,15 @@ function callIntent(c){
 function dataGaps(c){
   const a=acct(c.accountId)||{}, g=[];
   const site=String(a.website||'').replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
-  const q=[a.name,a.city].filter(Boolean).join(' ');
-  if(!pgHasPhone(c)) g.push({k:'phone',t:'Get a phone number',how:site?'Their site → Contact / footer':'Google "'+q+'" → the Google Business panel has it'});
+  /* The rows that most need enriching are the ones with the least to enrich FROM — plenty of these
+     contacts are a bare info@ address on an account with no name — so the search term has to fall
+     back or the instruction renders as Google "" and reads like a broken feature instead of a task. */
+  const dom=String(c.email||'').split('@')[1]||'';
+  const q=[a.name,a.city].filter(Boolean).join(' ')||site||dom||String(cname(c)||'');
+  if(!pgHasPhone(c)) g.push({k:'phone',t:'Get a phone number',how:site?'Their site → Contact / footer':(q?'Google "'+q+'" → the Google Business panel has it':'Nothing to search on yet — get the website or a name first')});
   if(!pgHasEmail(c)) g.push({k:'email',t:'Get an email',how:site?'Site footer, then ask reception for the owner\u2019s':'Find the site first'});
   if(!String(c.title||'').trim()) g.push({k:'title',t:'Confirm who this person is',how:'LinkedIn or the About page — you want the owner or GM, not a shift lead'});
-  if(!site) g.push({k:'website',t:'Find the website',how:'Google "'+q+'"'});
+  if(!site) g.push({k:'website',t:'Find the website',how:dom?'Try '+dom+' — it\u2019s the domain on their email':(q?'Google "'+q+'"':'No name and no email domain — this row needs a name before anything else')});
   if(!posOf(a)) g.push({k:'pos',t:'Identify the POS',how:'Open their online-ordering link — Toast / Square / Clover is in the URL or the footer'});
   if(!String(a.city||'').trim()) g.push({k:'city',t:'Add the city',how:'Google Maps'});
   return g;
