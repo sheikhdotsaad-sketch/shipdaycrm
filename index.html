@@ -7744,7 +7744,9 @@ function renderHotList(){
      exactly as it was — it is the piece that works, and pinning/claiming/dispo all hang off it. */
   const _cal=pgCalBar(), _by=pipelineQueue(), _budget=pgTarget(_cal.D.freeMin);
   const _n=k=>(_by[k]||[]).length;
-  const _plan=[['🔎',_n('research'),'find a line'],['➕',_n('enroll'),'to enroll'],['📞',_n('owed'),'owed calls'],['📧',_n('email'),'emails due'],['☎️',_n('call'),'dialable']]
+  /* Replies and no-shows lead the count line as well as the panels. The summary is the only part of
+     this most people read, and a day with one no-show in it is a different day. */
+  const _plan=[['↩️',_n('reply'),'replied'],['🔁',_n('noshow'),'to rebook'],['🔎',_n('research'),'find a line'],['➕',_n('enroll'),'to enroll'],['📞',_n('owed'),'owed calls'],['📧',_n('email'),'emails due'],['☎️',_n('call'),'dialable']]
     .filter(x=>x[1]).map(x=>x[0]+' <b>'+x[1]+'</b> '+x[2]).join(' · ');
   const planBar='<div class="panel" style="border-color:var(--sig)"><div style="padding:11px 15px;font-size:13px;line-height:1.55">'+
     '⚡ <b>Pipeline generator</b> — '+(_cal.D.freeMin>0?'about <b>'+Math.round(_cal.D.freeMin/60*10)/10+'h</b> of selling time left'+(_cal.D.busyMin?' ('+_cal.D.busyMin+'m booked)':'')+', so today\u2019s target is <b>'+_budget+'</b> activities.':'Day\u2019s booked out — here\u2019s what to grab between meetings.')+
