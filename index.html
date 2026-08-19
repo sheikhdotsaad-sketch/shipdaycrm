@@ -2738,6 +2738,20 @@ function advanceCallCadence(c){ if(!c) return null;
   const open=tasks().filter(t=>t.cadence&&!t.done&&(t.contactId===c.id||(c.accountId&&t.accountId===c.accountId)))
     .sort((a,b)=>(+a.due)-(+b.due));
   const t=open[0]; if(!t) return null; t.done=true; t.doneTs=Date.now(); return t.id; }
+/* 🔴 "id love to just click on that and send off that emial" — Saad, looking at an
+   `Email 5/5 — Breakup` task. The task named the exact email and then made him go find it:
+   open the contact, open the sequence panel, scroll, hit Send. Everything it needed was
+   already on the row.
+   Only offered when the contact's pointer is ACTUALLY on this step. A task for step 3 while
+   the cadence sits on step 5 would send step 5's copy under step 3's label — worse than no
+   button at all. Call steps are excluded: you don't send a call.
+   sendSeqEmail does its own canEdit / blocklist / MX checks and confirms with the subject
+   line before anything leaves, so this is a shortcut INTO that flow, never around it. */
+function taskSendable(t){
+  if(!t||t.done||!t.emailCad||t.type!=='email'||!t.contactId) return null;
+  const c=contact(t.contactId); if(!c||!c.email||!c.emailSeq) return null;
+  const n=Math.min(+c.emailSeq.step||1,cadNFor(c));
+  return (+t.cadStep||0)===n?c:null; }
 function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.due<now); const lk=taskLink(t);
   const when=t.done?'done':(overdue?'overdue '+fmtWhen(+t.due):fmtWhen(+t.due));
   const badge=t.done?'<span class="tag">done</span>':'<span class="tag'+(overdue?' od':'')+'">'+esc(when)+'</span>';
@@ -2751,6 +2765,7 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
       (taskOwner(t)?'<div class="tsub">👤 '+esc(taskOwner(t))+'</div>':'')+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+badge+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+
+      (taskSendable(t)?'<button class="btn sm pri" title="Send this step from your Gmail now" onclick="sendSeqEmail(\''+t.contactId+'\')">📧 Send</button> ':'')+
       (tel?'<a class="btn sm gh" href="tel:'+esc(tel)+'">📞</a> ':'')+fireBtn+
       '<button class="btn sm gh" title="Snooze 1 day" onclick="snoozeTask(\''+t.id+'\',1)">+1d</button> '+
       '<button class="btn sm gh" title="Delete" onclick="deleteTask(\''+t.id+'\')">×</button></td></tr>'; }
@@ -3756,6 +3771,7 @@ function cmTasks(c){
         '<span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span>'+
         '<span class="cm-tasktxt" title="'+esc(t.title)+'">'+esc(t.title)+'</span>'+
         '<span class="tag'+(od?' od':'')+'">'+esc(od?('overdue '+fmtWhen(+t.due)):fmtWhen(+t.due))+'</span>'+
+        (taskSendable(t)?'<button type="button" class="cm-link" title="Send this step from your Gmail now" onclick="sendSeqEmail(\''+t.contactId+'\')">📧 Send</button>':'')+
         '<button type="button" class="cm-link" title="Mark this task done" onclick="cmDoneTask(\''+t.id+'\')">✓</button>'+
         '<button type="button" class="cm-link" title="Push to tomorrow" onclick="cmSnoozeTask(\''+t.id+'\')">+1d</button>'+
       '</div>'; }).join('')+
