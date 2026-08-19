@@ -7109,7 +7109,12 @@ function callBrief(c){ if(!c) return '';
   const snap=[];
   if(a){ if(a.pos) snap.push('POS <b>'+esc(a.pos)+'</b>'); if(a.cuisine) snap.push(esc(a.cuisine));
     const locs=acctLocs(a); if(locs>1) snap.push('🏢 <b>'+locs+' locations</b>');
-    if(a.delivery) snap.push('on '+esc(a.delivery)); if(a.city) snap.push(esc([a.city,a.state].filter(Boolean).join(', '))); }
+    if(a.delivery) snap.push('on '+esc(a.delivery)); if(a.city) snap.push(esc([a.city,a.state].filter(Boolean).join(', ')));
+    /* An owner name scraped off their own About page is worth more than anything else on this line:
+       it's the name that gets you past the person answering the phone. Only shown when the owner is
+       someone OTHER than who you're dialing, and it carries its source so a wrong one is traceable. */
+    if(a.ownerName&&!new RegExp(a.ownerName.split(/\s+/)[0],'i').test(cname(c)||''))
+      snap.push('👤 ask for <b>'+esc(a.ownerName)+'</b>'+(a.ownerSrc?' <a href="'+esc(a.ownerSrc)+'" target="_blank" rel="noopener" title="where this came from" style="text-decoration:none">↗</a>':'')); }
   // 🔑 z182 — Saad: "no one uses the call script". The old brief printed eight sections on EVERY card,
   // and five of them were byte-identical every time (same 4 discovery questions, same objection, same
   // close). It was always expanded, so the one thing he actually needs after hanging up — the dispo bar
@@ -7413,7 +7418,11 @@ function dataGaps(c){
   const q=[a.name,a.city].filter(Boolean).join(' ')||site||dom||String(cname(c)||'');
   if(!pgHasPhone(c)) g.push({k:'phone',t:'Get a phone number',how:site?'Their site → Contact / footer':(q?'Google "'+q+'" → the Google Business panel has it':'Nothing to search on yet — get the website or a name first')});
   if(!pgHasEmail(c)) g.push({k:'email',t:'Get an email',how:site?'Site footer, then ask reception for the owner\u2019s':'Find the site first'});
-  if(!String(c.title||'').trim()) g.push({k:'title',t:'Confirm who this person is',how:'LinkedIn or the About page — you want the owner or GM, not a shift lead'});
+  // If we already scraped an owner off their own site, say the name instead of sending him to go
+  // look for it. That is the whole reason the field exists.
+  if(!String(c.title||'').trim()) g.push({k:'title',t:'Confirm who this person is',
+    how:(a&&a.ownerName)?('Owner on file is '+a.ownerName+' — confirm this is them, or ask for '+a.ownerName+' by name')
+      :'LinkedIn or the About page — you want the owner or GM, not a shift lead'});
   if(!site) g.push({k:'website',t:'Find the website',how:dom?'Try '+dom+' — it\u2019s the domain on their email':(q?'Google "'+q+'"':'No name and no email domain — this row needs a name before anything else')});
   if(!posOf(a)) g.push({k:'pos',t:'Identify the POS',how:'Open their online-ordering link — Toast / Square / Clover is in the URL or the footer'});
   if(!String(a.city||'').trim()) g.push({k:'city',t:'Add the city',how:'Google Maps'});
