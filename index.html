@@ -1662,8 +1662,21 @@ function renderStats(){
   el('hs-mrr').textContent=money(mrr);
   el('hs-cust').textContent=cust;
 }
+/* The Work pill used to count warmth==='Hot' — correct when the tab was called "Hot List", a flat
+   contradiction now that the tab is three job lists: it read 51 next to a page reading 807.
+   It counts the actual work instead. pipelineQueue is ~60ms against renderCounts' 7ms, so it's
+   cached — but KEYED TO THE BOOK, not boot-order. Every boot-timing hook I tried drew a 0, because
+   the pool depends on claims that land asynchronously and there is no single moment that is "after"
+   all of them. A key that changes when the book changes is right whenever it's asked. */
+let pgWorkCount=0, pgWorkKey='';
+function pgWorkPill(){
+  let k;
+  try{ k=(store.__updatedAt||0)+'|'+Object.keys(store.contacts||{}).length+'|'+myRep(); }catch(e){ return pgWorkCount; }
+  if(k!==pgWorkKey){ try{ pgWorkCount=pgWorkTotal(pipelineQueue()); pgWorkKey=k; }catch(e){} }
+  return pgWorkCount;
+}
 function renderCounts(){
-  const hot=contacts().filter(c=>(c.warmth==='Hot')&&!['In Pipeline','Customer'].includes(c.status)).length;
+  const hot=pgWorkPill();
   const pipe=deals().filter(d=>!CLOSED.includes(d.stage)).length;
   const closed=closedAccts().length;
   const live=liveAccts().length;
@@ -7775,6 +7788,13 @@ function jobBar(by){
     return '<span onclick="setPgMode(\''+j+'\')" style="cursor:pointer;padding:4px 12px;border-radius:999px;font-size:12.5px;border:1px solid '+(on?'var(--sig)':'var(--bd)')+';background:'+(on?'rgba(90,160,255,.16)':'transparent')+';font-weight:'+(on?600:400)+'">'+
       PG_JOBS[j].t+' <b style="color:'+(on?'var(--sig)':'var(--mut)')+'">'+ct+'</b></span>'; }).join('');
 }
+/* One person, counted once. `reply` sits in BOTH the call and email jobs on purpose (a reply is
+   answered however it arrived), so summing the three job lists double-counts them. */
+function pgWorkTotal(by){
+  const seen=new Set();
+  Object.keys(PG_JOBS).forEach(j=>PG_JOBS[j].ks.forEach(k=>{ if(k==='cooling') return; (by[k]||[]).forEach(c=>seen.add(c.id)); }));
+  return seen.size;
+}
 const PG_PAGE=25;
 function pgMore(job){ UI.pgShown[job]=(UI.pgShown[job]||PG_PAGE)+PG_PAGE; renderHotList(); }
 function pgChip(k){ UI.pgChip=(UI.pgChip===k?'':k); renderHotList(); }
@@ -7828,6 +7848,8 @@ function jobList(by,job,rows,foot){
 function renderHotList(){
   const _cal=pgCalBar(), _by=pipelineQueue(), _budget=pgTarget(_cal.D.freeMin);
   const job=pgMode(), _rows=jobRows(_by,job);
+  // We already have the queue in hand — refresh the nav pill for free. See renderCounts.
+  try{ pgWorkCount=pgWorkTotal(_by); el('p-hot').textContent=pgWorkCount; }catch(e){}
   // The dial card and the Calls list are now the SAME list — see callJobDue. snoozed still comes
   // from hotQueue: it answers "when is their turn", which the pipeline queue never modelled.
   let due=callJobDue(_by), snoozed=hotQueue().snoozed;
