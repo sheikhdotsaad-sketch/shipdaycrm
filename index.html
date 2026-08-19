@@ -87,6 +87,12 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .cm-tight .cm-req{padding:5px 8px;font-size:12px}
 .cm-tight .cm-dispos,.cm-tight .cm-reqs{gap:5px}
 .cm-tight .cm-note{min-height:56px}
+/* The call note is the only ORIGINAL information on this screen — everything else is recalled.
+   It was three lines tall, so you lost the top of your own note while typing the bottom of it.
+   Scoped to #cmNote on purpose: .cm-note is shared with the 8-step cadence editor, where tripling
+   every body box would turn one play into a very long scroll. */
+#cmNote{min-height:150px;line-height:1.5}
+.cm-tight #cmNote{min-height:112px}
 .cm-tight .cm-foot{margin-top:10px;padding:8px 0 0}
 .cm-tight .cm-foot .btn{padding:7px 12px;font-size:13px}
 .cm-link{background:transparent;border:0;color:var(--acc);font-size:12px;cursor:pointer;padding:2px 0;text-decoration:underline}
@@ -2747,6 +2753,13 @@ function advanceCallCadence(c){ if(!c) return null;
    button at all. Call steps are excluded: you don't send a call.
    sendSeqEmail does its own canEdit / blocklist / MX checks and confirms with the subject
    line before anything leaves, so this is a shortcut INTO that flow, never around it. */
+/* "so if i press on email 1, i would love to just click that and add into that sequence drawer
+   like it pops up right away." The task names a specific email; clicking it should show you that
+   email. It opened nothing, so the copy was three navigations away from the row describing it. */
+function openSeqFor(cid){
+  const c=contact(cid); if(!c) return;
+  openContact(cid);
+  setTimeout(()=>{ const n=el('cadSec_'+cid); if(n) n.scrollIntoView({block:'start',behavior:'smooth'}); },60); }
 function taskSendable(t){
   if(!t||t.done||!t.emailCad||t.type!=='email'||!t.contactId) return null;
   const c=contact(t.contactId); if(!c||!c.email||!c.emailSeq) return null;
@@ -2760,7 +2773,10 @@ function taskRow(t){ const now=today0().getTime(); const overdue=!t.done&&(+t.du
   const fireBtn=c?'<button class="btn sm '+(hot?'pri':'gh')+'" title="'+(hot?'In your Hot List — click to remove':'Send to your Hot List queue')+'" onclick="fireToMyHot(\''+t.contactId+'\')">🔥</button> ':'';
   return '<tr class="'+(t.done?'tdone':'')+'">'+
     '<td style="width:26px;text-align:center"><input type="checkbox" '+(t.done?'checked':'')+' onclick="completeTask(\''+t.id+'\')"></td>'+
-    '<td><span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span> '+esc(t.title)+
+    '<td><span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span> '+
+      (t.emailCad&&t.contactId
+        ? '<a onclick="openSeqFor(\''+t.contactId+'\')" title="Open the cadence and read this step" style="cursor:pointer">'+esc(t.title)+'</a>'
+        : esc(t.title))+
       (lk?'<div class="tsub"><a onclick="'+lk.go+'">'+esc(lk.name)+'</a></div>':'')+
       (taskOwner(t)?'<div class="tsub">👤 '+esc(taskOwner(t))+'</div>':'')+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+badge+'</td>'+
@@ -3679,6 +3695,7 @@ const callCell=r=>'<div style="display:flex;gap:5px;justify-content:flex-end;ali
 // Opening the modal does NOT log anything — dialing (the tel: link) just rings the phone.
 // A call is only recorded when the rep hits Save, so an accidental tap is a no-op on Cancel.
 let callModalId=null, cmSel={dispo:'',req:'none',note:''};
+function _cmC(){ return callModalId?contact(callModalId):null; }
 function openCallModal(cid){ const c=contact(cid); if(!c) return;
   // A NEW CALL GETS A NEW NOTE. This box used to open pre-filled with the last call's note, so
   // every save re-logged the same sentence and the old text sat in the way of the new one. The
@@ -3769,7 +3786,9 @@ function cmTasks(c){
     show.map(t=>{ const od=+t.due<now;
       return '<div class="cm-task">'+
         '<span class="tkico">'+(TASK_ICON[t.type]||'✓')+'</span>'+
-        '<span class="cm-tasktxt" title="'+esc(t.title)+'">'+esc(t.title)+'</span>'+
+        (t.emailCad&&t.contactId
+          ? '<span class="cm-tasktxt" title="Open the cadence and read this step" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted" onclick="openSeqFor(\''+t.contactId+'\')">'+esc(t.title)+'</span>'
+          : '<span class="cm-tasktxt" title="'+esc(t.title)+'">'+esc(t.title)+'</span>')+
         '<span class="tag'+(od?' od':'')+'">'+esc(od?('overdue '+fmtWhen(+t.due)):fmtWhen(+t.due))+'</span>'+
         (taskSendable(t)?'<button type="button" class="cm-link" title="Send this step from your Gmail now" onclick="sendSeqEmail(\''+t.contactId+'\')">📧 Send</button>':'')+
         '<button type="button" class="cm-link" title="Mark this task done" onclick="cmDoneTask(\''+t.id+'\')">✓</button>'+
@@ -3926,6 +3945,13 @@ function cmWhenBar(c){
   // Confirmation line so the rep can see the committed time before saving.
   let note='';
   if(cmSel.req==='at'&&cmSel.at) note='<div class="cm-sub" style="margin:6px 0 0;color:var(--won)">📌 Calling back '+esc(fmtWhenAt(cmSel.at))+' — exact time, and a task lands on your dashboard.</div>';
+  /* On a no-answer, "no call-back" is not the CRM giving up — the email is taking the follow-up.
+     Say so, and say what happens next, or it reads like the lead just fell off the list. */
+  else if(cmSel.req==='none'&&cmSel.dispo==='noanswer'&&_cmC()&&pgHasEmail(_cmC())) note=(function(){
+    const c=_cmC(), on=seqActive(c);
+    return '<div class="cm-sub" style="margin:6px 0 0">📧 No call-back — '+
+      (on?'the cadence takes it from here.':'email is the follow-up. <b>They are not in a play yet</b> — start one above.')+
+      ' <span style="color:var(--mut)">Redialing a no-answer connects 20% of the time vs 75% on a fresh number.</span></div>'; })();
   else if(cmSel.req==='none') note='<div class="cm-sub" style="margin:6px 0 0">No call-back — they drop out of the queue.</div>';
   else { // The buttons are windows, not times. Print where this one really lands.
     const t=reqLandsAt(cmSel.req,c);
@@ -4362,8 +4388,39 @@ function reqLandsAt(reqKey,c){
    just failed — so tomorrow's attempt is a different time of day, not a rerun.
    Heat still matters, just not by re-dialing sooner: it keeps ranking the lead higher in the
    queue. Every requeue button still overrides this by hand. */
+/* ── A NO-ANSWER IS AN EMAIL, NOT A CALLBACK ──
+   Saad: "ill press no answer and the call back goes to in a day / so then the hot list just gets
+   bogged up with calls that are in que / but are unlikely to connact". Then the workflow he
+   actually runs: "oh calling naim - oh he doesnt have an email sequence, oh let me put him in a
+   sequence as this is calling. oh no answer, okay cool let me send out that email, move on to the
+   next" / "at the end of the day we play a volume game to book meetings."
+
+   MEASURED on his own 636 dispositioned dials, not assumed:
+     · a FIRST dial reaches a human 75% of the time; the dial after a no-answer reaches 20%
+     · and waiting longer does not help — it is FLAT at every interval he has already tried:
+         1 day 25% · 2-3 days 21% · 4-7 days 20% · same day 0%
+   So the interval was never the lever. Defaulting to "In a day" just spent tomorrow's list on
+   20% odds. 214 of his 636 dials were no-answers; 45 contacts are already two deep, 7 are three.
+
+   The email is the channel that doesn't need them to be standing near the phone, so when there is
+   an address it takes the follow-up and the dial drops out of the queue. When there is NO address
+   the phone is the only channel that exists, so it backs off rather than dropping them entirely —
+   dropping a contact you have no other way to reach is how someone gets lost for good. */
+function naStreak(c){
+  let n=0;
+  const lg=(c&&c.log)||[];
+  for(let i=lg.length-1;i>=0;i--){
+    const t=(lg[i]&&lg[i].txt)||'';
+    if(!/no answer/i.test(t)){ if(/interested|gatekeeper|callback|voicemail|not a good time|booked/i.test(t)) break; continue; }
+    n++;
+  }
+  return n; }
 function suggestReq(d,c){
   if(!d) return 'none';
+  if(d.k==='noanswer'){
+    if(c&&pgHasEmail(c)) return 'none';           // the cadence carries it; don't spend tomorrow on 20% odds
+    return naStreak(c)>=2?'1w':'2d';              // phone is all we have — widen the gap, never drop them
+  }
   // A voicemail is different — you left a message, so a warm lead getting back on the list a day
   // later is a follow-up, not a redial. That half is unchanged. Only no-answer lost its same-day path.
   if(d.k!=='lvm') return d.req||'none';
@@ -8963,7 +9020,7 @@ function openContact(id){
   if(c.angle) b+=fld('Why it scores',ta("setC('"+id+"','angle',this.value)",c.angle));
   b+=fld('Notes',ta("setC('"+id+"','notes',this.value)",c.notes));
   b+=outreachBar(c);
-  b+='<div class="sec">Cadence</div>'+cadenceBlock(id);
+  b+='<div class="sec" id="cadSec_'+id+'">Cadence</div>'+cadenceBlock(id);
   b+=customBlock('c',id);
   b+='<div class="sec">Tasks</div><div class="logbar"><button class="btn sm gh" onclick="addTaskFor(\'c\',\''+id+'\')" title="Add a task due today or in N days">＋ Add task</button>'+(hasCadence('c',id)?'':'<button class="btn sm gh" onclick="addCadenceFor(\'c\',\''+id+'\')">＋ 5-step call cadence</button>')+'</div>'+contactTasks(id);
   b+='<div class="sec">Activity</div>'+logBar('c',id)+'<div id="log-c'+id+'">'+logList(c,'c',id)+'</div>';
