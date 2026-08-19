@@ -491,7 +491,7 @@ small.hint{color:var(--dim);font-size:11px}
   <button data-v="contacts">Contacts <span class="pill" id="p-cts">0</span></button>
   <button data-v="intent">📬 Opens <span class="pill" id="p-intent">0</span></button>
   <button data-v="sequences">Sequences <span class="pill" id="p-seq">0</span></button>
-  <button data-v="hotlist">Hot List <span class="pill" id="p-hot">0</span></button>
+  <button data-v="hotlist">Work <span class="pill" id="p-hot">0</span></button>
   <button data-v="pipeline">Pipeline <span class="pill" id="p-pipe">0</span></button>
   <button data-v="closed">Closed <span class="pill" id="p-closed">0</span></button>
   <button data-v="live">Live <span class="pill" id="p-live">0</span></button>
@@ -626,7 +626,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug18·z187';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug19·z188';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1393,7 +1393,11 @@ function warmBadge(w){ w=w||'Cold'; return '<span class="badge '+(WARMC[w]||'b-c
 function el(id){ return document.getElementById(id); }
 
 /* filters + search state */
-let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), hours:new Set(), tier:new Set(), cad:new Set(), tab:'today' };
+/* pgShown / pgOpen / pgChip live HERE and not in a local or a DOM class on purpose: the 30s reconcile
+   re-runs renderHotList() wholesale, so anything held anywhere else gets wiped mid-scroll every half
+   minute — "show 25 more" would silently collapse back while he was reading it. */
+let UI={ q:'', warmth:new Set(), stage:new Set(), have:new Set(), opens:new Set(), owner:new Set(), assignee:new Set(), loc:new Set(), pos:new Set(), cuisine:new Set(), hours:new Set(), tier:new Set(), cad:new Set(), tab:'today',
+  pgShown:{}, pgOpen:{}, pgChip:'', pgRest:false, pgCool:false, pgScore:false };
 function onSearch(){ UI.q=el('q').value.toLowerCase().trim(); renderActive(); }
 function buildFilters(){
   const w=el('f-warmth'); w.innerHTML=WARMTHS.map(x=>'<span class="fchip '+(UI.warmth.has(x)?'on '+WARMC[x]:'')+'" onclick="tgl(\'warmth\',\''+x+'\')">'+x+'</span>').join('');
@@ -4796,6 +4800,17 @@ function laneMine(c){
   if(own) return own===me;                                                     // evidence beats the hash
   return (_idHash(c.id)%crew.length)===i;
 }
+/* Is it this contact's turn on the phone? Lifted out of hotQueue unchanged so there is exactly ONE
+   answer to that question on the page. See the long note inside hotQueue for why each clause exists
+   — promised call-back beats everything, a fresh open beats the play, a dial you never dispositioned
+   still rests the number. */
+function callDue(c){ const now=Date.now();
+  if(+c.nextCallAt&&+c.nextCallAt>now) return false;
+  if(+c.promisedCallAt) return true;
+  if(dialHold(c)>now){ const o=lastOpenTs(c); if(!(o&&o>+c.lastDialAt&&now-o<864e5)) return false; }
+  if(+c.emailedByMeAt>=+today0()) return true;
+  { const o=lastOpenTs(c); if(o&&now-o<864e5&&o>lastTouchTs(c)) return true; }
+  const e=taskIndex()[c.id]; return !(e&&e.callDue>now); }
 function hotQueue(){ const now=Date.now();
   // In-pipe contacts (booked demo / follow-up / no-show deals on them or their account) live in
   // the Pipeline tab — the Hot List is strictly the cold/warm-call playlist.
@@ -4837,12 +4852,9 @@ function hotQueue(){ const now=Date.now();
   // number rests, so tomorrow's list is made of people you haven't rung rather than yesterday's
   // voicemails. A promised call-back outranks it (they asked you personally), and so does a fresh
   // open that landed AFTER the dial — reading your email since you rang is a new reason to ring.
-  const isDue=c=>{ if(+c.nextCallAt&&+c.nextCallAt>now) return false;
-    if(+c.promisedCallAt) return true;
-    if(dialHold(c)>now){ const o=lastOpenTs(c); if(!(o&&o>+c.lastDialAt&&now-o<864e5)) return false; }
-    if(+c.emailedByMeAt>=+today0()) return true;
-    { const o=lastOpenTs(c); if(o&&now-o<864e5&&o>lastTouchTs(c)) return true; }
-    const e=taskIndex()[c.id]; return !(e&&e.callDue>now); };
+  // Hoisted to callDue() below so the Calls job can apply the SAME clock — it was a closure here,
+  // which is how the dial card and the list underneath it ended up disagreeing about who's due.
+  const isDue=callDue;
   // When it IS their turn — the promised time if one was given, otherwise whichever comes first,
   // the call-back you booked or the play's next call step. Drives the Later list so a held-back
   // contact still shows a date instead of vanishing.
@@ -7220,12 +7232,12 @@ function unskipLast(){ if(!skipIds.length) return; const id=skipIds.pop(); saveS
    Order only. Nothing here decides WHO is callable; hotQueue still owns that entirely. */
 const SESSION_TTL=4*3600e3, SESSION_N=60;
 let sessionIds=[], sessionAt=0;
-try{ sessionIds=JSON.parse(localStorage.getItem('shipday_crm_sess')||'[]')||[]; sessionAt=+localStorage.getItem('shipday_crm_sess_at')||0; }catch(e){}
+try{ sessionIds=JSON.parse(localStorage.getItem('shipday_crm_sess2')||'[]')||[]; sessionAt=+localStorage.getItem('shipday_crm_sess2_at')||0; }catch(e){}
 function sessionLive(){ return !!(sessionAt && Date.now()-sessionAt<SESSION_TTL && sessionIds.length); }
 function startSession(ids){ sessionIds=ids.slice(0,SESSION_N); sessionAt=Date.now();
-  try{ localStorage.setItem('shipday_crm_sess',JSON.stringify(sessionIds)); localStorage.setItem('shipday_crm_sess_at',String(sessionAt)); }catch(e){} }
+  try{ localStorage.setItem('shipday_crm_sess2',JSON.stringify(sessionIds)); localStorage.setItem('shipday_crm_sess2_at',String(sessionAt)); }catch(e){} }
 function endSession(){ sessionIds=[]; sessionAt=0;
-  try{ localStorage.removeItem('shipday_crm_sess'); localStorage.removeItem('shipday_crm_sess_at'); }catch(e){} }
+  try{ localStorage.removeItem('shipday_crm_sess2'); localStorage.removeItem('shipday_crm_sess2_at'); }catch(e){} }
 function newBlock(){ endSession(); clearSkips(); setPin(null); renderHotList(); toast('New block — queue re-ranked from scratch'); }
 function orderBySession(due){
   if(!sessionLive()) startSession(due.map(c=>c.id));
@@ -7392,8 +7404,48 @@ function dataGaps(c){
   if(!site) g.push({k:'website',t:'Find the website',how:dom?'Try '+dom+' — it\u2019s the domain on their email':(q?'Google "'+q+'"':'No name and no email domain — this row needs a name before anything else')});
   if(!posOf(a)) g.push({k:'pos',t:'Identify the POS',how:'Open their online-ordering link — Toast / Square / Clover is in the URL or the footer'});
   if(!String(a.city||'').trim()) g.push({k:'city',t:'Add the city',how:'Google Maps'});
+  g.forEach(x=>{ x.q=q; x.site=site; x.dom=dom; });
   return g;
 }
+/* ── THE INSTRUCTION IS THE BUTTON ──
+   Saad: "you got the right idea but not exactly / with the instructions lol". dataGaps already knew
+   the exact search string — it computed `q` and then spent it on PROSE ("Google \"Soul 2 Go
+   Columbus\" → the Google Business panel has it"), printed three-deep on every row. Reading an
+   instruction that tells you to type something you are already looking at is the slowest possible
+   version of a fast job. Same string, same fallback chain, now a link he clicks.
+   🔑 No q means NO LINK. The z185 fallback exists because the rows most needing enrichment have the
+   least to enrich from; a Google button that searches for "" is worse than honest copy. */
+function gapAction(g,c){
+  const q=g.q||'', site=g.site||'', dom=g.dom||'';
+  const G=s=>'https://www.google.com/search?q='+encodeURIComponent(s);
+  const url=h=>/^https?:/.test(h)?h:'https://'+h;
+  if(g.k==='phone')   return site?{label:'🔎 '+site+' → contact page',href:url(site)}:(q?{label:'🔎 Google "'+q+'"',href:G(q)}:{label:'',href:''});
+  if(g.k==='website') return dom?{label:'🔎 Try '+dom,href:url(dom)}:(q?{label:'🔎 Google "'+q+'"',href:G(q)}:{label:'',href:''});
+  if(g.k==='title')   return {label:'🔎 Find them on LinkedIn',href:'https://www.linkedin.com/search/results/people/?keywords='+encodeURIComponent([q,cname(c)].filter(Boolean).join(' '))};
+  if(g.k==='pos')     return site?{label:'🔎 Check their ordering page',href:url(site)}:(q?{label:'🔎 Google "'+q+' online ordering"',href:G(q+' online ordering')}:{label:'',href:''});
+  if(g.k==='city')    return q?{label:'🔎 Google Maps',href:'https://www.google.com/maps/search/'+encodeURIComponent(q)}:{label:'',href:''};
+  /* 🔴 `email` used to dead-end on the prose "Find the site first" whenever there was no site —
+     65 rows measured, and every one of them was carrying a perfectly good name+city to search on.
+     That is the z185 failure again: the rows with the least data got the least help. Same fallback
+     chain as every other gap now; only a genuinely empty `q` still gets the honest no-link copy. */
+  if(g.k==='email')   return site?{label:'🔎 '+site+' → footer',href:url(site)}:(q?{label:'🔎 Google "'+q+'"',href:G(q)}:{label:'',href:''});
+  return {label:'',href:''};
+}
+/* The research CTA: go get it, then type it in. Two buttons, because finding the number and saving
+   the number are two different moments and the row has to survive the trip to the browser tab.
+   ⚠️ In a 25-row list the button label has to be SHORT — the full query is the account name, which
+   is already sitting two columns to the left, and printing it again squeezed every other column off
+   the screen. Full label survives in the tooltip and in the now-card, where there is only one. */
+function gapCTA(c,full){
+  const g=c._pgGaps||dataGaps(c), first=g[0];
+  const add='<button class="btn sm pri" onclick="event.stopPropagation();promptDirectLine(\''+c.id+'\')">＋ Add number</button>';
+  if(!first) return add;
+  const act=gapAction(first,c);
+  if(!act.href) return '<span style="font-size:12px;color:var(--mut)">'+esc(first.how)+'</span><br>'+add;
+  const lbl=full?act.label+' ↗':(act.label.split('"')[0].trim()+' ↗');
+  return '<a class="btn sm pri" href="'+esc(act.href)+'" target="_blank" rel="noopener" title="'+esc(act.label)+'" onclick="event.stopPropagation()" style="text-decoration:none">'+esc(lbl)+'</a> '+add;
+}
+function pgToggleSteps(id){ UI.pgOpen[id]=!UI.pgOpen[id]; renderHotList(); }
 /* Is this worth the ten minutes? Only if something already says the account is real. A thin row with
    no signal at all is not a research job, it's a name — and sending him to enrich those is how the
    bucket turns into 2,000 rows of homework and gets ignored like everything else that did. */
@@ -7432,8 +7484,19 @@ const PG_KINDS={
   email:   {icon:'📧', verb:'Send the step',        panel:'📧 Cadence emails due',   hint:'runs whether or not you get to the phone'},
   nurture: {icon:'✉️', verb:'Keep emailing',        panel:'✉️ Email-only',           hint:'no phone and no open yet — not worth research time'}
 };
+/* ── NOTHING GETS LOST IN THE TRACKS ──
+   Saad: "thigns get lost in the tracks". This function used to answer "no move for this person" by
+   returning a bare null, and pipelineQueue dropped them on the floor — 2,320 of his contacts, and
+   Johnny's ENTIRE book, vanishing with no trace and no count. A list that silently discards two
+   thirds of the people in it is exactly how things get lost.
+   It now says WHY. The reasons are load-bearing, not decoration: `nosignal` is the Apollo enrichment
+   argument, `thin` is the import-quality argument, and both are invisible if the rows just disappear.
+   🔑 This changes NOTHING about who gets worked — a rest is still a rest, and a dial is still
+   earned. It only makes the reservoir countable. */
+function atRest(no){ return {k:'rest',no:no,rank:0,why:''}; }
+const REST_WHY={nosignal:'nothing says the account is worth the time yet',thin:'no phone and no email — nothing to reach them on',nocad:'you marked them not a fit for a cadence',noshow:'they no-showed and there\u2019s no number on file'};
 function nextAction(c){
-  if(!c) return null;
+  if(!c) return atRest('thin');
   const a=acct(c.accountId)||{};
   const ph=pgHasPhone(c), em=pgHasEmail(c), op=pgOpened(c), seq=seqActive(c);
   const now=Date.now(), openTs=lastOpenTs(c), fresh=openTs&&(now-openTs<7*864e5);
@@ -7493,10 +7556,10 @@ function nextAction(c){
   if(ph&&em){
     // He said not a fit. callIntent already had its say further up, so anyone who had earned a dial
     // never reached this line — which makes the honest answer nothing, and nothing is a result.
-    if(+c.noCad>now) return null;
+    if(+c.noCad>now) return atRest('nocad');
     // Unreachable no-show (no phone above meant no dial). Still not a cold cadence — the answer to
     // a missed meeting is a conversation, and the research bucket already asked for their number.
-    if(ns) return null;
+    if(ns) return atRest('noshow');
     const end=cadEndedTs(c);
     if(end&&now-end<CAD_COOLDOWN){
       const nm=((seqById((c.emailSeq||{}).seqId)||{}).name)||'the last play';
@@ -7508,7 +7571,9 @@ function nextAction(c){
              :'Phone and email, never enrolled'+(op?' · opened '+fmtAgo(openTs):'')};
   }
   if(em) return {k:'nurture',rank:heat(c)-100,why:'Email only, no open yet'};
-  return null;
+  // A phone and nothing else. Not a rest for lack of a number — for lack of a REASON, which is the
+  // whole "a dial is earned" doctrine. Counting them is how that argument stays visible.
+  return atRest(pgHasPhone(c)?'nosignal':'thin');
 }
 /* ── THE DAY SIZES ITSELF OFF THE CALENDAR ──
    Saad: "so that basically it fits right in to the schedule ... and syncs with your schedule ... if
@@ -7546,16 +7611,43 @@ function pipelineQueue(){
     !c.internal&&!c.queueOut&&!isCustC(c)&&!['In Pipeline','Customer'].includes(c.status)
     &&!liveDealFor(c)&&!isDNC(c)&&!isDeadChain(acct(c.accountId))&&laneMine(c)&&seqMine(c)&&!claimedByOther(c)));
   const by={}; Object.keys(PG_KINDS).forEach(k=>by[k]=[]);
-  pool.forEach(c=>{ const act=nextAction(c); if(!act) return;
+  // Every contact that came out of the pool leaves this function accounted for, in exactly one of
+  // these three places. by.__pool is the conservation check: it has to equal the sum of the rest.
+  by.__rest={}; by.__resting=0; by.__held=0; by.__pool=pool.length;
+  pool.forEach(c=>{ const act=nextAction(c)||atRest('thin');
+    if(act.k==='rest'){ by.__rest[act.no]=(by.__rest[act.no]||0)+1; by.__resting++; return; }
     // A number that was just worked rests, exactly as it does in the call queue — otherwise the
     // "dynamic" list would hand him this morning's voicemails again this afternoon.
-    if((act.k==='call'||act.k==='owed'||act.k==='noshow')&&(dialHold(c)>Date.now()||(+c.nextCallAt>Date.now()))) return;
+    if((act.k==='call'||act.k==='owed'||act.k==='noshow')&&(dialHold(c)>Date.now()||(+c.nextCallAt>Date.now()))){ by.__held++; return; }
     // Proximity leads the sort, the bucket's own rank breaks ties. "whats gonna measure the closest
     // deal" — this is the answer, and it's why two people in the same bucket aren't in book order.
     const px=dealProx(c); c._pgProx=px;
-    c._pgWhy=act.why; c._pgRank=Math.round(px.n+act.rank*0.4); by[act.k].push(c); });
-  Object.keys(by).forEach(k=>by[k].sort((x,y)=>y._pgRank-x._pgRank));
+    c._pgWhy=act.why; c._pgKind=act.k; c._pgRank=Math.round(px.n+act.rank*0.4); by[act.k].push(c); });
+  Object.keys(PG_KINDS).forEach(k=>by[k].sort((x,y)=>y._pgRank-x._pgRank));
   return by;
+}
+/* ── ONE RANKED LIST, NOT NINE PANELS ──
+   pipelineQueue works out a global order (_pgRank = deal proximity + the bucket's own rank) and
+   pgPanels then THREW IT AWAY, re-splitting into fixed-order panels — so the fourth-best action on
+   the page could sit below thirty worse ones, and he had to read nine headings to find it. Within a
+   job the rows all want the same thing from him anyway, so they go in one list, best first, with the
+   bucket icon in the gutter. The chips filter; they don't reorder. */
+function jobRows(by,job){
+  const ks=(PG_JOBS[job]||PG_JOBS.call).ks;
+  let out=[];
+  ks.forEach(k=>{ if(k==='cooling') return; out=out.concat(by[k]||[]); });
+  return out.sort((x,y)=>y._pgRank-x._pgRank);
+}
+/* 🔴 ONE ANSWER TO "WHO DO I CALL". The dial card was fed by hotQueue() and the list under it by
+   pipelineQueue() — two pools, two filters, two rankings — so the card said Lambros Paxos while the
+   first row of the list said Bobby Silver. Both were defensible; having both on one screen is not,
+   and it is the literal mechanism of "thigns get lost in the tracks": whichever name you didn't
+   act on was the one the other list had already decided was better.
+   The Calls job is now the single source. What pipelineQueue does NOT apply and hotQueue did —
+   a real phone, dupDial (same LINE just worked through a different contact record) and the due
+   clock — is re-applied here, so nothing that was protected before is exposed now. */
+function callJobDue(by){
+  return jobRows(by,'call').filter(c=>hasRealPhone(c)&&!dupDial(c)&&callDue(c));
 }
 /* The schedule bar. It NEVER hides the list — see pgDayShape's note. If he's in a demo right now it
    says so, names who, and puts the notes one click away; if the guest no-shows he is already looking
@@ -7588,10 +7680,12 @@ function pgStageChip(c){
   return ' <span style="font-size:11px;color:'+hot+';border:1px solid '+hot+';border-radius:999px;padding:0 6px;white-space:nowrap">'+esc(p.stage.t)+
     (p.locs>=1?' · '+(p.locs+1)+' loc':'')+'</span>';
 }
-function pgRow(c,kind){
-  const a=acct(c.accountId)||{};
-  const cta=kind==='reply'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">↩️ Open the thread</button>'
-    :kind==='research'?'<button class="btn sm pri" onclick="event.stopPropagation();promptDirectLine(\''+c.id+'\')">＋ Add number</button>'
+/* One ladder, one place. This used to live inline in pgRow, and the now-card got at it by running a
+   regex over pgRow's rendered <tr> to cut the last cell out — so every button on the page was one
+   whitespace change away from breaking. Both callers now ask for the buttons directly. */
+function pgCTA(c,kind){
+  return kind==='reply'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">↩️ Open the thread</button>'
+    :kind==='research'?gapCTA(c)
     :kind==='cooling'?'<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ▸</button>'
     :kind==='enroll'?'<button class="btn sm pri" onclick="event.stopPropagation();startEmailCadence(\''+c.id+'\')">➕ '+esc((seqById(suggestSeq(c))||{}).name||'Start play')+'</button>'
       // Saad: "there should be an option to not put in a cadence". A suggestion you can't decline is
@@ -7601,83 +7695,143 @@ function pgRow(c,kind){
     :(kind==='call'||kind==='owed')?'<button class="btn sm pri" onclick="event.stopPropagation();openCallModal(\''+c.id+'\')">📞 '+esc(telNum(c))+'</button>'
     :kind==='email'?'<button class="btn sm pri" onclick="event.stopPropagation();openContact(\''+c.id+'\')">📧 Send step</button>'
     :'<button class="btn sm gh" onclick="event.stopPropagation();openContact(\''+c.id+'\')">Open ▸</button>';
+}
+function pgRow(c,kind){
+  const a=acct(c.accountId)||{};
   const site=(kind==='research'&&a.website)?' <a href="'+esc(/^https?:/.test(a.website)?a.website:'https://'+a.website)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--sig)">site ↗</a>':'';
-  /* Saad: "tell us step by step what to do / to make sure that account is good to hit up." Naming
-     the missing field is a complaint; naming where to go and get it is a task. Numbered, capped at
-     three, in unblock order — the fourth thing to look up is a thing he'll never do today. */
+  /* Saad: "you got the right idea but not exactly — with the instructions lol". The idea was right:
+     a good account with no data is a job. The execution was a NUMBERED READING ASSIGNMENT on every
+     row — three lines of prose telling him to go and type a search he was already looking at. Step
+     one is now the button (see gapCTA); steps two and three fold away until he asks for them. */
   let steps='';
   if(kind==='research'){
     const g=c._pgGaps||dataGaps(c);
-    if(g.length) steps='<div style="margin-top:5px;font-size:12px;line-height:1.55">'+
-      g.slice(0,3).map((x,i)=>'<div><span style="color:var(--sig)">'+(i+1)+'.</span> <b>'+esc(x.t)+'</b> — <span style="color:var(--mut)">'+esc(x.how)+'</span></div>').join('')+
-      (g.length>3?'<div style="color:var(--mut)">+ '+(g.length-3)+' more once those are in</div>':'')+'</div>';
+    if(g.length>1) steps='<div style="margin-top:4px;font-size:12px">'+
+      '<span onclick="event.stopPropagation();pgToggleSteps(\''+c.id+'\')" style="cursor:pointer;color:var(--sig)">'+
+        (UI.pgOpen[c.id]?'▾ hide':'▸ '+(g.length-1)+' more')+'</span>'+
+      (UI.pgOpen[c.id]?'<div style="margin-top:4px;line-height:1.55">'+
+        g.slice(1,4).map((x,i)=>{ const act=gapAction(x,c); return '<div><span style="color:var(--sig)">'+(i+2)+'.</span> <b>'+esc(x.t)+'</b> — '+
+          (act.href?'<a href="'+esc(act.href)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--sig)">'+esc(x.how)+' ↗</a>':'<span style="color:var(--mut)">'+esc(x.how)+'</span>')+'</div>'; }).join('')+
+        (g.length>4?'<div style="color:var(--mut)">+ '+(g.length-4)+' more once those are in</div>':'')+'</div>':'')+'</div>';
   }
-  return '<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')"><td class="tname">'+esc(cname(c))+pgStageChip(c)+
+  const icon=(PG_KINDS[kind]||{}).icon||'';
+  /* One list means the bucket is no longer a heading, so it has to be legible per-row — the icon in
+     a fixed gutter does that in 26px. Widths are explicit because the CTA column is the widest thing
+     in the row and, left to itself, it squeezes the name down to one word per line. */
+  return '<tr style="cursor:pointer" onclick="openContact(\''+c.id+'\')">'+
+    '<td style="width:26px;text-align:center;vertical-align:top;padding-top:11px" title="'+esc((PG_KINDS[kind]||{}).verb||'')+'">'+icon+'</td>'+
+    '<td class="tname" style="width:26%;min-width:150px">'+esc(cname(c))+pgStageChip(c)+
     '<div class="tsub">'+esc(a.name||'')+site+'</div></td>'+
     '<td style="font-size:12px;color:var(--mut)">'+(c._pgWhy||'')+steps+'</td>'+
-    '<td style="text-align:right;white-space:nowrap;vertical-align:top">'+cta+'</td></tr>';
+    '<td style="text-align:right;white-space:nowrap;vertical-align:top;width:1%">'+pgCTA(c,kind)+'</td></tr>';
 }
 /* ── DO THIS RIGHT NOW ──
-   Saad: "i just need this to look more dynamic / like what to DO RIGHT NOW". Six panels is a report.
-   One name with one button is an instruction. This is the single highest-proximity action on the
-   page, pulled out above everything so the answer to "what now" is readable without a decision. */
-function pgNowCard(by){
-  const allow=PG_MODES[pgMode()].ks;
-  let best=null;
-  Object.keys(by).forEach(k=>{ if(k==='cooling') return; if(allow&&!allow.includes(k)) return;
-    (by[k]||[]).forEach(c=>{ if(!best||c._pgRank>best.c._pgRank) best={c:c,k:k}; }); });
-  if(!best) return '';
-  const c=best.c, a=acct(c.accountId)||{}, K=PG_KINDS[best.k];
+   Saad: "i just need this to look more dynamic / like what to DO RIGHT NOW". A page of panels is a
+   report; one name with one button is an instruction. In Calls this slot is callCard — the dial card
+   is the piece that works and pin/claim/dispo all hang off it — so this renders for Emails and Data
+   only, and every job has exactly ONE now-card. Two of them naming two different people was the
+   single biggest reason the page read as cluttered. */
+function pgNowCard(list){
+  const best=(list||[])[0]; if(!best) return '';
+  const c=best, a=acct(c.accountId)||{}, K=PG_KINDS[c._pgKind]||{};
+  const gaps=(c._pgKind==='research')?(c._pgGaps||dataGaps(c)):[];
   return '<div class="panel" style="border-color:var(--sig);background:rgba(90,160,255,.06)">'+
     '<div style="padding:12px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
     '<div style="flex:1;min-width:240px">'+
-      '<div style="font-size:11px;letter-spacing:.08em;color:var(--sig)">DO THIS NOW · '+esc(K.verb.toUpperCase())+'</div>'+
+      '<div style="font-size:11px;letter-spacing:.08em;color:var(--sig)">DO THIS NOW · '+esc(String(K.verb||'').toUpperCase())+'</div>'+
       '<div style="font-size:17px;font-weight:600;margin:2px 0">'+esc(cname(c))+pgStageChip(c)+'</div>'+
       '<div style="font-size:12px;color:var(--mut)">'+esc(a.name||'')+' — '+(c._pgWhy||'')+'</div>'+
-    '</div>'+pgRow.call(null,c,best.k).replace(/^[\s\S]*?<td style="text-align:right[^>]*>/,'').replace(/<\/td><\/tr>$/,'')+
+      // The one place the full checklist survives. It's one person, so it's a briefing, not homework.
+      (gaps.length>1?'<div style="margin-top:6px;font-size:12px;line-height:1.55">'+
+        gaps.slice(1,3).map((x,i)=>'<div><span style="color:var(--sig)">'+(i+2)+'.</span> '+esc(x.t)+' — <span style="color:var(--mut)">'+esc(x.how)+'</span></div>').join('')+'</div>':'')+
+    '</div><div style="white-space:nowrap">'+(c._pgKind==='research'?gapCTA(c,true):pgCTA(c,c._pgKind))+'</div>'+
     '</div></div>';
 }
-/* ── MODES ── Saad: "what if we had an email only mode / or a call only mode".
-   The split is not by tool, it's by POSTURE: either you're on the phone or you're at the desk.
-   Hunting a missing direct line is desk work — it belongs with the email block, not between dials. */
-const PG_MODES={all:{t:'⚡ Everything',ks:null},
-  email:{t:'📧 Email only',ks:['reply','email','enroll','research','cooling','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
-  call:{t:'☎️ Call only',ks:['reply','noshow','owed','call'],sub:'phone block — every dial here was earned by an open or a fit, not by a due date'}};
-function pgMode(){ const m=UI.pgMode||'all'; return PG_MODES[m]?m:'all'; }
-function setPgMode(m){ UI.pgMode=m; try{ localStorage.setItem('pgMode',m); }catch(e){} renderHotList(); }
-try{ const _m=localStorage.getItem('pgMode'); if(_m&&PG_MODES[_m]) UI.pgMode=_m; }catch(e){}
-function pgModeBar(){
+/* ── THREE JOBS ──
+   Saad: "i just want to be able for people to focus on emails, calls and scraping data / and all of
+   it should work hand in hand." The old split was three MODES — Everything / Email only / Call only
+   — which is a filter, not a job. "Everything" in particular was the clutter: nine panels stacked
+   under a heading that promised no focus at all.
+   🔑 Scraping is now its OWN job. z182 filed research under the email posture with the reasoning
+   "hunting a missing direct line is desk work" — true, but he has since named it as one of the three
+   things he actually does, and a job you're told to do between emails is a job that never happens.
+   🔑 `reply` sits in BOTH call and email on purpose: a human wrote back, and you answer that however
+   it arrived. It is the only bucket that belongs in two places.
+   "Hand in hand" is why jobBar always prints ALL THREE counts, lit or not — you can see the email
+   pile stacking up while you're on the phone, which is the whole reason to switch. */
+const PG_JOBS={
+  call: {t:'☎️ Calls', ks:['reply','noshow','owed','call'],            sub:'every dial here was earned by an open or a fit, not by a due date'},
+  email:{t:'📧 Emails',ks:['reply','email','enroll','cooling','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
+  data: {t:'🔎 Data',  ks:['research'],                                 sub:'good accounts you can\u2019t reach yet — each row is one click to go get it'}};
+// A stored 'all' is a mode that no longer exists. Land it on calls rather than silently on whatever
+// Object.keys happens to return first.
+function pgMode(){ const m=UI.pgMode||'call'; return PG_JOBS[m]?m:'call'; }
+function setPgMode(m){ UI.pgMode=m; UI.pgChip=''; try{ localStorage.setItem('pgMode',m); }catch(e){} renderHotList(); }
+try{ const _m=localStorage.getItem('pgMode'); UI.pgMode=(_m&&PG_JOBS[_m])?_m:'call'; }catch(e){}
+function jobBar(by){
   const cur=pgMode();
-  return '<div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
-    Object.keys(PG_MODES).map(m=>'<span onclick="setPgMode(\''+m+'\')" style="cursor:pointer;padding:3px 10px;border-radius:999px;font-size:12px;border:1px solid '+(m===cur?'var(--sig)':'var(--bd)')+';background:'+(m===cur?'rgba(90,160,255,.15)':'transparent')+'">'+PG_MODES[m].t+'</span>').join('')+
-    (PG_MODES[cur].sub?'<span style="color:var(--mut);font-size:12px">'+PG_MODES[cur].sub+'</span>':'')+'</div>';
+  const n=j=>PG_JOBS[j].ks.reduce((s,k)=>s+((by[k]||[]).length),0);
+  return Object.keys(PG_JOBS).map(j=>{ const on=j===cur, ct=n(j);
+    return '<span onclick="setPgMode(\''+j+'\')" style="cursor:pointer;padding:4px 12px;border-radius:999px;font-size:12.5px;border:1px solid '+(on?'var(--sig)':'var(--bd)')+';background:'+(on?'rgba(90,160,255,.16)':'transparent')+';font-weight:'+(on?600:400)+'">'+
+      PG_JOBS[j].t+' <b style="color:'+(on?'var(--sig)':'var(--mut)')+'">'+ct+'</b></span>'; }).join('');
 }
-function pgPanels(by,budget){
-  // Budget order = payoff order. Research first because it is the smallest bucket and the only one
-  // where the contact has already raised their hand; dials last because they are the bottomless one
-  // and would otherwise eat the whole day before anything else got a seat.
-  const allow=PG_MODES[pgMode()].ks;
-  // Replies first, then dials that were EARNED. Cooling sits near the bottom as a visible "leave
-  // these alone" — hiding them would just look like the list forgot people it used to show.
-  const order=['reply','noshow','call','owed','research','email','enroll','cooling','nurture'].filter(k=>!allow||allow.includes(k));
-  const caps={reply:10,noshow:10,owed:8,research:10,enroll:10,email:25,call:budget,cooling:6,nurture:5};
-  // Call-only means CALL ONLY. Saad: "just to hammer out calls" — so the dial bucket stops competing
-  // with buckets that aren't on screen and gets the whole day's budget.
-  if(pgMode()==='call'){ caps.call=Math.max(budget,25); caps.owed=25; }
-  let h='',used=0;
-  order.forEach(k=>{ const list=by[k]||[]; if(!list.length) return;
-    const take=Math.max(0,Math.min(caps[k],list.length,Math.max(0,budget+20-used)));
-    if(!take) return; used+=take;
-    const K=PG_KINDS[k];
-    h+='<div class="panel"><div class="ph"><h3>'+K.panel+'</h3><span class="sub">'+
-      (list.length>take?take+' of '+list.length+' — ':list.length+' — ')+K.hint+'</span></div>'+
-      '<table><tbody>'+list.slice(0,take).map(c=>pgRow(c,k)).join('')+'</tbody></table></div>';
-  });
+const PG_PAGE=25;
+function pgMore(job){ UI.pgShown[job]=(UI.pgShown[job]||PG_PAGE)+PG_PAGE; renderHotList(); }
+function pgChip(k){ UI.pgChip=(UI.pgChip===k?'':k); renderHotList(); }
+function pgToggle(f){ UI[f]=!UI[f]; renderHotList(); }
+function jobList(by,job,rows,foot){
+  const J=PG_JOBS[job];
+  // Chips carry the counts and filter in place. They deliberately do NOT reorder — the order is the
+  // one thing on this page that took real measurement (dealProx × bucket rank) and a chip that
+  // rearranged it would just be the nine panels again with extra clicks.
+  const counts={}; rows.forEach(c=>counts[c._pgKind]=(counts[c._pgKind]||0)+1);
+  const chips=J.ks.filter(k=>k!=='cooling'&&counts[k]).map(k=>{ const on=UI.pgChip===k, K=PG_KINDS[k];
+    return '<span onclick="pgChip(\''+k+'\')" title="'+esc(K.hint)+'" style="cursor:pointer;padding:2px 9px;border-radius:999px;font-size:12px;border:1px solid '+(on?'var(--sig)':'var(--bd)')+';background:'+(on?'rgba(90,160,255,.15)':'transparent')+'">'+K.icon+' '+counts[k]+'</span>'; }).join('');
+  const shown=rows.filter(c=>!UI.pgChip||c._pgKind===UI.pgChip);
+  const take=Math.min(UI.pgShown[job]||PG_PAGE,shown.length), left=shown.length-take;
+  let h='<div class="panel"><div class="ph"><h3>'+J.t+'</h3><span class="sub">'+shown.length+' — '+J.sub+'</span></div>';
+  if(chips) h+='<div style="padding:8px 14px 2px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+chips+
+    (UI.pgChip?'<span onclick="pgChip(\'\')" style="cursor:pointer;font-size:12px;color:var(--sig)">clear</span>':'')+'</div>';
+  h+= shown.length
+    ? '<table><tbody>'+shown.slice(0,take).map(c=>pgRow(c,c._pgKind)).join('')+'</tbody></table>'
+    : '<div class="qempty">Nothing in this job right now.</div>';
+  /* 🔴 NO SILENT CAPS. The old code capped research at 10 of 418 and never said so, which is the
+     literal mechanism behind "thigns get lost in the tracks" — row 11 simply did not exist. */
+  const more=left>0?'<span onclick="pgMore(\''+job+'\')" style="cursor:pointer;color:var(--sig)">Show '+Math.min(PG_PAGE,left)+' more</span> <span style="color:var(--mut)">· '+left+' left</span>':'';
+  /* The restore / bring-back-skipped / resync links used to live under the deleted 150-row "Up next"
+     table. They exist to PROVE nothing disappeared, so they move down here with the count rather
+     than dying with the table that happened to be carrying them. */
+  const line=[more,foot||''].filter(Boolean).join(' · ');
+  if(line) h+='<div style="padding:9px 14px;font-size:12.5px">'+line+'</div>';
+  h+='</div>';
+  // Cooling is a "leave these alone" list, so it stops competing for attention with work — but it
+  // stays COUNTED and one click away. z184 shipped it visible on purpose so it wouldn't look like
+  // the list had forgotten people; a live count keeps that promise without the twelfth panel.
+  if(job==='email'&&(by.cooling||[]).length){
+    const cl=by.cooling;
+    h+='<div class="panel"><div style="padding:10px 14px;font-size:12.5px;color:var(--mut)">'+
+      '<span onclick="pgToggle(\'pgCool\')" style="cursor:pointer;color:var(--sig)">'+(UI.pgCool?'▾':'▸')+' 🧊 '+cl.length+' just came off a play</span> — don\u2019t re-enrol these, the last cadence is still in their inbox</div>'+
+      (UI.pgCool?'<table><tbody>'+cl.slice(0,25).map(c=>pgRow(c,'cooling')).join('')+'</tbody></table>':'')+'</div>';
+  }
+  /* The reservoir. These used to be dropped on the floor by pipelineQueue with no count anywhere —
+     2,320 of Saad's contacts and the whole of Johnny's book. Shown in Data only, because the answer
+     to "no signal" is enrichment, and that is what this job is. */
+  if(job==='data'&&by.__resting){
+    const parts=Object.keys(by.__rest).sort((a,b)=>by.__rest[b]-by.__rest[a])
+      .map(k=>by.__rest[k]+' '+(REST_WHY[k]||k));
+    h+='<div class="panel"><div style="padding:10px 14px;font-size:12.5px;color:var(--mut)">'+
+      '😴 <b>'+by.__resting+' parked</b> — '+esc(parts.join(' · '))+
+      '<br>Not lost, just nothing to act on yet. Enrich these and they come back as work.</div></div>';
+  }
   return h;
 }
 function renderHotList(){
-  let {due,snoozed}=hotQueue();
-  // Freeze the ORDER for this calling block (membership is still 100% hotQueue's call).
+  const _cal=pgCalBar(), _by=pipelineQueue(), _budget=pgTarget(_cal.D.freeMin);
+  const job=pgMode(), _rows=jobRows(_by,job);
+  // The dial card and the Calls list are now the SAME list — see callJobDue. snoozed still comes
+  // from hotQueue: it answers "when is their turn", which the pipeline queue never modelled.
+  let due=callJobDue(_by), snoozed=hotQueue().snoozed;
+  // Freeze the ORDER for this calling block (membership is still 100% the queue's call).
   // Everything below — pin, cur, rest, the counts — reads the same list, just in a stable order.
   const sess=orderBySession(due); due=sess.list;
   // PIN the Now-up lead: once a lead surfaces to the top it STAYS the top card until
@@ -7705,23 +7859,25 @@ function renderHotList(){
   // while it stays your Now-up so a long call doesn't hit the 30-min TTL).
   const _cr=claimOf(cur);
   if(cur && me && (!claimMine(cur) || Date.now()-(_cr?_cr.at:0) > CLAIM_TTL/2)) claimLead(cur);
-  // Visiting is reading. Don't say "calling as Johnny" to someone who isn't Johnny and can't dial
-  // from here, and don't offer a "change" that would rewrite the visitor's own name for nothing.
-  const idBar = visiting()
-    ? '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">👁 <b>'+esc(me)+'\u2019s queue</b>, in his order — this is what he sees when he sits down. You\u2019re reading it; nothing here claims a lead or logs a call.</div></div>'
+  /* ── ONE HEADER ──
+     Saad: "everything looks cluttered". FIVE status panels used to render before the page named a
+     single human being — who you are, your calendar, your score, the calling window, the book being
+     low. All of that is context for work he hasn't been shown yet. It collapses to three lines, and
+     the two warning banners below only draw when they actually fire.
+     Visiting is reading. Don't say "calling as Johnny" to someone who isn't Johnny and can't dial
+     from here, and don't offer a "change" that would rewrite the visitor's own name for nothing. */
+  const idLine = visiting()
+    ? '👁 <b>'+esc(me)+'\u2019s queue</b>, in his order — you\u2019re reading it; nothing here claims a lead or logs a call.'
     : me
-    ? '<div class="panel" style="border-color:var(--sig)"><div style="padding:9px 14px;font-size:12.5px">👤 Calling as <b>'+esc(me)+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> — leads you open lock to you for 30 min so teammates don\'t double-dial.'
+    ? '👤 <b>'+esc(me)+'</b> · <span onclick="setMyRep()" style="cursor:pointer;color:var(--sig)">change</span> <span style="color:var(--mut)">— leads you open lock to you for 30 min'
       // The queue got smaller on purpose. Say so, or it reads as leads going missing.
-      +(bookCrew().length>1 ? '<br><span style="color:var(--mut)">This is <b>your</b> list — '+esc(bookCrew().filter(r=>r!==repCanon(me)).map(r=>r.charAt(0).toUpperCase()+r.slice(1)).join(' and '))+' is dealt different leads out of this book, so you two never ring the same restaurant. Anything you pin 🔥 or have already worked stays yours.</span>' : '')
-      +'</div></div>'
-    : '<div class="panel" style="border-color:var(--hot)"><div style="padding:9px 14px;font-size:12.5px">⚠️ <b>Set your name</b> to turn on lead-locking (stops you and teammates calling the same person) · <span onclick="setMyRep()" style="cursor:pointer;color:var(--hot)"><b>set name</b></span></div></div>';
-  const coldN=due.filter(c=>c.warmth==='Cold').length, hotN=due.filter(c=>c.warmth==='Hot').length;
-  let exhaust='';
-  if(due.length<HOT_CAP){
-    exhaust='<div class="panel" style="border-color:var(--hot)"><div style="padding:12px 16px;font-size:13px;line-height:1.5">🚨 <b>Book exhausted</b> — only '+due.length+' contacts with real phone numbers are callable right now (target '+HOT_CAP+'). Prospect fresh leads, import a list, or run <span onclick="retierBook()" style="cursor:pointer;color:var(--sig)">Re-tier book</span>.</div></div>';
-  } else if(coldN>0){
-    exhaust='<div class="panel" style="border-color:var(--warm)"><div style="padding:12px 16px;font-size:13px;line-height:1.5">⚠️ <b>Book running low</b> — '+coldN+' cold contact'+(coldN>1?'s':'')+' surfaced into the queue (only '+hotN+' Hot leads have real phones). Sync fresh opens or add prospects to keep 150 warm calls stocked.</div></div>';
-  }
+      +(bookCrew().length>1 ? ', and '+esc(bookCrew().filter(r=>r!==repCanon(me)).map(r=>r.charAt(0).toUpperCase()+r.slice(1)).join(' and '))+' is dealt different leads out of this book' : '')+'</span>'
+    : '⚠️ <b>Set your name</b> to turn on lead-locking · <span onclick="setMyRep()" style="cursor:pointer;color:var(--hot)"><b>set name</b></span>';
+  /* 🔴 THE "BOOK EXHAUSTED" BANNER IS GONE ON PURPOSE. It compared the queue against HOT_CAP=150 and
+     shouted in red whenever it fell short — which described the OLD queue, where 150 warm bodies with
+     phone numbers was the target. Since z184 a dial has to be EARNED, so this list is meant to be
+     small; the banner would now fire every single day, in red, forever, and a warning that is always
+     on is a warning nobody reads. If there is genuinely no work the empty state says so. */
   // ===== CALLING-WINDOW BANNER =====
   // Restaurants are unreachable during service. Telling the rep to stop dialing at
   // 12:15pm and come back at 2:00 is worth more than any ranking tweak.
@@ -7738,41 +7894,48 @@ function renderHotList(){
     winBar='<div class="panel" style="border-color:var(--sig)"><div style="padding:10px 16px;font-size:13px">'+
       '🎯 <b>Golden window</b> — between lunch and dinner rush. Best connect rate of the day. Dial hard.</div></div>';
   }
-  /* ── THE PLAN ──
-     Built from nextAction(), sized off the calendar, and printed ABOVE the dial card so the first
-     thing he sees is the whole day's shape rather than one more phone number. The dial card stays
-     exactly as it was — it is the piece that works, and pinning/claiming/dispo all hang off it. */
-  const _cal=pgCalBar(), _by=pipelineQueue(), _budget=pgTarget(_cal.D.freeMin);
-  const _n=k=>(_by[k]||[]).length;
-  /* Replies and no-shows lead the count line as well as the panels. The summary is the only part of
-     this most people read, and a day with one no-show in it is a different day. */
-  const _plan=[['↩️',_n('reply'),'replied'],['🔁',_n('noshow'),'to rebook'],['🔎',_n('research'),'find a line'],['➕',_n('enroll'),'to enroll'],['📞',_n('owed'),'owed calls'],['📧',_n('email'),'emails due'],['☎️',_n('call'),'dialable']]
-    .filter(x=>x[1]).map(x=>x[0]+' <b>'+x[1]+'</b> '+x[2]).join(' · ');
-  const planBar='<div class="panel" style="border-color:var(--sig)"><div style="padding:11px 15px;font-size:13px;line-height:1.55">'+
-    '⚡ <b>Pipeline generator</b> — '+(_cal.D.freeMin>0?'about <b>'+Math.round(_cal.D.freeMin/60*10)/10+'h</b> of selling time left'+(_cal.D.busyMin?' ('+_cal.D.busyMin+'m booked)':'')+', so today\u2019s target is <b>'+_budget+'</b> activities.':'Day\u2019s booked out — here\u2019s what to grab between meetings.')+
-    (_plan?'<br><span style="color:var(--mut)">'+_plan+'</span>':'')+
-    pgModeBar()+'</div></div>';
-  /* Email-only means the phone is off. Leaving the dial card and the 150-row call table on screen
-     under an "email only" heading is the same non-answer the old tab gave — the mode has to actually
-     change what's in front of him, or it's a label. The queue itself is untouched; it comes straight
-     back when he flips the chip. */
-  const _quiet=(pgMode()==='email');
-  let h = idBar + _cal.html + planBar + (_quiet?'':scoreHtml(sess) + winBar + exhaust) + (_quiet?'':cur ? callCard(cur,due.length,snoozed.length)
-    : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>');
+  /* 📋 A fast cycle needs a finish line, not just a queue. Saad: "we work a fast sales cycle" —
+     a list that only ever counts what's left reads as bottomless no matter how well it's ranked. */
+  const _t=myDay(), doneN=(_t.d||0)+(_t.e||0);
+  const hdr='<div class="panel" style="border-color:var(--sig)"><div style="padding:10px 15px;font-size:12.5px;line-height:1.7">'+
+    idLine+
+    '<div style="color:var(--mut)">⚡ '+(_cal.D.freeMin>0?'about <b>'+Math.round(_cal.D.freeMin/60*10)/10+'h</b> of selling time left'+(_cal.D.busyMin?' ('+_cal.D.busyMin+'m booked)':'')+' · target <b>'+_budget+'</b>':'Day\u2019s booked out — grab these between meetings')+
+      (doneN?' · 📋 <b>'+doneN+'</b> done today':'')+
+      ' · <span onclick="pgToggle(\'pgScore\')" style="cursor:pointer;color:var(--sig)">'+(UI.pgScore?'hide pace':'pace ⋯')+'</span></div>'+
+    '<div style="margin-top:7px;display:flex;gap:7px;flex-wrap:wrap;align-items:center">'+jobBar(_by)+'</div>'+
+    '</div></div>';
+  /* Calls is the only job with a phone in it, so it is the only one that gets the dial card, the
+     calling-window banner, the book-exhausted warning and the teammate live box. Everything else on
+     a Data screen is noise wearing a border. */
+  const isCall=(job==='call');
+  // In Calls the list is the SAME list the dial card came off, minus the person already on the card.
+  // Anything else and you're back to two lists disagreeing.
+  const rows=isCall?rest:_rows;
+  let h = hdr + (UI.pgScore?scoreHtml(sess):'') + _cal.html + (isCall?winBar:'');
+  // In Calls the dial card IS the now-card — pin/claim/dispo all hang off it and it is the piece
+  // that works. Other jobs get pgNowCard. Either way: exactly one "do this now" per screen.
+  h += isCall
+    ? (cur ? callCard(cur,due.length,snoozed.length)
+           : '<div class="panel"><div class="ph"><h3>🎧 Call Queue</h3></div><div class="qempty">Queue clear — no calls due right now.'+(snoozed.length?' '+snoozed.length+' scheduled below.':'')+'</div></div>')
+    : pgNowCard(rows);
   // Leads teammates are actively on — live box, ticks every second (see onCallsHtml + ticker below).
-  h+='<div id="onCallsBox">'+(_quiet?'':onCallsHtml())+'</div>';
-  const t1=dataTable('hotlist',chosenCols('hotlist'),rest,r=>"openContact('"+r.id+"')",callCell);
-  const droppedN=contacts().filter(c=>c.queueOut).length;
-  const restoreLink=droppedN?' · <span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span>':'';
-  // Skipped leads are still in this list and still callable — say so, or "Next" starts to feel
-  // like leads are disappearing, which is the exact complaint the block was built to answer.
-  const skipN=skipLive()?skipIds.filter(id=>due.some(c=>c.id===id)).length:0;
-  const skipLink=skipN?' · <span onclick="clearSkips();renderHotList();toast(\'Skipped leads back in rotation\')" style="cursor:pointer;color:var(--sig)">⏭ '+skipN+' skipped this block — bring back</span>':'';
-  h+=pgNowCard(_by)+pgPanels(_by,_budget);
-  if(!_quiet) h+='<div class="panel"><div class="ph"><h3>⏭ Up next</h3><span class="sub">'+rest.length+' due · ranked by intent, opens &amp; staleness'+restoreLink+skipLink+'</span><button class="btn sm gh" onclick="recalcQueue()" title="Pull fresh opens/replies and re-rank the whole queue" style="margin-left:auto">↻ Resync &amp; recalc</button>'+colMenu('hotlist')+'</div>'+t1.html+'</div>';
-  if(snoozed.length&&!_quiet){
-    const t2=dataTable('hotlist2',chosenCols('hotlist2'),snoozed,r=>"openContact('"+r.id+"')",snoozeCell);
-    h+='<div class="panel"><div class="ph"><h3>💤 Scheduled</h3><span class="sub">'+snoozed.length+' snoozed by disposition — soonest first</span>'+colMenu('hotlist2')+'</div>'+t2.html+'</div>';
+  // The wrapper id must survive even when empty; the 1s ticker writes into it by id.
+  h+='<div id="onCallsBox">'+(isCall?onCallsHtml():'')+'</div>';
+  /* The 150-row "⏭ Up next" table is GONE. It was the same people as the Calls list, in a different
+     order, under a different heading — the duplication that made the page feel endless. Its two
+     honest links (restore removed / bring back skipped) move into the Calls list footer, because
+     both exist to prove nothing disappeared and that promise is the whole point of this rewrite. */
+  const droppedN=isCall?contacts().filter(c=>c.queueOut).length:0;
+  const skipN=(isCall&&skipLive())?skipIds.filter(id=>due.some(c=>c.id===id)).length:0;
+  const foot=isCall?(
+    (droppedN?'<span onclick="requeueDropped()" style="cursor:pointer;color:var(--sig)">↩ restore '+droppedN+' removed</span> · ':'')+
+    (skipN?'<span onclick="clearSkips();renderHotList();toast(\'Skipped leads back in rotation\')" style="cursor:pointer;color:var(--sig)">⏭ '+skipN+' skipped this block — bring back</span> · ':'')+
+    '<span onclick="recalcQueue()" style="cursor:pointer;color:var(--sig)">↻ Resync &amp; recalc</span>'):'';
+  h+=jobList(_by,job,rows,foot);
+  if(isCall){
+    if(snoozed.length) h+='<div class="panel"><div style="padding:10px 14px;font-size:12.5px;color:var(--mut)">'+
+      '<span onclick="pgToggle(\'pgRest\')" style="cursor:pointer;color:var(--sig)">'+(UI.pgRest?'▾':'▸')+' 💤 '+snoozed.length+' scheduled</span> — snoozed by disposition, soonest first</div>'+
+      (UI.pgRest?dataTable('hotlist2',chosenCols('hotlist2'),snoozed,r=>"openContact('"+r.id+"')",snoozeCell).html:'')+'</div>';
   }
   el('view-hotlist').innerHTML=h; restoreFlt();
 }
