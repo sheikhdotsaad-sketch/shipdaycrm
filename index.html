@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z200';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z201';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1255,6 +1255,7 @@ async function initSync(){
            def, and any play past step 5 is marked done. Boot alone was never enough — the data it
            was protecting had not loaded yet. */
         try{ stampLegacyCadences(); }catch(e){}
+        try{ repairFakeReplies(); }catch(e){}
         try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
       }
     }
@@ -1803,18 +1804,72 @@ function applyContactUpdates(list){ if(!Array.isArray(list))return 0; const m=by
 // Gmail replies used to be shown once on Today and then lost — never written to the record, so
 // they didn't set replied, didn't log, and didn't feed heat/Hot List. Persist each matched reply
 // as a durable log entry + replied flag. Alt-email aware (byEmail), idempotent per subject+day.
+/* 🔴 z201 — "THEY ARENT EVEN REAL REPLIES". Saad, on the five warmest rows in his entire CRM:
+   "no point is theyre not interested" … "but your data says they are". The data was wrong.
+   `replied` is the highest-ranked signal in the app (rank 2000, above no-shows, above every earned
+   dial). This function set it for ANY inbound message from a matched address. What that swept in,
+   verbatim from his live book:
+     Joseph Hartnett  ↩️ Replied: "Automatic reply: TDS vs Shipday"      ← an out-of-office
+     Jim Mettler      ↩️ Replied: <his own subject>  ×5 on consecutive days at 04:01
+     and the six most recent entries in his reply store were ALL mailer-daemon bounce notices.
+   So the top of the list filled with vacation responders and delivery failures, every one of them
+   labelled "a human replied — nothing on this page is closer to money". He worked that list and
+   found nobody home, which is exactly what it deserved.
+   🔑 A ROBOT IS NOT A REPLY. Auto-responders and bounces are still logged — a bounce in particular
+   is real information — they just stop counting as a person raising their hand. */
+const AUTO_SUBJ=/^\s*(?:automatic reply|auto(?:matic)?[-\s]?reply|autoreply|out of (?:the )?office|ooo\b|away from|vacation|undeliverable|delivery status notification|mail delivery (?:failed|subsystem)|returned mail|failure notice|delivery incomplete|message not delivered)/i;
+const AUTO_FROM=/(?:^|[<@.])(?:mailer-daemon|postmaster|no-?reply|donotreply|do-not-reply|bounce[sd]?|notifications?)(?:@|>|$)/i;
+function replyKind(from,subject){
+  const f=String(from||''), s=String(subject||'');
+  if(AUTO_FROM.test(f)) return 'bounce';
+  if(AUTO_SUBJ.test(s)) return /undeliverable|delivery|returned mail|failure notice|not delivered/i.test(s)?'bounce':'auto';
+  return 'human';
+}
 function persistReplies(replies){ if(!Array.isArray(replies)||!replies.length)return 0; const m=byEmail(); let n=0;
   const emailOf=s=>{ const x=String(s||'').match(/<([^>]+)>/); return (x?x[1]:s).trim().toLowerCase(); };
   replies.forEach(r=>{ const e=emailOf(r.from); const c=e&&m[e]; if(!c)return;
     const ts=Date.parse(r.date||'')||Date.now(); const sub=String(r.subject||'').replace(/^\s*re:\s*/i,'').trim().slice(0,120);
-    const txt='↩️ Replied: '+(sub||'(no subject)'); const day=new Date(ts).toDateString();
+    const kind=replyKind(r.from,r.subject);
+    // Logged either way — losing a bounce would be losing a fact — but only a human sets `replied`.
+    const txt=(kind==='human'?'↩️ Replied: ':kind==='auto'?'🤖 Auto-reply (not a person): ':'⚠️ Bounced: ')+(sub||'(no subject)');
+    const day=new Date(ts).toDateString();
     c.log=c.log||[];
     if(c.log.some(l=>l.txt===txt && new Date(+l.ts||0).toDateString()===day)) return;  // already logged this reply today
     c.log.push({ts,txt,sys:true}); if(c.log.length>50){ c.log.sort((a,b)=>(+a.ts||0)-(+b.ts||0)); c.log=c.log.slice(-50); }
+    if(kind!=='human'){ stampU(c); n++; return; }
     c.replied=true; stampOpenOwner(c); if(ts>(+c.lastReplyTs||0))c.lastReplyTs=ts;
     if(Date.now()-ts<RECENT_REPLY) pushSignal(c,'reply',ts,'');
     stampU(c); n++; });
   return n; }
+/* Repair what the old rule already wrote. A contact whose ONLY reply evidence is an auto-responder
+   or a bounce is not someone who wrote back — clear the flag so they fall to whatever they actually
+   are. Anyone with a genuine reply in their log keeps it. */
+function repairFakeReplies(){
+  let cleared=0;
+  contacts().forEach(c=>{
+    if(!c.replied) return;
+    const lg=c.log||[];
+    /* A responder that doesn't announce itself. Jim Mettler's log carries the SAME reply subject
+       five times across four days, twice at 04:01 — no human sends one subject at 4am all week.
+       Three or more identical reply subjects on distinct days is a machine, whatever it calls
+       itself. Counting distinct DAYS, not entries, so a genuine same-day double-log can't trip it. */
+    const days={};
+    lg.forEach(l=>{ const t=String(l.txt||''); if(!/^↩️ Replied: /.test(t)) return;
+      (days[t]=days[t]||{})[new Date(+l.ts||0).toDateString()]=1; });
+    const robotic=s=>Object.keys(days[s]||{}).length>=3;
+    const real=lg.some(l=>{ const t=String(l.txt||'');
+      if(!/^↩️ Replied: /.test(t)) return false;
+      if(AUTO_SUBJ.test(t.replace(/^↩️ Replied: /,''))) return false;
+      return !robotic(t); });
+    if(real) return;
+    const hadFake=lg.some(l=>/^(🤖 Auto-reply|⚠️ Bounced|↩️ Replied: )/.test(String(l.txt||'')));
+    if(!hadFake) return;                       // no evidence either way — leave it alone
+    delete c.replied; delete c.lastReplyTs;
+    logAuto(c,'↩️ Reply flag cleared — the only "reply" on file was an auto-responder or a bounce, not a person.');
+    stampU(c); cleared++; });
+  if(cleared) console.log('[z201] '+cleared+' fake replies cleared');
+  return cleared;
+}
 const RECENT_REPLY=7*864e5;
 async function syncGmail(bg){
   if(!SYNC_FN){ if(!bg)toast((store.__keys&&store.__keys.google)?'Gmail sync activates once hosted':'Connect Google in Integrations first'); return 0; }
@@ -8037,7 +8092,14 @@ function nextAction(c){
   // embarrassing to follow with an automated step — Zach Donabedian's second reply was
   // "Should I leave this alone?" while the list queued him for another cadence.
   const rep=+c.lastReplyTs||0;
-  if((c.replied||rep)&&(!rep||now-rep<45*864e5))
+  /* 🔑 A DISPOSITION MADE AFTER THE REPLY OUTRANKS THE REPLY. Saad: "no point is theyre not
+     interested" — Jim, Joseph and Zach were all sitting at rank 2000 ("nothing on this page is
+     closer to money") while carrying his own "💤 Not interested right now — parked until in 1mo",
+     logged AFTER they wrote in. He had already answered the question this bucket was asking.
+     Only a park that POSTDATES the reply counts: someone who writes back after being parked has
+     genuinely re-opened the conversation, and that has to beat the old no. */
+  const parked=(+c.nextCallAt||0)>now&&(+c.dispoTs||0)>rep;
+  if((c.replied||rep)&&(!rep||now-rep<45*864e5)&&!parked)
     return {k:'reply',rank:2000+heat(c),why:'Replied'+(rep?' '+fmtAgo(rep):'')+' — this one is a conversation, not a step'};
   /* ── THEY ALREADY SAID YES ONCE ──
      Saad: "ono no shows in dial list". A no-show is the shortest path back to a demo on the calendar
@@ -11713,6 +11775,7 @@ function boot(){
      rebuilding the def they were enrolled against; nothing sets this flag ever again, so the
      population can only shrink. Runs before releaseStalledCalls, which reads those same defs. */
   try{ if(stampLegacyCadences()) save(); }catch(e){}
+  try{ if(repairFakeReplies()) save(); }catch(e){}   // out-of-offices and bounces are not replies
   try{ const _r=releaseStalledCalls(); if(_r){ save(); console.log('[z182] '+_r+' cadences un-stalled off unmade calls'); } }catch(e){}
   try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
   try{ clearAutoInterestDeals(); }catch(e){}   // pipeline entries nobody actually opened
