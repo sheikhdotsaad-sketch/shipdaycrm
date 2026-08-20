@@ -636,7 +636,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z195';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z196';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3784,6 +3784,36 @@ function _custKey(a){
   n=n.replace(/[^a-z0-9 ]/g,' ').replace(_CUST_STOP,' ').replace(/\s+/g,'');
   return n.length>=4?n:'';
 }
+/* 🔴 Saad: "mimis cafe and mimis pizza is not the same". He is right — stripping the food word left
+   both as "mimis" and the guard silenced a real prospect.
+   City cannot be the tie-breaker: Antonio's Pizza is Westerville and Antonio's Pizzeria is
+   Uniontown, and he says Antonio's IS a customer, so requiring a city match breaks the case this
+   feature exists for. What actually separates them is the word I threw away — "pizza" and
+   "pizzeria" are the same kind of restaurant, "cafe" and "pizza" are not.
+   So: when BOTH names carry a cuisine word and those words belong to different families, it is not
+   the same brand. When either name has none (e.g. "Zeppe's / D'Italia Foods"), fall back to the
+   name key alone rather than inventing a reason to reject. */
+const _CUI_FAMS=[
+  /\b(pizza|pizzas|pizzeria|pizzaria)\b/,
+  /\b(cafe|caf|coffee|bakery|espresso|patisserie)\b/,
+  /\b(tavern|pub|bar|alehouse|brewing|brewery|beer|taproom)\b/,
+  /\b(grill|grille|steakhouse|bbq|barbecue|smokehouse)\b/,
+  /\b(deli|delicatessen|sandwich|sub|subs)\b/,
+  /\b(sushi|ramen|thai|asian|chinese|japanese|hibachi|poke)\b/,
+  /\b(taco|tacos|taqueria|mexican|cantina|burrito)\b/,
+  /\b(diner|breakfast|pancake|waffle)\b/
+];
+function _cuiFams(a){
+  const n=String((a&&a.name)||'').toLowerCase(), out={};
+  _CUI_FAMS.forEach((rx,i)=>{ if(rx.test(n)) out[i]=1; });
+  return Object.keys(out);
+}
+function _cuiCompatible(x,y){
+  const fx=_cuiFams(x), fy=_cuiFams(y);
+  if(!fx.length||!fy.length) return true;          // nothing to contradict
+  for(let i=0;i<fx.length;i++) if(fy.indexOf(fx[i])>=0) return true;
+  return false;                                     // Cafe vs Pizza — different businesses
+}
 function brandCustomer(a){
   if(!a) return null;
   if(a.isCustomer||a.existingCust) return a;
@@ -3791,7 +3821,7 @@ function brandCustomer(a){
     accounts().forEach(x=>{ if(!(x.isCustomer||x.existingCust)) return;
       const st=_custKey(x); if(st) _bcIx[st]=x; }); }
   const st=_custKey(a);
-  if(st&&_bcIx[st]) return _bcIx[st];
+  if(st&&_bcIx[st]&&_cuiCompatible(a,_bcIx[st])) return _bcIx[st];
   /* 🔴 NOT sameBrand(). Its 'linked' tier includes rows that merely SHARE A WEBSITE HOST, and the
      audit caught it welding "Konteh express LLC" and "Ondarunn Grill" onto Zeppe's — three
      unrelated businesses, silenced. Only an explicit hierarchy someone actually asserted counts:
@@ -8728,7 +8758,7 @@ function renderSequences(){
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px"><b style="font-size:13px">'+esc(q.name)+'</b><span class="tsub">'+N+' steps</span></div>'+
       '<div class="sub" style="margin:4px 0 8px">'+m.active.length+' active'+(m.paused.length?' · '+m.paused.length+' paused':'')+' · '+m.done.length+' done'+(q.match?' · matches: '+esc(q.match):'')+'</div>'+
       '<div style="display:flex;align-items:flex-end;gap:3px;height:34px">'+histBars+'</div>'+
-      '<div class="logbar" style="margin-top:8px" onclick="event.stopPropagation()"><button class="btn sm gh" onclick="toggleSeqSteps(\''+q.id+'\')">'+(seqStepsOpen[q.id]?'▾ hide steps':'▸ steps')+'</button><button class="btn sm gh" onclick="openSeqEditor(\''+q.id+'\')" title="Edit this sequence — add calls, tasks, emails">✎ edit</button><button class="btn sm gh" onclick="deleteSeqPlay(\''+q.id+'\')" title="'+(isBuiltinSeq(q.id)?'Reset to the built-in copy':'Delete this sequence')+'" style="color:var(--lost)">🗑</button></div>'+
+      '<div class="logbar" style="margin-top:8px" onclick="event.stopPropagation()"><button class="btn sm gh" onclick="toggleSeqSteps(\''+q.id+'\')">'+(seqStepsOpen[q.id]?'▾ hide steps':'▸ steps')+'</button><button class="btn sm gh" onclick="openSeqEditor(\''+q.id+'\')" title="Edit this sequence — add calls, tasks, emails">✎ edit</button>'+((myLib()||[]).find(x=>x&&x.id===q.id)?'<button class="btn sm gh" onclick="publishSeqToTeam(\''+q.id+'\')" title="'+(isSharedSeq(q.id)?'Update the team\'s shared copy of this play':'Right now only you can see this play — share it with the whole team')+'">'+(isSharedSeq(q.id)?'📣 shared · update':'📣 share with team')+'</button>':'')+'<button class="btn sm gh" onclick="deleteSeqPlay(\''+q.id+'\')" title="'+(isBuiltinSeq(q.id)?'Reset to the built-in copy':'Delete this sequence')+'" style="color:var(--lost)">🗑</button></div>'+
       (seqStepsOpen[q.id]?('<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">'+q.steps.map((s,i)=>{ const kk=stepKind(s); const tlbl=kk==='call'?'📞 call':kk==='task'?'✅ task':(s.type==='reply'?'↩ reply':'✉ new'); return '<div style="margin-bottom:7px"><div style="font-size:11px;color:var(--mut)">Day '+(+s.d||0)+' · '+tlbl+(s.label?' · '+esc(s.label):'')+'</div>'+((s.subj||s.body)?'<div style="font-size:12px;font-weight:600">'+esc(s.subj||s.label||'')+'</div>':'')+'</div>'; }).join('')+'</div>'):'')+
     '</div>';
   });
@@ -8835,6 +8865,33 @@ function deleteSeqEditor(){ if(!seqEdit) return;
   const enrolled=contacts().filter(c=>c.emailSeq&&c.emailSeq.seqId===seqEdit.id&&!c.emailSeq.done).length;
   if(!confirm('Delete this sequence?'+(enrolled?(' '+enrolled+' contact'+(enrolled===1?' is':'s are')+' still in it — they will fall back to the default cadence.'):''))) return;
   setMyLib((myLib()||[]).filter(q=>q.id!==seqEdit.id)); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Sequence deleted'); }
+/* ── PUBLISH A PLAY TO THE TEAM ────────────────────────────────────────────────────────────────
+   Saad: "i added new sequences to my sequences, but idk if it shows for other people ... make them
+   available for everyone."
+   It did NOT show. myLib() reads myBox('seqLib') → store.__seqLibBy[you], which is per-rep on
+   purpose: they shared one slot once, and a rep rewriting an email silently changed the whole
+   team's copy. That protection is right, but it left no way to deliberately share, so anything he
+   wrote was invisible to his SDR forever.
+   This is the explicit opposite of an accidental overwrite: it copies the play into the TEAM slot
+   (store.__seqLib) on purpose, on a click, with the rep's name on it. Reps who have their own
+   edited copy of that id keep theirs — seqLib() layers personal over team — so publishing can
+   never overwrite somebody's work. It only fills in for people who have no opinion yet. */
+function publishSeqToTeam(id){
+  const q=(myLib()||[]).find(x=>x&&x.id===id);
+  if(!q){ toast('Open and save the play first, then share it'); return; }
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const team=Array.isArray(store.__seqLib)?store.__seqLib.slice():[];
+  const i=team.findIndex(x=>x&&x.id===id);
+  const prev=i>=0?team[i]:null;
+  const entry=Object.assign({},q,{steps:(q.steps||[]).slice(),
+    sharedBy:myRep()||'', sharedAt:Date.now()});
+  if(i>=0) team[i]=entry; else team.push(entry);
+  store.__seqLib=team; store.__updatedAt=Date.now(); save(); renderSequences(); refreshDrawer();
+  toast('📣 "'+(q.name||'Sequence')+'" shared with the team'+(prev?' (replaced the previous shared copy)':''),
+    ()=>{ const t=store.__seqLib.slice(); const j=t.findIndex(x=>x&&x.id===id);
+      if(prev) t[j]=prev; else if(j>=0) t.splice(j,1);
+      store.__seqLib=t; store.__updatedAt=Date.now(); save(); renderSequences(); }); }
+function isSharedSeq(id){ return !!(Array.isArray(store.__seqLib)&&store.__seqLib.find(x=>x&&x.id===id)); }
 // Delete/reset a play straight from its library card (no need to open the editor). A built-in play
 // can't be truly deleted — this discards your custom override and reverts to the shipped copy.
 function deleteSeqPlay(id){ const q=seqById(id); if(!q) return; const builtin=isBuiltinSeq(id);
