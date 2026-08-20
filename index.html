@@ -636,7 +636,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z193';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z194';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1741,6 +1741,19 @@ const SYNC_FN='https://muidkwqinwcfnfvnducj.functions.supabase.co'; /* Supabase 
 // A reply/open that arrives on ANY of these must attach to the SAME person — otherwise
 // engagement under a personal gmail (Trent replied from trentiacono@gmail.com, not his
 // listed rr.com address) gets orphaned and the record looks dead when it's actually hot.
+/* Promote the alt address. Everything downstream — cadence sends, the open pixel, reply matching,
+   deliverability flags — reads c.email, so this is the one move that re-points all of them at once. */
+function swapEmails(cid){ const c=contact(cid); if(!c||!c.email2) return;
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const prev={a:c.email,b:c.email2};
+  c.email=prev.b; c.email2=prev.a;
+  // An undeliverable flag belongs to the OLD address, not to the person — carrying it over would
+  // block the new address before it has ever been tried.
+  const hadBad=c.undeliverable; if(hadBad) delete c.undeliverable;
+  logAuto(c,'📧 Primary email switched to '+c.email+(prev.a?' (was '+prev.a+')':''));
+  stampU(c); save(); refreshDrawer(); renderActive();
+  toast('Primary is now '+c.email, ()=>{ c.email=prev.a; c.email2=prev.b; if(hadBad) c.undeliverable=hadBad;
+    stampU(c); save(); refreshDrawer(); renderActive(); }); }
 function altAddrs(c){ const out=[]; if(c&&c.email2)out.push(c.email2); if(c&&Array.isArray(c.altEmails))c.altEmails.forEach(e=>out.push(e));
   return out.map(e=>String(e||'').toLowerCase().trim()).filter(e=>e.includes('@')); }
 function allAddrs(c){ const a=altAddrs(c); const p=String(c&&c.email||'').toLowerCase().trim(); if(p&&p.includes('@'))a.unshift(p); return a; }
@@ -7085,32 +7098,44 @@ function ingestBounces(replies){
 // tracking pixel, then advance the cadence exactly like a manual "Log sent". Reply-type steps
 // thread onto the prior message via the stored threadId + Message-ID so the conversation stays
 // intact. This is what lets the whole cadence run without ever opening Gmail. =====
-async function sendSeqEmail(id){
+/* 🔴 z194 — YOU COULD STORE A SECOND ADDRESS AND NEVER SEND TO IT. Saad: "i still cant click email 2
+   and send out an email ... and i asked for that multiple times". He was right and it was worse than
+   a missing button: `email2` is stored, editable, searched, matched against inbound replies, merged
+   from duplicates, and set by the CSV importer — and BOTH send paths hard-coded `to: c.email`, so
+   every one of those addresses was write-only. z193 made it worse by having call notes WRITE to
+   email2, creating data with no way out. Same defect as the 74 unread owner names: a field nothing
+   reads is not a feature.
+   `addrTo` is an OVERRIDE, not a new default — omit it and behaviour is byte-identical to before. */
+async function sendSeqEmail(id,addrTo){
   // A send is the one write that leaves the building. The save() gate would roll the record back
   // afterwards, but the mail would already be gone — and gone under the borrowed name.
   if(!canEdit()){ readOnlyBlocked(); return; }
   const c=contact(id); if(!c) return;
-  if(!c.email){ toast('No email address on this contact'); return; }
+  const TO=String(addrTo||c.email||'').trim();
+  if(!TO){ toast('No email address on this contact'); return; }
+  // An override still has to be an address we actually hold, or a stale button could mail a stranger.
+  if(addrTo&&allAddrs(c).map(x=>String(x).toLowerCase()).indexOf(TO.toLowerCase())<0){
+    toast('That address is not on this contact'); return; }
   if(!SYNC_FN){ toast('Connect integrations first'); return; }
   // Already known bad — don't re-learn it the expensive way.
   const blk=sendBlock(c);
   if(blk){ toast('⛔ Not sent — '+blk+'. Fix the address, or hit Override on the contact.'); return; }
   // Ask DNS before spending a bounce on the answer. Cached per domain and shared with the team,
   // so this is one lookup per domain per month, not one per send.
-  const dom=emailDomain(c.email);
+  const dom=emailDomain(TO);
   if(!mxGet(dom)) setSync&&setSync('busy','Checking '+dom+'…');
   const v=await mxVerdict(dom);
   if(v==='NXDOMAIN'||v==='NOMX'){
     markUndeliverable(c,v); save(); refreshDrawer(); renderActive();
     setSync&&setSync('ok','Blocked');
-    toast('⛔ Not sent to '+c.email+' — '+MX_WHY[v]+'. Marked undeliverable'+(c.emailSeq&&c.emailSeq.paused?', sequence paused':'')+'.');
+    toast('⛔ Not sent to '+TO+' — '+MX_WHY[v]+'. Marked undeliverable'+(c.emailSeq&&c.emailSeq.paused?', sequence paused':'')+'.');
     return;
   }
   const s=c.emailSeq||(c.emailSeq={step:1,startedAt:Date.now()});
   saveSeqEdit(id,true);
   const N=cadNFor(c); const n=Math.min(+s.step||1,N); const e=emailStep(c,n);
   const isReply=(e.type==='reply');
-  if(!confirm('Send '+stepLabel(c,n,'/')+' (step '+n+'/'+N+') to '+cname(c)+' <'+c.email+'> now, from your Gmail?\n\nSubject: '+e.subj)) return;
+  if(!confirm('Send '+stepLabel(c,n,'/')+' (step '+n+'/'+N+') to '+cname(c)+' <'+TO+'> now, from your Gmail?\n\nSubject: '+e.subj)) return;
   const by=senderName();
   setSync&&setSync('busy','Sending '+stepLabel(c,n)+'…');
   try{
@@ -7119,7 +7144,7 @@ async function sendSeqEmail(id){
     // thread lives in a DIFFERENT rep's mailbox (or was deleted) Gmail 404s "Requested entity was
     // not found". In that case drop the dead thread and resend as a fresh email so the step still goes out.
     const post=(withThread)=>fetch(SYNC_FN+'/gmail-send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authToken()},
-      body:JSON.stringify({to:c.email,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
+      body:JSON.stringify({to:TO,subject:e.subj,body:bodyOut,cid:c.id,rep:by,html:e.html?true:false,
         /* 🔴 REVERSED, and it was my mistake. z153 withheld the pixel on cold steps because a 1x1
            remote image is a bulk tell. The reasoning was fine; the consequence was not.
              - 47% of his live sequence contacts sit on step 1 or 2, so half his sending went blind.
@@ -9285,6 +9310,12 @@ function openContact(id){
   const sp=splitParts(c); if(sp) b+='<div class="tsub" style="margin:-4px 0 10px">Looks like two people — <a style="cursor:pointer;color:var(--sig)" onclick="splitContact(\''+id+'\')">✂️ split into '+esc(sp.a.first)+' + '+esc(sp.b.first)+'</a></div>';
   b+=fld('Role / title',inp("setC('"+id+"','title',this.value)",c.title));
   b+='<div class="f2">'+fld('Email',inp("setC('"+id+"','email',this.value)",c.email))+fld('Alt email',inp("setC('"+id+"','email2',this.value)",c.email2))+'</div>';
+  /* The two things he could not do with a second address: send to it, or promote it. Both one click.
+     "Make primary" is the one that matters long-term — it re-points the cadence, the open tracking
+     and every future step at the address the prospect actually reads. */
+  if(c.email2) b+='<div class="logbar" style="margin-top:-2px;margin-bottom:8px">'+
+    '<button class="btn sm" onclick="sendSeqEmail(\''+id+'\',\''+esc(c.email2)+'\')" title="Send the current sequence step to the alt address instead">📧 Send to '+esc(c.email2)+'</button>'+
+    '<button class="btn sm gh" onclick="swapEmails(\''+id+'\')" title="Swap: make the alt address the primary one, so every future send uses it">⇅ Make primary</button></div>';
   // UNDELIVERABLE BANNER. Every send to a dead address is a bounce, and bounces are what got the
   // domain filtered in the first place — so say it here, where the address is, with the two ways
   // out: type a good address (auto-clears above) or override if you know DNS is lying.
