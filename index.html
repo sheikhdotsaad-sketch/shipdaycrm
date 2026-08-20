@@ -632,7 +632,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug19·z188';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z189';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1097,7 +1097,21 @@ const brandOf   =a=>a&&a.parentId?acct(a.parentId):null;
    this a 20-location group renders as "0 locations" until someone types them in. */
 const acctLocs=a=>{ if(!a) return 0;
   const n=+(a.locationCount||a.locations||0); if(n>0) return n;
-  const kids=isBrand(a)?childLocs(a.id).length:0; return kids||(+a.employees||0); };
+  // A storefront filed under a brand IS a multi-location account — it just isn't the row holding
+  // the children. Counting it as 0 was the reason a linked location lost its multi-loc weight.
+  // One hop only — never recurse, so a cycle in imported parentIds can't hang the render.
+  if(isLocation(a)){ const b=brandOf(a);
+    if(b){ const n2=+(b.locationCount||b.locations||0)||0, k=childLocs(b.id).length;
+      return Math.max(n2, k?k+1:0) || (+b.employees||0); } }
+  // +1 for this row: the parent of a linked group is itself a storefront, and sibsHtml has always
+  // printed "N+1 locations" on the same screen. They now agree. max(), not ||, between the STATED
+  // count and the child rows, so linking two rows of a brand somebody already told us has 12 stores
+  // does not knock the count down to 2.
+  // employees stays LAST RESORT (|| not max) — per the note above, it is a headcount, not a store
+  // count. Inside a max() a 25-staff restaurant reports "25 locations" the instant you link it to
+  // one sibling, which is the first thing linkToBrand() makes possible. Only +1 when children exist,
+  // so a 'multi' row with none still falls through to the employees estimate exactly as before.
+  const k=isBrand(a)?childLocs(a.id).length:0; return (k?k+1:0) || (+a.employees||0); };
 /* team / assignment: records (contacts, accounts, deals, tasks) carry an .assignee name */
 function team(){ store.__team=Array.isArray(store.__team)&&store.__team.length?store.__team:['Saad Sheikh']; return store.__team; }
 function assignPicker(setter,cur){ return '<select onchange="'+setter+'"><option value="">Unassigned</option>'+team().map(n=>'<option'+(n===(cur||'')?' selected':'')+'>'+esc(n)+'</option>').join('')+'<option value="__add">＋ Add teammate…</option></select>'; }
@@ -6325,14 +6339,73 @@ function sameBrand(a){
     add(x,'likely'); });
   return Object.keys(out).map(k=>out[k]);
 }
+/* ── MAKING A GUESSED SIBLING REAL ────────────────────────────────────────────────────────────
+   Saad, on "Cilantro Latin - Groveport": "this should be part of a multi location - cilantro latin
+   - where i can put each location, the contacts of each location, and then from an owner level - i
+   can put the owner at the parent account level or something".
+   The hierarchy already existed — parentId, locType, childLocs, brandOf, addLocation — but the
+   comment above sameBrand says the quiet part: "parentId is only set by an import". There has never
+   been a way for a HUMAN to say "these two rows are the same restaurant group", so every brand the
+   importer missed stayed missed forever.
+   MEASURED: only 87 brand stems (193 accounts, 6% of the book) group automatically by name, and his
+   own example is not one of them — "Cilantro Latin - Groveport", "Cilantro Latin Fusion", "Cilantro
+   Latin Bistro", "Cilantro Taqueria" and "Cilantro Thai & Sushi" are five separately-typed rows
+   carrying ten contacts between them. No name rule joins those safely, and it shouldn't try: the
+   Thai place may be a different business entirely. So this is a BUTTON, not an inference.
+
+   Which row becomes the parent is decided, not guessed at random: an existing brand wins, then the
+   row with no location suffix in its name, then the one carrying more contacts. */
+function brandParentOf(x,y){
+  if(isBrand(x)&&!isBrand(y)) return [x,y];
+  if(isBrand(y)&&!isBrand(x)) return [y,x];
+  const sx=_hasLocSuffix(x), sy=_hasLocSuffix(y);
+  if(sx!==sy) return sx?[y,x]:[x,y];
+  return contactsOf(x.id).length>=contactsOf(y.id).length?[x,y]:[y,x]; }
+function linkToBrand(aId,bId){
+  const x=acct(aId), y=acct(bId); if(!x||!y||x.id===y.id) return;
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const [p,ch]=brandParentOf(x,y);
+  if(ch.parentId===p.id){ toast('Already linked'); return; }
+  // Never file a group under one of its own storefronts — that loop would have no top.
+  for(let g=p,i=0; g&&g.parentId&&i<8; i++){ g=acct(g.parentId); if(g&&g.id===ch.id){ toast('That would loop — unlink the other way first'); return; } }
+  const prev={parentId:ch.parentId,locType:ch.locType,pType:p.locType};
+  ch.parentId=p.id; ch.locType='single'; p.locType='multi';
+  stampU(ch); stampU(p);
+  logAuto(ch,'🏢 Linked as a location of '+(p.name||'the group'));
+  logAuto(p,'🏢 '+(ch.name||'A location')+' linked in as a location');
+  save(); if(drawerOpen())reopenDrawer('a',aId); renderActive();
+  toast('🏢 '+(ch.name||'Location')+' → '+(p.name||'group'),
+    ()=>{ ch.parentId=prev.parentId; ch.locType=prev.locType; p.locType=prev.pType;
+      stampU(ch); stampU(p); save(); if(drawerOpen())reopenDrawer('a',aId); renderActive(); }); }
+function unlinkLocation(aId){
+  const ch=acct(aId); if(!ch||!ch.parentId) return;
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const prev=ch.parentId; ch.parentId=''; stampU(ch);
+  logAuto(ch,'🏢 Unlinked from the group');
+  save(); if(drawerOpen())reopenDrawer('a',aId); renderActive();
+  toast('Unlinked', ()=>{ ch.parentId=prev; stampU(ch); save(); if(drawerOpen())reopenDrawer('a',aId); renderActive(); }); }
+/* The owner of a restaurant group does not work at one storefront. Set them once on the parent and
+   every location can answer "who do I ask for" — which is the only thing the name is FOR. A name on
+   the location itself always wins; the parent is the fallback, never an override. */
+function acctOwner(a){
+  if(!a) return null;
+  if(String(a.ownerName||'').trim()) return {name:a.ownerName.trim(),src:a.ownerSrc||'',from:''};
+  const b=brandOf(a);
+  if(b&&String(b.ownerName||'').trim()) return {name:b.ownerName.trim(),src:b.ownerSrc||'',from:b.name||'the group'};
+  return null; }
 function sibsHtml(a){
   const s=sameBrand(a); if(!s.length) return '';
   const sure=s.filter(x=>x.k==='linked'),maybe=s.filter(x=>x.k==='likely');
   const link=x=>'<a onclick="event.stopPropagation();openAccount(\''+x.a.id+'\')" title="'+esc(x.a.name||'')+'" style="cursor:pointer">'+
     esc(brandName(x.a)||x.a.name)+(acctLoc(x.a)?' <span style="opacity:.6">'+esc(acctLoc(x.a))+'</span>':'')+'</a>';
+  // A guess gets a button to become a fact. Nothing links itself.
+  const linkable=x=>link(x)+' <button type="button" class="cm-link" title="These are the same group — file them together" '+
+    'onclick="event.stopPropagation();linkToBrand(\''+a.id+'\',\''+x.a.id+'\')">🔗 link</button>';
   let h='';
-  if(sure.length) h+='<div class="sibs">🏢 <b>'+(sure.length+1)+' locations</b> · '+sure.map(link).join(' · ')+'</div>';
-  if(maybe.length) h+='<div class="sibs" style="opacity:.75">🏢 Same brand? '+maybe.map(link).join(' · ')+'</div>';
+  const und=a.parentId?' <button type="button" class="cm-link" title="This is not part of that group" '+
+    'onclick="event.stopPropagation();unlinkLocation(\''+a.id+'\')">unlink</button>':'';
+  if(sure.length) h+='<div class="sibs">🏢 <b>'+(sure.length+1)+' locations</b> · '+sure.map(link).join(' · ')+und+'</div>';
+  if(maybe.length) h+='<div class="sibs" style="opacity:.75">🏢 Same brand? '+maybe.map(linkable).join(' · ')+'</div>';
   return h;
 }
 /* 🔴 "i dont feel like i get enough connects" / "if im not getting enogh connects why would i keep
@@ -7186,8 +7259,9 @@ function callBrief(c){ if(!c) return '';
     /* An owner name scraped off their own About page is worth more than anything else on this line:
        it's the name that gets you past the person answering the phone. Only shown when the owner is
        someone OTHER than who you're dialing, and it carries its source so a wrong one is traceable. */
-    if(a.ownerName&&!new RegExp(a.ownerName.split(/\s+/)[0],'i').test(cname(c)||''))
-      snap.push('👤 ask for <b>'+esc(a.ownerName)+'</b>'+(a.ownerSrc?' <a href="'+esc(a.ownerSrc)+'" target="_blank" rel="noopener" title="where this came from" style="text-decoration:none">↗</a>':'')); }
+    const ow=acctOwner(a);
+    if(ow&&!new RegExp(ow.name.split(/\s+/)[0],'i').test(cname(c)||''))
+      snap.push('👤 ask for <b>'+esc(ow.name)+'</b>'+(ow.from?' <span style="color:var(--mut)">(owns '+esc(ow.from)+')</span>':'')+(ow.src?' <a href="'+esc(ow.src)+'" target="_blank" rel="noopener" title="where this came from" style="text-decoration:none">↗</a>':'')); }
   // 🔑 z182 — Saad: "no one uses the call script". The old brief printed eight sections on EVERY card,
   // and five of them were byte-identical every time (same 4 discovery questions, same objection, same
   // close). It was always expanded, so the one thing he actually needs after hanging up — the dispo bar
@@ -7493,8 +7567,9 @@ function dataGaps(c){
   if(!pgHasEmail(c)) g.push({k:'email',t:'Get an email',how:site?'Site footer, then ask reception for the owner\u2019s':'Find the site first'});
   // If we already scraped an owner off their own site, say the name instead of sending him to go
   // look for it. That is the whole reason the field exists.
+  const _ow=acctOwner(a);
   if(!String(c.title||'').trim()) g.push({k:'title',t:'Confirm who this person is',
-    how:(a&&a.ownerName)?('Owner on file is '+a.ownerName+' — confirm this is them, or ask for '+a.ownerName+' by name')
+    how:_ow?('Owner on file is '+_ow.name+(_ow.from?' (on the '+_ow.from+' group)':'')+' — confirm this is them, or ask for '+_ow.name+' by name')
       :'LinkedIn or the About page — you want the owner or GM, not a shift lead'});
   if(!site) g.push({k:'website',t:'Find the website',how:dom?'Try '+dom+' — it\u2019s the domain on their email':(q?'Google "'+q+'"':'No name and no email domain — this row needs a name before anything else')});
   if(!posOf(a)) g.push({k:'pos',t:'Identify the POS',how:'Open their online-ordering link — Toast / Square / Clover is in the URL or the footer'});
