@@ -91,8 +91,12 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
    It was three lines tall, so you lost the top of your own note while typing the bottom of it.
    Scoped to #cmNote on purpose: .cm-note is shared with the 8-step cadence editor, where tripling
    every body box would turn one play into a very long scroll. */
-#cmNote{min-height:150px;line-height:1.5}
-.cm-tight #cmNote{min-height:112px}
+#cmNote{min-height:260px;line-height:1.5}
+/* z189: the z188 bump to 150px never reached him. The call modal is ALWAYS .cm-tight, and the
+   rule below it overrode 150 back down to 112 — so he asked for a bigger note a second time and
+   was right both times. Keep this at parity with #cmNote, never smaller, or cm-tight silently
+   wins again. Check BOTH numbers when changing either. */
+.cm-tight #cmNote{min-height:260px}
 .cm-tight .cm-foot{margin-top:10px;padding:8px 0 0}
 .cm-tight .cm-foot .btn{padding:7px 12px;font-size:13px}
 .cm-link{background:transparent;border:0;color:var(--acc);font-size:12px;cursor:pointer;padding:2px 0;text-decoration:underline}
@@ -632,7 +636,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z189';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z190';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -7234,13 +7238,12 @@ function cadenceBlock(id){ const c=contact(id); if(!c) return ''; const st=cadSt
   return h+'</div>';
 }
 function callBrief(c){ if(!c) return '';
-  // 🔑 WHOEVER IS HOLDING THE PHONE. This read store.__rep, falling back to the literal 'Saad', so the
-  // script on Embert's call card told him to open with "Hi, Saad Sheikh with Shipday" — the one line
-  // he says out loud, and it was someone else's name. myRep() is the rep for THIS book: himself where
-  // he works, and the owner's name when he's only looking at their card.
-  // repShort: `rep` is only ever spoken here, and you introduce yourself by first name. See repShort.
-  const a=acct(c.accountId), rep=repShort(myRep()||store.__rep)||'Shipday';
-  const open=lastOpenTs(c), opens=openCount(c), touch=lastTouchTs(c), fn=(c.first||cname(c).split(' ')[0]||'there');
+  // Dropped with the script at z189: `rep` (repShort(myRep()) — the name the rep said out loud) and
+  // `fn`. Both existed ONLY to fill the spoken opener. myRep()/repShort() are still live elsewhere;
+  // if a spoken line ever comes back, use myRep() and not store.__rep — reading __rep is what put
+  // "Hi, Saad Sheikh with Shipday" on Embert's card, i.e. someone else's name in his mouth.
+  const a=acct(c.accountId);
+  const open=lastOpenTs(c), opens=openCount(c), touch=lastTouchTs(c);
   let head;
   if(c.replied) head='↩️ <b>Replied to your outreach</b> — they raised a hand. Reference it and go straight for a time.';
   else if(open&&open>touch) head='🔥 <b>Opened your email '+fmtAgo(open)+'</b>'+(opens>1?' ('+opens+'× total)':'')+' — you\'re top of mind right now, lead with that.';
@@ -7248,10 +7251,11 @@ function callBrief(c){ if(!c) return '';
   else if(seqActive(c)) head='● In sequence — warm the thread, don\'t restart cold.';
   else if(!+c.callCount) head='🆕 <b>First call</b> — keep it short, earn the 15-minute demo.';
   else head='Following up — '+(+c.callCount||0)+' prior call'+((+c.callCount>1)?'s':'')+', last touch '+lastTouchLabel(c)+'.';
-  let opener;
-  if(c.replied) opener='"Hi '+esc(fn)+', thanks for writing back — figured it\'d be faster to grab two minutes live."';
-  else if(open&&open>touch) opener='"Hi '+esc(fn)+', it\'s '+esc(rep)+' from Shipday — I know you just looked at my note on '+esc(aname(a))+'\'s delivery, so I\'ll be quick."';
-  else opener='"Hi '+esc(fn)+', '+esc(rep)+' with Shipday — reaching out about running delivery in-house for '+esc(aname(a))+'."';
+  // 🔑 z189 — THE SCRIPT IS GONE. Saad said "no one uses the call script" at z182 and I only SHRANK
+  // it to one line; he said it again at z189: "lets just take out the script part / no one uses it".
+  // A rep on their 40th dial of the day is not reading a quoted sentence off the screen, and printing
+  // one implies they should. What survives is only what he can't hold in his head: why this call, what
+  // we know about the account, and the POS angle. No opener, no rep name to get wrong.
   const snap=[];
   if(a){ if(a.pos) snap.push('POS <b>'+esc(a.pos)+'</b>'); if(a.cuisine) snap.push(esc(a.cuisine));
     const locs=acctLocs(a); if(locs>1) snap.push('🏢 <b>'+locs+' locations</b>');
@@ -7275,7 +7279,6 @@ function callBrief(c){ if(!c) return '';
   return '<div style="background:var(--panel2);border-left:3px solid var(--sig);border-radius:8px;padding:9px 12px;margin-top:10px;font-size:12.5px;line-height:1.45">'+
     '<div>'+head+'</div>'+
     (snap.length?'<div style="margin-top:4px;color:#cdd6e0">'+snap.join(' · ')+'</div>':'')+
-    '<div style="margin-top:6px">'+opener+'</div>'+
     (ang?'<div style="margin-top:5px;color:var(--mut)">'+ang+'</div>':'')+
     dealLine+noteLine+'</div>';
 }
@@ -7684,10 +7687,20 @@ function nextAction(c){
   const ns=noShowFor(c);
   if(ns&&ph) return {k:'noshow',rank:1600+heat(c),
     why:'No-showed the demo'+(+ns.updatedAt?' '+fmtAgo(+ns.updatedAt):'')+' — they picked the time themselves, get it rebooked'};
-  // A dial the cadence asked for and never got. It comes first because it is the only bucket where
-  // the CRM already decided this call was worth making — it just stopped blocking the emails.
-  if(c.owedCall&&ph) return {k:'owed',rank:heat(c)+200,
-    why:'Cadence wanted '+esc(c.owedCall.label||'a call')+' '+fmtAgo(+c.owedCall.since)+' — emails kept going'};
+  /* ── z190: `owed` IS DELETED AS A REASON TO DIAL. ──
+     Saad, sending a screenshot of his own call list: "maybe it should suggest more net new calls
+     ... we're just not getting hits right now". TEN of the fourteen visible rows read "Cadence
+     wanted Call — follow up on Email 3 7d ago". This bucket was producing them, at heat+200, above
+     every earned dial.
+     It is the SAME defect z184 named and I left standing: "step 6 came up" is a fact about the
+     calendar, not about the prospect, and a gatekeeper is the correct answer to it. `owedCall` is
+     the purest form of that — it is literally "the play asked for a call and never got one".
+     The comment this replaces claimed the CRM "already decided this call was worth making". It
+     decided no such thing; a cadence template did, before anyone had met this restaurant.
+     🔑 NOT deleted from the record — releaseStalledCalls() still stamps c.owedCall, and callBrief
+     now prints it as CONTEXT on dials that were earned some other way. If this person is worth
+     calling, callIntent() below says so on the evidence and they appear anyway, with a real reason.
+     If callIntent is silent, there was never a reason to dial — that is the whole point. */
   /* Unreachable, but the account is real. An open used to be the only thing that got you in here,
      which meant a five-location brand you'd already spoken to sat invisible because nobody had ever
      typed a phone number into the row. Any evidence the account is worth having qualifies it now;
