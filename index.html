@@ -636,7 +636,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z190';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z191';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -7969,6 +7969,95 @@ const PG_PAGE=25;
 function pgMore(job){ UI.pgShown[job]=(UI.pgShown[job]||PG_PAGE)+PG_PAGE; renderHotList(); }
 function pgChip(k){ UI.pgChip=(UI.pgChip===k?'':k); renderHotList(); }
 function pgToggle(f){ UI[f]=!UI[f]; renderHotList(); }
+/* ── ☎️ NOBODY TO CALL — BUT A NUMBER TO CALL IT ON ─────────────────────────────────────────────
+   Saad, Aug 20: "we need new accounts" / "it would be better for my sdr and me to work new
+   accounts" / "all the old shit and multiple touch points shit doesnt work right now".
+   MEASURED on his live book that day: 1,394 of 3,260 accounts (43%) have ZERO contacts, 1,377 of
+   them in Ohio — and 2,261 of his 2,400 contacts have already been touched. The book is not
+   mis-ranked, it is FINISHED. Every queue in this app iterates contacts(), so an account with no
+   contact can never appear in any of them: 882 accounts with a real phone number were structurally
+   invisible, not deprioritised.
+   🔑 THIS IS THE ONLY PLAY THAT WORKS ON INDEPENDENTS. Apollo has baristas and servers for them,
+   not owners (measured — 19 people across 12 of his own domains, exactly one owner). You cannot buy
+   your way to the decision-maker at a single-location restaurant. You ring the restaurant and ask.
+   The call IS the enrichment, and it costs nothing.
+   No fake contact rows: a placeholder per dial would pollute the book on every no-answer, and the
+   ranked list below is contact-shaped by construction. This is its own panel, and a contact gets
+   created only at the moment he learns a name. */
+/* 🔴 A DO-NOT-CALL FILED AS FREE TEXT. Only a screenshot caught this: "Wildcat Pizza - Richwood"
+   rendered with the subtitle "Do not call" because somebody typed it into a.pos. isDNC() only reads
+   the contact-level DNC list, and these accounts have no contact — so nothing in the app was going
+   to stop it. 3 accounts book-wide, 1 of them in this queue. Count is irrelevant: handing a rep one
+   do-not-call number is a compliance incident, not a rounding error. Checked across every free-text
+   field a human might have typed it into. */
+const DNC_TEXT=/do\s*not\s*call|\bdnc\b|don'?t\s*call/i;
+function dncByText(a){ return !!a&&DNC_TEXT.test([a.pos,a.cuisine,a.notes,a.name,a.delivery,a.tierWhy].filter(Boolean).join(' ')); }
+function orphanAccounts(){
+  const out=[];
+  accounts().forEach(a=>{
+    if(!a||a.isCustomer||a.excluded||a.orphanSkip) return;
+    if(!hasRealPhone(a)) return;                       // the whole point is that it is dialable
+    if(contactsOf(a.id).length) return;                // somebody is already on this account
+    if((dealsOf(a.id)||[]).length) return;             // a deal with no contact is not cold outreach
+    if(isDeadChain(a)) return;                         // tier X never enters a queue
+    if(dncByText(a)) return;                           // someone typed "do not call" on this row
+    out.push(a);
+  });
+  return out.sort((x,y)=>orphanRank(y)-orphanRank(x));
+}
+/* Ranked on ACCOUNT QUALITY, because that is the only evidence these rows have — there is no
+   person, so there is no open, no reply and no disposition to read. Deliberately NOT heat(): heat
+   measures interest, and there is nobody here to be interested yet. */
+function orphanRank(a){
+  const t=acctTier(a); let n={A:100,B:70,C:30,D:-20}[t]||0;
+  const locs=acctLocs(a); if(locs>1) n+=30+Math.min(locs,20)*2;   // one call, many stores
+  if(a.pos) n+=20;                                                // known stack = a real angle
+  if(a.website) n+=15;
+  if(a.city) n+=8;
+  return n;
+}
+function orphanSkip(aid){ const a=acct(aid); if(!a) return;
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  a.orphanSkip=Date.now(); stampU(a); save(); renderHotList();
+  toast('Skipped '+(a.name||'account'), ()=>{ delete a.orphanSkip; stampU(a); save(); renderHotList(); }); }
+/* He rang it, somebody said a name. Create the person THEN — never before. */
+function orphanAdd(aid){ const a=acct(aid); if(!a) return;
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const nm=(window.prompt('Who did they say runs '+(a.name||'this place')+'?\n\nName (and role after a comma, e.g. "Maria Lopez, owner")')||'').trim();
+  if(!nm) return;
+  const parts=nm.split(','), who=parts[0].trim().split(/\s+/), role=(parts[1]||'').trim();
+  if(!who[0]) return;
+  const id=uid('c');
+  store.contacts[id]={id:id,accountId:a.id,first:who[0],last:who.slice(1).join(' '),
+    title:role,phone:a.phone||'',email:'',status:'New',warmth:'Warm',log:[],_u:Date.now()};
+  logAuto(store.contacts[id],'☎️ Found by calling '+(a.name||'the account')+' and asking who runs it');
+  stampU(store.contacts[id]); save(); claimLead(store.contacts[id]);
+  renderHotList(); renderCounts();
+  toast('Added '+nm.split(',')[0].trim()+' — now on '+(a.name||'the account')); }
+function orphanPanel(){
+  const all=orphanAccounts(); if(!all.length) return '';
+  const take=Math.min(UI.pgShown.orphan||PG_PAGE,all.length), left=all.length-take;
+  let h='<div class="panel"><div class="ph"><h3>🆕 New accounts — nobody on the record</h3>'+
+    '<span class="sub">'+all.length+' — you have their number but no name. Ring it, ask who runs it, add them.</span></div><table><tbody>';
+  all.slice(0,take).forEach(a=>{
+    const t=acctTier(a), locs=acctLocs(a), ph=a.phone||'';
+    h+='<tr><td style="width:34px;text-align:center">☎️</td>'+
+      '<td><div><b>'+esc(a.name||'(unnamed account)')+'</b>'+
+        (TIER_META[t]?' <span class="tag">'+esc(t)+'</span>':'')+
+        (locs>1?' <span class="tag">🏢 '+locs+'</span>':'')+'</div>'+
+      '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+(a.pos?' · '+esc(a.pos):'')+(a.cuisine?' · '+esc(a.cuisine):'')+'</div></td>'+
+      '<td class="tsub">Ask for the owner or GM — get a name and a direct line</td>'+
+      '<td style="text-align:right;white-space:nowrap">'+
+        (ph?'<a class="btn sm" href="tel:'+esc(ph)+'">📞 '+esc(ph)+'</a> ':'')+
+        '<button class="btn sm gh" onclick="orphanAdd(\''+a.id+'\')">＋ Add person</button> '+
+        '<a class="btn sm gh" href="'+esc(gsearch(a))+'" target="_blank" rel="noopener">🔎</a> '+
+        '<button class="cm-link" style="color:var(--mut)" onclick="orphanSkip(\''+a.id+'\')">skip</button>'+
+      '</td></tr>';
+  });
+  h+='</tbody></table>';
+  if(left>0) h+='<div style="padding:9px 14px;font-size:12.5px"><span onclick="pgMore(\'orphan\')" style="cursor:pointer;color:var(--sig)">Show '+Math.min(PG_PAGE,left)+' more</span> <span style="color:var(--mut)">· '+left+' left</span></div>';
+  return h+'</div>';
+}
 function jobList(by,job,rows,foot){
   const J=PG_JOBS[job];
   // Chips carry the counts and filter in place. They deliberately do NOT reorder — the order is the
@@ -8013,6 +8102,10 @@ function jobList(by,job,rows,foot){
       '😴 <b>'+by.__resting+' parked</b> — '+esc(parts.join(' · '))+
       '<br>Not lost, just nothing to act on yet. Enrich these and they come back as work.</div></div>';
   }
+  /* Under the earned dials, never above them: a stranger you have to introduce yourself to does not
+     outrank someone who just opened your email twice. But it sits in CALLS, not Data, because the
+     move is a dial — not homework. This is the net-new volume for him and the SDR. */
+  if(job==='call') h+=orphanPanel();
   return h;
 }
 function renderHotList(){
