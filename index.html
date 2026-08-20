@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z199';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z200';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -8863,7 +8863,7 @@ function renderSequences(){
       (paused.length?'<div class="sub" style="margin-top:10px">⏸ '+paused.length+' contact'+(paused.length===1?' was':'s were')+' pulled out of their sequence. Open one and hit <b>▶ Resume</b> to put it back in at the step you choose.</div>':'')+
     '</div></div>'+mailHealthHtml();
   // Play library — one card per sequence with enrollment + step histogram + copy preview.
-  h+='<div class="panel"><div class="ph"><h3>📚 Play library</h3><span class="sub">click "steps" to preview the copy · ✎ edit a play · click a card to filter the list below</span><button class="btn sm pri" style="margin-left:auto" onclick="openSeqEditor(null)">＋ New sequence</button></div><div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
+  h+='<div class="panel"><div class="ph"><h3>📚 Play library</h3><span class="sub">click "steps" to preview the copy · ✎ edit a play · click a card to filter the list below</span><button class="btn sm gh" style="margin-left:auto" onclick="openSeqPaste()" title="Paste a sequence written anywhere else — ChatGPT, a doc, an email — and it becomes a play">📋 Paste a sequence</button><button class="btn sm pri" onclick="openSeqEditor(null)">＋ New sequence</button></div><div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
   seqLib().forEach(q=>{ const m=stats[q.id]; const N=q.steps.length; const sel=seqFocus===q.id;
     const maxH=Math.max(1,...Object.values(m.hist),1);
     const histBars=Array.from({length:N},(_,i)=>{ const n=i+1, cnt=m.hist[n]||0;
@@ -8983,6 +8983,96 @@ function deleteSeqEditor(){ if(!seqEdit) return;
   const enrolled=contacts().filter(c=>c.emailSeq&&c.emailSeq.seqId===seqEdit.id&&!c.emailSeq.done).length;
   if(!confirm('Delete this sequence?'+(enrolled?(' '+enrolled+' contact'+(enrolled===1?' is':'s are')+' still in it — they will fall back to the default cadence.'):''))) return;
   setMyLib((myLib()||[]).filter(q=>q.id!==seqEdit.id)); save(); closeSeqEditor(); renderSequences(); refreshDrawer(); toast('Sequence deleted'); }
+/* ── PASTE A SEQUENCE ──────────────────────────────────────────────────────────────────────────
+   Saad: "i got chat gpt to put new sequences" … "but i dont see them" … "i logged in myself as a
+   chatgpt browser but theyre not there".
+   MEASURED before building anything: I read every book's LIVE cloud row. `shipday-team` had been
+   updated at 21:17, after that session, and still held exactly the three original plays under the
+   single key 'saad'. Nothing under any other rep key, in any book. Those writes never persisted —
+   a browser that isn't recognised as an editor has its save() silently refused.
+   Rather than debug someone else's browser, remove the reason to use one. He already HAS the copy
+   as text; it just had no door into the CRM. This is the door.
+   The parser is deliberately forgiving, because nobody is going to reformat ChatGPT's output:
+   it splits on the step headings people actually write ("Email 1", "Step 2 — Day 4", "Day 7"),
+   takes an explicit "Subject:" when there is one and the first line otherwise, and keeps the rest
+   as the body. It NEVER writes on parse — he sees exactly what it found and clicks Create. */
+const _SEQ_HEAD=/^\s*(?:\*\*|##\s*)?(?:email|step|touch|day)\s*#?\s*(\d+)\s*(?:of\s*\d+)?\s*[:\-–—.)]?\s*(.*?)\s*(?:\*\*)?\s*$/i;
+const _SEQ_SUBJ=/^\s*(?:\*\*)?\s*subject\s*(?:line)?\s*[:\-–—]\s*(.+?)\s*(?:\*\*)?\s*$/i;
+const _SEQ_BODYLBL=/^\s*(?:\*\*)?\s*(?:body|email body|copy|message)\s*[:\-–—]?\s*(?:\*\*)?\s*$/i;
+const _SEQ_WAIT=/(?:wait|after|day)\s*(\d+)\s*(?:day|d)?/i;
+/* ChatGPT writes "**Subject:** Re: delivery" — the closing ** sits AFTER the colon, so it lands at
+   the front of the captured value ("** Re: delivery"). Strip stray emphasis from anything we treat
+   as a subject rather than trying to make one regex cover every markdown shape. */
+function _deMd(s){ return String(s||'').replace(/\*+/g,'')
+  .replace(/^\s*[:\-–—]\s*/,'')
+  // "Email 3 — Subject: Bold heading" puts the label inline on the heading; don't keep it in the subject
+  .replace(/^\s*subject\s*(?:line)?\s*[:\-–—]\s*/i,'')
+  .trim(); }
+function parsePastedSeq(txt){
+  const lines=String(txt||'').replace(/\r/g,'').split('\n');
+  const steps=[]; let cur=null, name='', sawHead=false;
+  const push=()=>{ if(!cur) return;
+    let body=cur.body.join('\n').replace(/^\n+|\n+$/g,'');
+    if(!cur.subj){ const b=body.split('\n'); cur.subj=(b.shift()||'').trim(); body=b.join('\n').replace(/^\n+/,''); }
+    if(cur.subj||body) steps.push({type:'email',label:'Email '+(steps.length+1),subj:cur.subj,body:body,wait:cur.wait||0});
+    cur=null; };
+  lines.forEach(raw=>{
+    const line=raw.replace(/\s+$/,'');
+    const h=line.match(_SEQ_HEAD);
+    if(h){ push(); sawHead=true;
+      const w=line.match(_SEQ_WAIT);
+      cur={subj:'',body:[],wait:w?+w[1]:0};
+      // "Email 3 — Subject goes here" puts the subject on the heading line
+      const tail=(h[2]||'').replace(/^[—–\-:.\s]+/,'').trim();
+      if(tail&&!/^day\s*\d+/i.test(tail)) cur.subj=_deMd(tail);
+      return; }
+    if(!cur){ if(!sawHead&&!name&&line.trim()) name=line.replace(/^#+\s*|\*\*/g,'').trim(); return; }
+    const s=line.match(_SEQ_SUBJ);
+    if(s){ cur.subj=_deMd(s[1]); return; }
+    if(_SEQ_BODYLBL.test(line)) return;                 // a bare "Body:" label carries no content
+    cur.body.push(line);
+  });
+  push();
+  return {name:(name||'Pasted sequence').slice(0,80),steps:steps};
+}
+let seqPaste=null;
+function openSeqPaste(){ seqPaste={txt:'',parsed:null}; renderSeqPaste(); }
+function closeSeqPaste(){ seqPaste=null; const m=el('seqPasteModal'); if(m) m.style.display='none'; }
+function seqPasteInput(v){ if(!seqPaste) return; seqPaste.txt=v; seqPaste.parsed=parsePastedSeq(v); renderSeqPastePreview(); }
+function renderSeqPastePreview(){ const box=el('seqPastePrev'); if(!box||!seqPaste) return;
+  const p=seqPaste.parsed;
+  if(!p||!p.steps.length){ box.innerHTML='<div class="tsub">Nothing recognised yet — paste the whole thing, headings and all ("Email 1", "Subject:", the body…).</div>'; return; }
+  box.innerHTML='<div style="font-size:12.5px;margin-bottom:6px">Found <b>'+p.steps.length+'</b> email step'+(p.steps.length===1?'':'s')+' · name: <b>'+esc(p.name)+'</b></div>'+
+    p.steps.map((s,i)=>'<div class="mini"><div class="mn">'+esc('Email '+(i+1)+(s.wait?' · wait '+s.wait+'d':''))+' — '+esc(s.subj||'(no subject)')+'</div>'+
+      '<div class="ms">'+esc(String(s.body||'').slice(0,120).replace(/\n/g,' '))+(String(s.body||'').length>120?'…':'')+'</div></div>').join('');
+}
+function renderSeqPaste(){
+  let m=el('seqPasteModal');
+  if(!m){ m=document.createElement('div'); m.id='seqPasteModal'; m.className='cmodal-wrap'; document.body.appendChild(m); }
+  m.style.display='flex';
+  m.innerHTML='<div class="cmodal" style="max-width:620px">'+
+    '<div class="cm-head"><div><div class="cm-name">📋 Paste a sequence</div>'+
+      '<div class="cm-sub">Paste the whole thing from ChatGPT (or anywhere). Headings like “Email 1” / “Subject:” are understood — nothing is saved until you hit Create.</div></div>'+
+      '<button class="cm-x" onclick="closeSeqPaste()">✕</button></div>'+
+    '<textarea id="seqPasteTxt" class="cm-note" style="min-height:220px" placeholder="Email 1&#10;Subject: Quick idea for {{account}}&#10;&#10;Hey {{first}}, …&#10;&#10;Email 2 — Day 3&#10;Subject: Following up&#10;…" oninput="seqPasteInput(this.value)"></textarea>'+
+    '<div class="cm-lbl">What I found</div><div id="seqPastePrev"><div class="tsub">Paste above to preview.</div></div>'+
+    '<div class="cm-foot"><button class="btn gh" onclick="closeSeqPaste()">Cancel</button>'+
+      '<button class="btn pri" onclick="createSeqFromPaste()">Create sequence</button></div>'+
+    '</div>';
+  setTimeout(()=>{ const t=el('seqPasteTxt'); if(t) t.focus(); },40);
+}
+function createSeqFromPaste(){
+  if(!seqPaste||!seqPaste.parsed||!seqPaste.parsed.steps.length){ toast('Nothing to create yet — paste the copy first'); return; }
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const p=seqPaste.parsed;
+  const id='paste-'+Date.now().toString(36);
+  const entry={id:id,name:p.name,match:'',noAutoCall:true,   // email-only, like every play since z183
+    steps:p.steps.map(s=>({type:'email',label:s.label,subj:s.subj||'',body:s.body||'',wait:+s.wait||0}))};
+  const lib=(myLib()||[]).slice(); lib.push(entry); setMyLib(lib);
+  save(); closeSeqPaste(); renderSequences(); refreshDrawer();
+  toast('Created "'+p.name+'" — '+entry.steps.length+' steps. Use 📣 to share it with the team.',
+    ()=>{ setMyLib((myLib()||[]).filter(x=>x.id!==id)); save(); renderSequences(); });
+}
 /* ── PUBLISH A PLAY TO THE TEAM ────────────────────────────────────────────────────────────────
    Saad: "i added new sequences to my sequences, but idk if it shows for other people ... make them
    available for everyone."
