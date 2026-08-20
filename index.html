@@ -59,6 +59,15 @@ input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus
 .dispopop-h{font-size:11px;color:var(--mut);padding:2px 10px 6px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
 /* ===== Call / disposition modal ===== */
 .cmodal-wrap{position:fixed;inset:0;z-index:400;background:rgba(4,7,12,.62);display:none;align-items:flex-start;justify-content:center;padding:40px 14px;overflow:auto}
+/* z197 — Saad: "sitll cant click on email 3 and have it open up the contact drawer / and have the
+   call dispo there at the same time". The drawer is z-index 61 and this wrap is 400, so opening it
+   from inside a call put it BEHIND the modal — invisible, and it looked like the click did nothing.
+   Both on screen at once: the drawer comes to the front, and the modal slides out of its way to the
+   left instead of being covered. The dim backdrop goes too, or the drawer reads as disabled. */
+.cmodal-wrap.beside{justify-content:flex-start;background:rgba(4,7,12,.30)}
+.cmodal-wrap.beside .cmodal{margin-left:8px}
+#drawer.over-modal{z-index:460}
+@media(max-width:1100px){ .cmodal-wrap.beside{display:none!important} }
 .cmodal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:100%;max-width:460px;box-shadow:0 24px 70px rgba(0,0,0,.55);padding:16px 18px}
 .cm-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .cm-name{font-size:18px;font-weight:800}
@@ -636,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z196';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z197';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1729,6 +1738,7 @@ let curDrawer=null;
 function drawerOpen(){ return el('drawer').classList.contains('on'); }
 function openDrawer(){ el('scrim').classList.add('on'); el('drawer').classList.add('on'); }
 function closeDrawer(){ el('scrim').classList.remove('on'); el('drawer').classList.remove('on'); curDrawer=null;
+  clearBesideMode();   // if it was opened alongside a live call, restore the modal to centre
   // Repaint the list HERE rather than after every edit. touch() used to rebuild the whole tab 400ms
   // after each keystroke, while the drawer was covering it — work nobody could see, on the one screen
   // where you're actually typing.
@@ -2791,8 +2801,18 @@ function advanceCallCadence(c){ if(!c) return null;
    email. It opened nothing, so the copy was three navigations away from the row describing it. */
 function openSeqFor(cid){
   const c=contact(cid); if(!c) return;
+  // If a call is in progress, keep the modal up and put the drawer NEXT TO it — he is mid-dial and
+  // the whole point is to read the cadence and log the outcome without losing either.
+  const m=el('callModal'), live=m&&m.style.display!=='none'&&callModalId;
+  if(live) cmSyncNote();                       // don't lose what he already typed
   openContact(cid);
+  const d=el('drawer');
+  if(live&&d){ d.classList.add('over-modal'); m.classList.add('beside');
+    const sc=el('scrim'); if(sc) sc.classList.remove('on'); }
   setTimeout(()=>{ const n=el('cadSec_'+cid); if(n) n.scrollIntoView({block:'start',behavior:'smooth'}); },60); }
+// Whenever the drawer closes or the call is filed, put both back the way they were.
+function clearBesideMode(){ const d=el('drawer'), m=el('callModal');
+  if(d) d.classList.remove('over-modal'); if(m) m.classList.remove('beside'); }
 function taskSendable(t){
   if(!t||t.done||!t.emailCad||t.type!=='email'||!t.contactId) return null;
   const c=contact(t.contactId); if(!c||!c.email||!c.emailSeq) return null;
@@ -3596,8 +3616,25 @@ const _MINE_EM=/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
    whoever the summary happened to name, and an owner name is the line he says to get past the
    person answering the phone — a wrong one costs him the call. */
 const _MINE_OWNER=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z'’-]+){1,2})\s+is\s+the\s+(owner|gm|general manager|proprietor)\b/i;
+/* "Gatekeeper — Talked to suzy, add suzy as a new contact - this is a test". He typed the
+   instruction into the note and expected the account to do it. The phrasing is REQUIRED to be
+   explicit ("as a new contact" / "as a contact") — matching a bare "add suzy" would turn half his
+   notes into new records. Case-insensitive on the name because nobody capitalises mid-note. */
+const _MINE_ADD=/\badd\s+([a-z][a-z'’.-]+(?:\s+[a-z][a-z'’.-]+)?)\s+as\s+(?:a\s+)?(?:new\s+)?contact\b/ig;
+const _ADD_STOP=/^(a|an|the|them|him|her|it|that|this|new|another|someone|somebody)$/i;
+function _titleCase(s){ return String(s||'').split(/\s+/).map(w=>w?w[0].toUpperCase()+w.slice(1):w).join(' '); }
 function mineCallFacts(txt,c,a){
-  const s=String(txt||''), out={emails:[],owner:''};
+  const s=String(txt||''), out={emails:[],owner:'',people:[]};
+  // "add suzy as a new contact" — the name he was just handed by whoever answered.
+  _MINE_ADD.lastIndex=0;                       // /g regex is module-level; reset or it skips matches
+  let am;
+  while((am=_MINE_ADD.exec(s))){
+    const nm=_titleCase(String(am[1]||'').trim().replace(/[.,]+$/,''));
+    if(!nm||_ADD_STOP.test(nm)) continue;
+    const existing=(a?contactsOf(a.id):[]).some(x=>cname(x).toLowerCase()===nm.toLowerCase());
+    if(existing) continue;                     // they're already on this account
+    if(out.people.indexOf(nm)<0) out.people.push(nm);
+  }
   (s.match(_MINE_EM)||[]).forEach(e=>{
     const lo=e.toLowerCase();
     if(/shipday\.com$/i.test(lo)) return;                       // that's us
@@ -4036,8 +4073,11 @@ function cmSeqChip(c){
   if(typeof onCallStep==='function'&&onCallStep(c)){ cls='seqcall'; lbl='Cadence says CALL now — '+lbl; }
   const own=(typeof seqOwner==='function'&&seqOwner(c))||'';
   const mine=!own||(typeof repCanon==='function'&&typeof myRep==='function'&&repCanon(own)===repCanon(myRep()));
+  /* The chip names the exact step ("On ✉ Email 5") and was a dead <span>. Clicking the thing that
+     tells you where they are in the play is the obvious way to go read it — z188 made the step
+     TITLE clickable in the task rows and missed this one. */
   return '<div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap">'+
-    '<span class="cm-chip '+cls+'">'+(paused?'⏸ Paused — ':'')+esc(lbl)+'</span>'+
+    '<button type="button" class="cm-chip '+cls+'" style="cursor:pointer" onclick="openSeqFor(\''+c.id+'\')" title="Open the cadence — the modal stays open so you can still log the call">'+(paused?'⏸ Paused — ':'')+esc(lbl)+' ›</button>'+
     (own&&!mine?'<span class="cm-chip" title="This cadence belongs to another rep">👤 '+esc(own)+'</span>':'')+
     '</div>';
 }
@@ -4080,7 +4120,9 @@ function noteFixLines(c,txt){ const f=noteNumFixes(txt), out=[];
 function applyNoteFixes(c,txt){
   const f=noteNumFixes(txt);
   const a=acct(c.accountId), mined=mineCallFacts(txt,c,a);
-  if(!f.bad.length&&!f.good.length&&!mined.emails.length&&!mined.owner) return null;
+  // Every kind of fact this function can apply has to be in this guard, or it bails before doing
+  // the work — `people` was missing and "add suzy as a new contact" silently did nothing.
+  if(!f.bad.length&&!f.good.length&&!mined.emails.length&&!mined.owner&&!(mined.people||[]).length) return null;
   const prev={phone:c.phone,mobile:c.mobile,badNums:(c.badNums||[]).slice(),
     email:c.email,email2:c.email2,aid:(a?a.id:''),ownerName:(a?a.ownerName:undefined)}, done=[];
   f.bad.forEach(n=>{
@@ -4104,6 +4146,18 @@ function applyNoteFixes(c,txt){
   if(mined.owner&&a){ a.ownerName=mined.owner; a.ownerEvidence='Typed in a call note'; a.ownerAddedAt=Date.now();
     stampU(a); logAuto(a,'👤 '+mined.owner+' recorded as the owner — from a call note');
     done.push('👤 '+mined.owner+' saved as the owner'); }
+  // "add suzy as a new contact" — create them, on the same account, sharing the line he just dialled.
+  prev.madeIds=[];
+  mined.people.forEach(nm=>{
+    const w=nm.split(/\s+/), nid=uid('c');
+    store.contacts[nid]={id:nid,accountId:c.accountId||'',first:w[0],last:w.slice(1).join(' '),
+      title:'',phone:c.phone||'',email:'',status:'New',warmth:'Warm',
+      assignee:c.assignee||'',log:[],_u:Date.now()};
+    logAuto(store.contacts[nid],'➕ Added from a call note on '+cname(c)+(a?' at '+aname(a):''));
+    stampU(store.contacts[nid]);
+    try{ claimLead(store.contacts[nid]); }catch(e){}
+    prev.madeIds.push(nid);
+    done.push('➕ '+nm+' added as a contact'); });
   if(!done.length) return null;
   done.forEach(t=>logAuto(c,t)); stampU(c);
   return {prev:prev,done:done};
@@ -4192,6 +4246,7 @@ function cmMinedPreview(){ const c=contact(callModalId); if(!c) return '';
   const a=acct(c.accountId), f=mineCallFacts(cmSel.note||'',c,a), bits=[];
   if(f.emails.length) bits.push('📧 '+esc(f.emails[0])+(c.email?' as a second email':''));
   if(f.owner) bits.push('👤 '+esc(f.owner)+' as the owner'+(a?' of '+esc(aname(a)):''));
+  (f.people||[]).forEach(p=>bits.push('➕ '+esc(p)+' as a new contact'));
   if(!bits.length) return '';
   return '<div style="margin-top:5px;font-size:12px;color:var(--sig)">Saves to the account when you file this — '+bits.join(' · ')+'</div>'; }
 function cmRefreshMined(){ const e=el('cmMined'); if(e) e.innerHTML=cmMinedPreview(); }
@@ -4240,7 +4295,7 @@ function cmPickDispo(k){ cmSyncNote(); cmSel.dispo=k;
   else if(d) cmSel.req=suggestReq(d,contact(callModalId))||cmSel.req||'none';
   renderCallModal(); const t=el('cmNote'); if(t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
 function cmPickReq(k){ cmSyncNote(); cmSel.req=k; if(k!=='at'){ cmSel.at=0; cmSel.showPick=false; } cmRefreshWhen(); }
-function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; }
+function closeCallModal(){ const m=el('callModal'); if(m) m.style.display='none'; callModalId=null; clearBesideMode(); }
 function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal(); return; }
   cmSyncNote(); if(!cmSel.dispo){ toast('Pick an outcome first'); return; }
   const fx=applyNoteFixes(c,cmSel.note);   // the note fixes the record before the call is filed
@@ -4253,6 +4308,8 @@ function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal()
     const a3=fx.prev.aid?acct(fx.prev.aid):null;
     if(a3){ if(fx.prev.ownerName===undefined){ delete a3.ownerName; delete a3.ownerEvidence; delete a3.ownerAddedAt; }
             else a3.ownerName=fx.prev.ownerName; stampU(a3); }
+    // contacts the note created have to be un-created, or "undo" silently leaves people behind
+    (fx.prev.madeIds||[]).forEach(id=>{ delete store.contacts[id]; }); idxBust();
     stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
   if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
