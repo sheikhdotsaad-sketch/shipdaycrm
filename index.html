@@ -636,7 +636,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z191';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z193';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3552,6 +3552,71 @@ function acctLastOpen(a){ const cs=contactsOf(a.id); return cs.length?Math.max(0
 function acctRecentCalls(aid){ const rows=[];
   contactsOf(aid).forEach(c=>(c.log||[]).forEach(l=>{ if(/📞|☎/.test(l.txt||'')) rows.push({ts:+l.ts||0,txt:l.txt,by:l.by||'',who:cname(c),cid:c.id}); }));
   rows.sort((a,b)=>b.ts-a.ts); return rows.slice(0,4); }
+/* ── THE DIALER'S SUMMARY IS 90% BOILERPLATE AND 10% GOLD ──────────────────────────────────────
+   Saad, screenshotting a 40-second NO ANSWER whose log line ran to three lines:
+     "🚫 No answer — Call with (614) 235-2551 • Saad Sheikh called • 0:40 August 20 2026, 3:55 PM
+      Call summary • Saad Sheikh called from Shipday to reach out to Jeremy. • The contact email for
+      Jeremy is jeremy@frgenterprises.com. • Summary powered by Quo AI"
+   — then: "you see what i mean ... and create that value add into the account / Jeremy Fox is the owner".
+   Everything in that block except ONE fact is already on the row: the number, the timestamp, the
+   rep, the duration, and a sentence restating that a call happened. "Summary powered by Quo AI" is
+   an advert inside his call log. The gold is `jeremy@frgenterprises.com` — an email he did not have,
+   sitting in prose where no query, no cadence and no filter can reach it.
+   🔑 WRITE TIME, NOT BACKFILL. Mining the 366 hand-written notes was measured worthless at z188 —
+   all 29 emails in them were already on the record. This is the opposite case: a NEW machine-written
+   stream that keeps arriving, so every fact it carries is caught the moment it lands.
+   ⚠️ These summaries did NOT exist in the Aug-20 13:44 backup (0 of 9,385 log entries matched), so
+   this could not be validated against history — it is deliberately conservative and it only ever
+   OFFERS. Nothing here writes on its own; a wrong owner name is worse than a blank field. */
+const _SUM_NOISE=[
+  /\s*[•·]?\s*summary powered by[^•·\n]*/ig,   // an advert in his call log
+  /\s*[•·]?\s*call summary\s*[•·:–-]?\s*/ig,
+  /\s*[•·]?\s*[A-Z][a-z]+(?: [A-Z][a-z]+)? called from Shipday to reach out to [^.•·\n]*\.?/g
+];
+function callTextClean(t){ let s=String(t||'');
+  _SUM_NOISE.forEach(rx=>{ s=s.replace(rx,' '); });
+  return s.replace(/\s*[•·]\s*[•·]\s*/g,' • ').replace(/\s{2,}/g,' ').replace(/\s*[•·]\s*$/,'').trim(); }
+const _MINE_EM=/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+/* Only the explicit "<Name> is the owner/GM" shape. Anything looser starts inventing owners out of
+   whoever the summary happened to name, and an owner name is the line he says to get past the
+   person answering the phone — a wrong one costs him the call. */
+const _MINE_OWNER=/\b([A-Z][a-z]+(?:\s+[A-Z][a-z'’-]+){1,2})\s+is\s+the\s+(owner|gm|general manager|proprietor)\b/i;
+function mineCallFacts(txt,c,a){
+  const s=String(txt||''), out={emails:[],owner:''};
+  (s.match(_MINE_EM)||[]).forEach(e=>{
+    const lo=e.toLowerCase();
+    if(/shipday\.com$/i.test(lo)) return;                       // that's us
+    const have=[c&&c.email,c&&c.email2,c&&c.altEmail].filter(Boolean).map(x=>String(x).toLowerCase());
+    if(have.indexOf(lo)>=0) return;                             // already on the record
+    if(out.emails.indexOf(e)<0) out.emails.push(e);
+  });
+  const m=s.match(_MINE_OWNER);
+  if(m&&m[1]&&!(a&&String(a.ownerName||'').trim())) out.owner=m[1].trim();
+  return out;
+}
+function saveMinedEmail(cid,em){ const c=contact(cid); if(!c) return;
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  const prev=c.email||'';
+  if(prev) c.email2=em; else c.email=em;
+  logAuto(c,'📧 Email captured from the call summary: '+em);
+  stampU(c); save();
+  if(curDrawer&&curDrawer.ent==='a') reopenDrawer('a',curDrawer.id); else renderActive();
+  toast('Saved '+em, ()=>{ if(prev) delete c.email2; else c.email=prev; stampU(c); save();
+    if(curDrawer&&curDrawer.ent==='a') reopenDrawer('a',curDrawer.id); else renderActive(); }); }
+function saveMinedOwner(aid,nm){ const a=acct(aid); if(!a) return;
+  if(!canEdit()){ readOnlyBlocked(); return; }
+  a.ownerName=nm; a.ownerSrc=''; a.ownerEvidence='Named on a call summary'; a.ownerAddedAt=Date.now();
+  stampU(a); save(); reopenDrawer('a',aid);
+  toast('👤 Owner: '+nm, ()=>{ delete a.ownerName; delete a.ownerEvidence; delete a.ownerAddedAt;
+    stampU(a); save(); reopenDrawer('a',aid); }); }
+/* The instruction IS the button — same rule as gapCTA. He should never read a fact out of a log
+   line and retype it into a field two sections away. */
+function minedChips(r,a){ const c=contact(r.cid), f=mineCallFacts(r.txt,c,a);
+  if(!f.emails.length&&!f.owner) return '';
+  let h='<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">';
+  f.emails.forEach(e=>{ h+='<button class="btn sm" onclick="event.stopPropagation();saveMinedEmail(\''+r.cid+'\',\''+esc(e)+'\')" title="Put this on '+esc(cname(c)||'the contact')+'">📧 Save '+esc(e)+'</button>'; });
+  if(f.owner) h+='<button class="btn sm gh" onclick="event.stopPropagation();saveMinedOwner(\''+a.id+'\',\''+esc(f.owner)+'\')" title="Store as the owner on this account">👤 '+esc(f.owner)+' is the owner</button>';
+  return h+'</div>'; }
 // Deterministic one-line read of where the record stands (no LLM — same signals as heat/intent).
 function contactAI(c){ if(!c) return '';
   const i=intentC(c), ph=telNum(c), open=lastOpenTs(c), touch=lastTouchTs(c), lc=lastCallTs(c);
@@ -3781,7 +3846,8 @@ function renderCallModal(){ const m=el('callModal'); const c=contact(callModalId
       : '<div style="margin:8px 0 0"><button type="button" class="cm-link" onclick="cmToggleWho()">＋ Someone else answered?</button></div>')+
     '<div class="cm-lbl">Outcome</div><div class="cm-dispos">'+dispoBtns+'</div>'+
     '<div class="cm-lbl">Notes</div>'+noteCard(lastNote(c)||acctLastNote(a),'Last note')+
-    '<textarea id="cmNote" class="cm-note" placeholder="What happened on the call…  type &quot;call back thursday&quot;, or &quot;bad number 740-577-8688 · restaurant number is 740-577-3048&quot; and I&#39;ll fix the record" oninput="cmNoteInput(this.value)">'+esc(cmSel.note)+'</textarea>'+
+    '<textarea id="cmNote" class="cm-note" placeholder="What happened on the call…  type &quot;call back thursday&quot;, &quot;bad number 740-577-8688 · restaurant number is 740-577-3048&quot;, an email, or &quot;Jeremy Fox is the owner&quot; — it all goes onto the account" oninput="cmNoteInput(this.value)">'+esc(cmSel.note)+'</textarea>'+
+    '<div id="cmMined">'+cmMinedPreview()+'</div>'+
     '<div class="cm-lbl">Call back</div><div id="cmWhenBar">'+cmWhenBar(c)+'</div>'+
     '<div class="cm-foot"><button class="btn gh" onclick="closeCallModal()">Cancel</button>'+
       '<button class="btn" onclick="bookDemoFromModal()">✅ Booked demo</button>'+
@@ -3902,9 +3968,19 @@ function noteFixLines(c,txt){ const f=noteNumFixes(txt), out=[];
   f.good.forEach(g=>{ if(norm10(g.cell?c.mobile:c.phone)!==g.n)
     out.push('set '+(g.cell?'mobile':'direct number')+' to '+fmtPhone10(g.n)); });
   return out; }
+/* z193 — THE NOTE FIXES THE ACCOUNT, NOT JUST THE NUMBER. Saad: "i wanted to be able to write that
+   note in the disposition and the account react". This function already turned "bad number 740-577-
+   8688 · restaurant number is 740-577-3048" into an actual field change; an email or an owner name
+   typed in the same box just sat in prose. Same parser as the dialer summaries (mineCallFacts), so
+   there is ONE definition of what counts as an email or an owner claim, not two that drift.
+   🔑 The note is the highest-quality source in the book — it is a human writing down what a human
+   just told them on the phone. It should never be the least machine-readable. */
 function applyNoteFixes(c,txt){
-  const f=noteNumFixes(txt); if(!f.bad.length&&!f.good.length) return null;
-  const prev={phone:c.phone,mobile:c.mobile,badNums:(c.badNums||[]).slice()}, done=[];
+  const f=noteNumFixes(txt);
+  const a=acct(c.accountId), mined=mineCallFacts(txt,c,a);
+  if(!f.bad.length&&!f.good.length&&!mined.emails.length&&!mined.owner) return null;
+  const prev={phone:c.phone,mobile:c.mobile,badNums:(c.badNums||[]).slice(),
+    email:c.email,email2:c.email2,aid:(a?a.id:''),ownerName:(a?a.ownerName:undefined)}, done=[];
   f.bad.forEach(n=>{
     if(norm10(c.phone)===n){ c.phone=''; done.push('🚫 '+fmtPhone10(n)+' removed — bad number'); }
     if(norm10(c.mobile)===n){ c.mobile=''; done.push('🚫 '+fmtPhone10(n)+' removed — bad number'); }
@@ -3915,6 +3991,17 @@ function applyNoteFixes(c,txt){
     const had=c[k]; if(had&&!c[other]) c[other]=had;          // the rep named the line; what was there moves over if there's room
     c[k]=fmtPhone10(g.n);
     done.push('📞 '+(g.cell?'Mobile':'Direct number')+' set to '+fmtPhone10(g.n)); });
+  // An email he was just given on the phone. Never clobbers one already on the record — it lands in
+  // email2, because the address the prospect reads out loud is usually better than the one we
+  // guessed, and deciding which of two real addresses wins is not this function's call to make.
+  if(mined.emails.length){ const em=mined.emails[0];
+    if(!c.email){ c.email=em; done.push('📧 Email set to '+em); }
+    else if(String(c.email2||'').toLowerCase()!==em.toLowerCase()){ c.email2=em; done.push('📧 Second email '+em+' added'); } }
+  // The name that gets you past whoever answers the phone. Only on an explicit "X is the owner",
+  // and never over an owner already on the account — see mineCallFacts.
+  if(mined.owner&&a){ a.ownerName=mined.owner; a.ownerEvidence='Typed in a call note'; a.ownerAddedAt=Date.now();
+    stampU(a); logAuto(a,'👤 '+mined.owner+' recorded as the owner — from a call note');
+    done.push('👤 '+mined.owner+' saved as the owner'); }
   if(!done.length) return null;
   done.forEach(t=>logAuto(c,t)); stampU(c);
   return {prev:prev,done:done};
@@ -3994,7 +4081,18 @@ function cmNoteInput(v){
   // If the time they typed disappears (line deleted), release the lock.
   if(!now&&cmSel.req==='at'&&cmSel.at===prev){ cmSel.req=cmSel.dispo?((DISPO_BY[cmSel.dispo]||{}).req||'none'):'none'; cmSel.at=0; }
   cmRefreshWhen();
+  cmRefreshMined();
 }
+/* Show him what the note is about to change BEFORE he files it. The call-back time has always
+   previewed like this; a silent field write he only discovers later is how you stop trusting the
+   box. Text only — the write happens in applyNoteFixes on save, so there is one write path. */
+function cmMinedPreview(){ const c=contact(callModalId); if(!c) return '';
+  const a=acct(c.accountId), f=mineCallFacts(cmSel.note||'',c,a), bits=[];
+  if(f.emails.length) bits.push('📧 '+esc(f.emails[0])+(c.email?' as a second email':''));
+  if(f.owner) bits.push('👤 '+esc(f.owner)+' as the owner'+(a?' of '+esc(aname(a)):''));
+  if(!bits.length) return '';
+  return '<div style="margin-top:5px;font-size:12px;color:var(--sig)">Saves to the account when you file this — '+bits.join(' · ')+'</div>'; }
+function cmRefreshMined(){ const e=el('cmMined'); if(e) e.innerHTML=cmMinedPreview(); }
 function cmUseParsed(){ const w=cmSel.noteWhen; if(!w) return;
   if(cmSel.req==='at'&&cmSel.at===w.ts){ cmSel.req='none'; cmSel.at=0; }   // tap again to clear
   else { cmSel.req='at'; cmSel.at=w.ts; }
@@ -4045,7 +4143,14 @@ function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal()
   cmSyncNote(); if(!cmSel.dispo){ toast('Pick an outcome first'); return; }
   const fx=applyNoteFixes(c,cmSel.note);   // the note fixes the record before the call is filed
   applyDispo(c,cmSel.dispo,cmSel.note,cmSel.req,cmSel.req==='at'?cmSel.at:0); closeCallModal();
+  // Undo has to reverse EVERY field applyNoteFixes touched, including the account. It restored only
+  // the phone trio before z193 added email + ownerName, which would have left an un-undoable owner
+  // on the account behind a toast that says "undo".
   if(fx) toast(fx.done.join(' · '),()=>{ c.phone=fx.prev.phone; c.mobile=fx.prev.mobile; c.badNums=fx.prev.badNums;
+    c.email=fx.prev.email; if(fx.prev.email2===undefined) delete c.email2; else c.email2=fx.prev.email2;
+    const a3=fx.prev.aid?acct(fx.prev.aid):null;
+    if(a3){ if(fx.prev.ownerName===undefined){ delete a3.ownerName; delete a3.ownerEvidence; delete a3.ownerAddedAt; }
+            else a3.ownerName=fx.prev.ownerName; stampU(a3); }
     stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
   if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
@@ -8020,20 +8125,21 @@ function orphanSkip(aid){ const a=acct(aid); if(!a) return;
   if(!canEdit()){ readOnlyBlocked(); return; }
   a.orphanSkip=Date.now(); stampU(a); save(); renderHotList();
   toast('Skipped '+(a.name||'account'), ()=>{ delete a.orphanSkip; stampU(a); save(); renderHotList(); }); }
-/* He rang it, somebody said a name. Create the person THEN — never before. */
-function orphanAdd(aid){ const a=acct(aid); if(!a) return;
-  if(!canEdit()){ readOnlyBlocked(); return; }
-  const nm=(window.prompt('Who did they say runs '+(a.name||'this place')+'?\n\nName (and role after a comma, e.g. "Maria Lopez, owner")')||'').trim();
-  if(!nm) return;
-  const parts=nm.split(','), who=parts[0].trim().split(/\s+/), role=(parts[1]||'').trim();
-  if(!who[0]) return;
-  const id=uid('c');
-  store.contacts[id]={id:id,accountId:a.id,first:who[0],last:who.slice(1).join(' '),
-    title:role,phone:a.phone||'',email:'',status:'New',warmth:'Warm',log:[],_u:Date.now()};
-  logAuto(store.contacts[id],'☎️ Found by calling '+(a.name||'the account')+' and asking who runs it');
-  stampU(store.contacts[id]); save(); claimLead(store.contacts[id]);
-  renderHotList(); renderCounts();
-  toast('Added '+nm.split(',')[0].trim()+' — now on '+(a.name||'the account')); }
+/* 🔑 THE CALL *IS* THE ENRICHMENT — OPEN THE ACCOUNT, DON'T ASK ONE QUESTION.
+   First cut put a `＋ Add person` button here that fired a window.prompt() for a name. Saad:
+   "you just press add person, thats odd. lets just have the account drawer pop up to do what you
+   need to do with it ... its to enrich the account as youre calling ... and then you can send an
+   email if you find an email."
+   He is right, and the prompt was wrong on its own terms: a single text box can capture a NAME and
+   nothing else, while what he actually learns on that call is the name AND the POS AND the email
+   AND whether they already run their own delivery. The account drawer already has every one of
+   those fields plus `Contacts + Add` (9328) and the email path off the contact — so there was
+   nothing to build, only somewhere to route. A prompt() would have been a second, worse CRM. */
+function orphanOpen(aid){ const a=acct(aid); if(!a) return; openAccount(aid);
+  // Land him on Contacts — the first thing he types after "who runs it?" — rather than at the top
+  // of a nine-section drawer. Deferred a frame: the drawer body is written synchronously above, but
+  // scrollIntoView on a node that is still display:none does nothing.
+  setTimeout(()=>{ try{ jumpToContacts(); }catch(e){} },60); }
 function orphanPanel(){
   const all=orphanAccounts(); if(!all.length) return '';
   const take=Math.min(UI.pgShown.orphan||PG_PAGE,all.length), left=all.length-take;
@@ -8041,17 +8147,19 @@ function orphanPanel(){
     '<span class="sub">'+all.length+' — you have their number but no name. Ring it, ask who runs it, add them.</span></div><table><tbody>';
   all.slice(0,take).forEach(a=>{
     const t=acctTier(a), locs=acctLocs(a), ph=a.phone||'';
-    h+='<tr><td style="width:34px;text-align:center">☎️</td>'+
+    // The whole row opens the account. Every control inside it stops propagation, or dialling the
+    // number would also fling the drawer open over the top of the call you just started.
+    h+='<tr style="cursor:pointer" onclick="orphanOpen(\''+a.id+'\')" title="Open the account — add who answered, POS, email, all of it">'+
+      '<td style="width:34px;text-align:center">☎️</td>'+
       '<td><div><b>'+esc(a.name||'(unnamed account)')+'</b>'+
         (TIER_META[t]?' <span class="tag">'+esc(t)+'</span>':'')+
         (locs>1?' <span class="tag">🏢 '+locs+'</span>':'')+'</div>'+
       '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+(a.pos?' · '+esc(a.pos):'')+(a.cuisine?' · '+esc(a.cuisine):'')+'</div></td>'+
-      '<td class="tsub">Ask for the owner or GM — get a name and a direct line</td>'+
+      '<td class="tsub">Ring it, ask who runs it — then open the row and put what you learn on the account</td>'+
       '<td style="text-align:right;white-space:nowrap">'+
-        (ph?'<a class="btn sm" href="tel:'+esc(ph)+'">📞 '+esc(ph)+'</a> ':'')+
-        '<button class="btn sm gh" onclick="orphanAdd(\''+a.id+'\')">＋ Add person</button> '+
-        '<a class="btn sm gh" href="'+esc(gsearch(a))+'" target="_blank" rel="noopener">🔎</a> '+
-        '<button class="cm-link" style="color:var(--mut)" onclick="orphanSkip(\''+a.id+'\')">skip</button>'+
+        (ph?'<a class="btn sm" href="tel:'+esc(ph)+'" onclick="event.stopPropagation()">📞 '+esc(ph)+'</a> ':'')+
+        '<a class="btn sm gh" href="'+esc(gsearch(a))+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔎</a> '+
+        '<button class="cm-link" style="color:var(--mut)" onclick="event.stopPropagation();orphanSkip(\''+a.id+'\')">skip</button>'+
       '</td></tr>';
   });
   h+='</tbody></table>';
@@ -9340,7 +9448,7 @@ function openAccount(id){
   // recent dials across every contact on the account
   { const rc=acctRecentCalls(id);
     b+='<div class="sec">Recent calls</div>';
-    b+= rc.length? rc.map(r=>'<div class="mini" onclick="openContact(\''+r.cid+'\')"><div class="mn">'+esc(r.txt)+'</div><div class="ms">'+esc(r.who)+' · '+logWhen(r.ts)+(r.by?' · '+esc(r.by):'')+'</div></div>').join('') : '<div class="tsub">No calls logged yet.</div>'; }
+    b+= rc.length? rc.map(r=>'<div class="mini" onclick="openContact(\''+r.cid+'\')"><div class="mn">'+esc(callTextClean(r.txt))+'</div><div class="ms">'+esc(r.who)+' · '+logWhen(r.ts)+(r.by?' · '+esc(r.by):'')+'</div>'+minedChips(r,a)+'</div>').join('') : '<div class="tsub">No calls logged yet.</div>'; }
   b+='<div class="sec">Activity</div>'+logBar('a',id)+'<div id="log-a'+id+'">'+logList(a,'a',id)+'</div>';
   el('drawer-body').innerHTML=b;
   el('drawer-foot').innerHTML='<button class="btn pri" onclick="saveNow()">💾 Save</button>'+
