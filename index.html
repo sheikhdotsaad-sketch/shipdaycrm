@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z197';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z198';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1249,6 +1249,12 @@ async function initSync(){
         if(localGm && (+(localGm.syncedAt||0))>(+((myBox('gmail')||{}).syncedAt||0))) setBox('gmail',localGm);
         if(localCal && (+(localCal.syncedAt||0))>(+((myBox('cal')||{}).syncedAt||0))) setBox('cal',localCal);
         hydrateMine();
+        /* 🔴 THE FIX FOR "it started completing fucking sequences". This is the moment the real book
+           arrives and REPLACES everything the boot-time migration just stamped. Without re-running
+           it here, every cloud-borne enrolment keeps calls===undefined, gets the 5-step email-only
+           def, and any play past step 5 is marked done. Boot alone was never enough — the data it
+           was protecting had not loaded yet. */
+        try{ stampLegacyCadences(); }catch(e){}
         try{ localStorage.setItem(LS,JSON.stringify(store)); }catch(e){} render(); syncRail(); applyingRemote=false;
       }
     }
@@ -6455,6 +6461,45 @@ function cadDef(){ const c=myCad(); return (Array.isArray(c)&&c.length)?c:EMAIL_
    Drop the calls out from under them and every one of those pointers silently lands on the wrong
    email. So the flag is stamped once at boot on existing enrolments and never set again; new
    enrolments have no flag and run pure email. */
+/* ── 🔴 z198: THE BUG THAT WAS SILENTLY COMPLETING HIS CADENCES ────────────────────────────────
+   Saad, on a contact reading "✓ Complete · all 5 steps done" whose own tasks said "Email 5/10":
+   "how is that posisble ... i think what happened was when you coded to go 5/5 it started
+   completing fucking sequences". He is exactly right, and it is my bug.
+   z183 made sequences email-only and left ONE boot-time migration to protect people already
+   enrolled against the old interleaved 10-step def:
+       contacts().forEach(c=>{ if(s.calls===undefined) s.calls=true; })
+   TWO defects, and they compound:
+   1. IT RAN AT BOOT, OVER WHATEVER WAS LOADED AT THAT INSTANT. His book arrives from the cloud
+      asynchronously and REPLACES the store wholesale (see the pull path: `store=norm(inc)`), so
+      every contact that landed after boot was never stamped. `calls` stayed undefined → cadDefFor
+      stripped the call steps → a 10-step play became a 5-step def → a contact sitting on step 5
+      read step 5 of 5 and advanceStep() set s.done. Halfway through a play, marked finished, and
+      dropped out of the cadence. That is why he sees it "more so lately".
+   2. `calls===undefined` CANNOT TELL LEGACY FROM NEW — no enrolment site ever sets calls:false, so
+      the same migration would stamp brand-new email-only plays as interleaved, breaking them the
+      other way.
+   Fixed by deciding on ENROLMENT DATE, not on the absence of a flag, and by re-running it every
+   time a cloud copy lands rather than once at boot. The flag is now always explicitly true/false,
+   so it can never be ambiguous again. */
+const CADCALL_CUT=Date.parse('2026-08-18T00:00:00Z');   // z183 shipped email-only cadences
+function stampLegacyCadences(){
+  let n=0, fixed=0;
+  contacts().forEach(c=>{ const s=c&&c.emailSeq; if(!s||!s.seqId) return;
+    if(s.calls!==undefined) return;
+    const born=+s.startedAt||0;
+    const legacy=born>0&&born<CADCALL_CUT;
+    s.calls=legacy; n++;
+    /* REPAIR: if it was legacy and something already marked it done against the SHORTER def, that
+       completion never happened — un-complete it so the rest of the play still goes out. Only when
+       the pointer is short of the real end; a genuinely finished play stays finished. */
+    if(legacy&&s.done){ const N=cadDefFor(c).length;
+      if((+s.step||1)<=N){ delete s.done;
+        logAuto(c,'↩️ Cadence re-opened — it was marked complete against the shorter email-only map, but this play has '+N+' steps and they were on '+(+s.step||1)+'.');
+        fixed++; } }
+    stampU(c); });
+  if(n) console.log('[z198] stamped '+n+' enrolments ('+fixed+' wrongly-completed plays re-opened)');
+  return n;
+}
 function cadDefFor(c){ const s=c&&c.emailSeq; if(s&&s.seqId){ const q=seqById(s.seqId); if(q&&q.steps&&q.steps.length) return s.calls?withCallSteps(q.steps):q.steps.filter(x=>stepKind(x)!=='call'); } return cadDef(); }
 function cadNFor(c){ return cadDefFor(c).length; }
 function isCustomCad(){ const c=myCad(); return !!(Array.isArray(c)&&c.length); }
@@ -11418,6 +11463,7 @@ window.addEventListener('storage',e=>{
   try{ const inc=JSON.parse(e.newValue);
     if((inc.__updatedAt||0)<=(store.__updatedAt||0))return;
     applyingRemote=true; store=norm(inc);
+    try{ stampLegacyCadences(); }catch(e){}   // another tab's copy replaces ours — same trap
     if(!drawerOpen())render(); else {renderStats();renderCounts();}
     syncRail(); applyingRemote=false;
   }catch(err){}
@@ -11560,8 +11606,7 @@ function boot(){
      enrolled has a step number that counts an interleaved def. Stamp them so cadDefFor keeps
      rebuilding the def they were enrolled against; nothing sets this flag ever again, so the
      population can only shrink. Runs before releaseStalledCalls, which reads those same defs. */
-  try{ let _m=0; contacts().forEach(c=>{ const s=c&&c.emailSeq; if(s&&s.seqId&&s.calls===undefined){ s.calls=true; _m++; } });
-    if(_m){ save(); console.log('[z183] '+_m+' existing enrolments kept their interleaved step map'); } }catch(e){}
+  try{ if(stampLegacyCadences()) save(); }catch(e){}
   try{ const _r=releaseStalledCalls(); if(_r){ save(); console.log('[z182] '+_r+' cadences un-stalled off unmade calls'); } }catch(e){}
   try{ claimLegacyTasks(); }catch(e){}   // old unstamped tasks were showing on every rep's Do Now
   try{ clearAutoInterestDeals(); }catch(e){}   // pipeline entries nobody actually opened
