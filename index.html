@@ -636,7 +636,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z194';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z195';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1075,7 +1075,9 @@ const deals   =()=>Object.values(store.deals);
    change underneath it, and by the time any click or edit runs the index has already been dropped.
    save() busts it as well, for anything that mutates in a batch and paints later. */
 let _IDX=null;
-function idxBust(){ _IDX=null; _numIdx=null; _sncM=null; }   // the phone-line caches ride along
+function idxBust(){ _IDX=null; _numIdx=null; _sncM=null; _bcIx=null; }   // the phone-line caches ride along
+// _bcIx rides along too: flag an account as a customer and every sibling must stop being a prospect
+// on the SAME render, not the next one.
 function _idx(){
   if(_IDX) return _IDX;
   const byA={}, dByA={}, kids={};
@@ -3746,7 +3748,64 @@ function prefilter(list){ return list.filter(c=>{
   if((UI.pos.size||UI.cuisine.size||UI.hours.size||UI.tier.size)&&!matchPosCui(acct(c.accountId))) return false;
   if(UI.q&&!matchQ(cname(c)+' '+(c.email||'')+' '+(c.email2||'')+' '+(c.title||'')+' '+_acctName(c))) return false;
   return true; }); }
-const isCustC=c=>{ const a=acct(c.accountId); return a&&a.isCustomer; };
+const isCustC=c=>{ const a=acct(c.accountId); return !!(a&&(a.isCustomer||brandCustomer(a))); };
+/* 🔴 z195 — YOU WERE BEING HANDED YOUR OWN CUSTOMERS. Saad, reading a list I'd just called his
+   bullseye: "old scratch already works iwth us. so does a lot of antonios so does zeppes".
+   MEASURED: the customer flag EXISTS on all three — it is just on a DIFFERENT ROW of the same brand.
+     isCustomer=true  -> "Old Scratch Pizza"        (bare stub: no city, no tier, no POS)
+     isCustomer=false -> "Old Scratch Pizza & Beer" (tier A, Toast, Dayton)  <- the one that ranks
+   Same for Antonio's Pizza/Pizzeria and for Zeppe's, where FOUR rows are flagged and two are not.
+   The enriched row always wins the ranking, and the flag always sits on the stub, so the account
+   the CRM promotes hardest is precisely the one that looks like a stranger.
+   The name-fold merge in repair_dupes_and_names.py cannot fix these — "Old Scratch Pizza" and
+   "Old Scratch Pizza & Beer" are genuinely different strings, and they may be different stores.
+   So don't merge them: let the CUSTOMER FLAG TRAVEL ACROSS THE BRAND instead. If we serve any unit
+   of a brand, the brand is not cold outreach — it is an expansion conversation, and it should never
+   arrive in a cold queue.
+   ⚠️ Only 49 of 3,261 accounts carry the flag at all, and Saad's July note says Shipday has no
+   org-wide customer list. So this closes the leak we can SEE; it cannot invent the ones we can't.
+   Cached per render — sameBrand() is not free and isCustC runs across the whole pool. */
+/* `var`, not `let`, ON PURPOSE: idxBust() at ~1074 clears this cache and runs during boot, which is
+   thousands of lines ABOVE this declaration. A `let` would be in the temporal dead zone at that
+   moment and throw. Same trap that forced atRest() to be renamed at z188. */
+var _bcIx=null;
+/* _brandStem() only strips a " - Location" suffix, so it says "Old Scratch Pizza & Beer" and
+   "Old Scratch Pizza" are different brands, and "Antonio's Pizzeria" and "Antonio's Pizza" too.
+   Those are the exact rows Saad named. What actually identifies a restaurant brand is the part
+   that ISN'T a food word — strip the generic vocabulary and "Zeppe's Tavern & Pizzeria",
+   "Zeppe's of Newbury (Tavern & Pizzeria)" and "Zeppe's" all collapse onto "zeppes".
+   Min length 4 after stripping: shorter keys ("mio", "bar") collide across unrelated businesses,
+   and the cost of a false match is a real prospect going quiet. When it does match, the drawer
+   says WHICH customer caused it, so a wrong one is visible rather than silent. */
+const _CUST_STOP=/\b(pizza|pizzas|pizzeria|tavern|pub|grill|grille|kitchen|cafe|caf|bar|restaurant|restaurants|eatery|co|company|the|and|of|beer|brewing|food|foods|italian|bistro|house|shack|shop|deli|diner|gastro|lounge)\b/g;
+function _custKey(a){
+  let n=String((a&&a.name)||'').toLowerCase();
+  n=n.split(/\s[-–—|@]\s|\s*\(|\s*\//)[0];        // drop " - Dayton", " (Tavern…)", " / D'Italia"
+  n=n.replace(/[^a-z0-9 ]/g,' ').replace(_CUST_STOP,' ').replace(/\s+/g,'');
+  return n.length>=4?n:'';
+}
+function brandCustomer(a){
+  if(!a) return null;
+  if(a.isCustomer||a.existingCust) return a;
+  if(!_bcIx){ _bcIx={};
+    accounts().forEach(x=>{ if(!(x.isCustomer||x.existingCust)) return;
+      const st=_custKey(x); if(st) _bcIx[st]=x; }); }
+  const st=_custKey(a);
+  if(st&&_bcIx[st]) return _bcIx[st];
+  /* 🔴 NOT sameBrand(). Its 'linked' tier includes rows that merely SHARE A WEBSITE HOST, and the
+     audit caught it welding "Konteh express LLC" and "Ondarunn Grill" onto Zeppe's — three
+     unrelated businesses, silenced. Only an explicit hierarchy someone actually asserted counts:
+     this row's parent, or its children. Those are set by an import or by linkToBrand(), i.e. by a
+     human, and cannot be created by a junk website field. */
+  /* PARENT → CHILD ONLY, never child → parent. A location filed under a brand we serve is part of
+     that customer. The reverse is not safe on this data: "Ondarunn Grill" is the parent of BOTH
+     "Zeppe's / D'Italia Foods - Westlake" and "Konteh express LLC" — three unrelated businesses
+     welded together by a bad import — so inheriting a customer flag upward from a child silenced a
+     grill and an LLC that have nothing to do with Zeppe's. Upward inheritance is only as good as
+     the hierarchy, and the hierarchy here is not good. */
+  const p=brandOf(a); if(p&&(p.isCustomer||p.existingCust)) return p;
+  return null;
+}
 const bookCell=r=>'<button class="btn sm pri" onclick="event.stopPropagation();bookDemo(\''+r.id+'\')">Book Demo</button>';
 /* The restaurant's main line counts as a phone number. Two thirds of an imported book is a business
    with nobody named on it yet, and "no number" was really "the number is one level up, on the
@@ -7663,13 +7722,36 @@ function dealProx(c){
    independent ways to earn it — they keep opening (hit rate), or they're the shape of customer that
    closes (ICP). Returns null when neither is true, and that null is the point: it is what stops the
    list being 2,000 names deep and therefore ignored. */
+/* ── z195: RECENCY IS THE SIGNAL, AND A POST-CADENCE OPEN IS A WEAK ONE ────────────────────────
+   Saad: "it should really calculate more recent opens" and, on people who just finished a play,
+   "bro.. if they just got out of a cadence why would they be on my call list ... odds are even if
+   it opens its probably not ... and tell me hey this one was just in a cadence but maybe its worth
+   a try".
+   Two changes, both his:
+   1. `fresh` was a TEN DAY window, so an open from a week and a half ago ranked identically to one
+      from this morning. Now it is banded — today, this week — and today outranks this week.
+   2. A cadence that just ended changes what an open MEANS. Someone who has had eight emails from
+      you may open the ninth out of habit, or because it surfaced in a scan of their inbox; it is
+      not the same act as a cold prospect opening once and lingering. So a contact inside
+      CAD_COOLDOWN of a finished play is DEMOTED, not deleted — he explicitly wants to still see it,
+      labelled, and decide for himself. A reply is exempt: that is a human, and it is handled above
+      this function anyway. */
+const OPEN_TODAY=2*864e5, OPEN_WEEK=7*864e5;
 function callIntent(c){
   if(!c||!pgHasPhone(c)) return null;
   const now=Date.now(), open=lastOpenTs(c), opens=openCount(c), mine=pgOpened(c);
   const a=acct(c.accountId)||{};
-  const fresh=open&&(now-open<10*864e5);
-  if(mine&&opens>=2&&fresh) return {n:520+opens*12,why:'Opened '+opens+'× · last '+fmtAgo(open)+' — they keep reading, ring them'};
-  if(mine&&fresh)           return {n:380,why:'Opened '+fmtAgo(open)+' — still warm'};
+  const age=open?now-open:Infinity;
+  const today=age<OPEN_TODAY, week=age<OPEN_WEEK;
+  // How long since a play ended for them. 0 when they never finished one, or are still in one.
+  const ended=cadEndedTs(c), offCad=ended&&(now-ended<CAD_COOLDOWN);
+  const cadNote=offCad?' · just came off a cadence, so this may be habit — but worth a try':'';
+  const cut=offCad?0.45:1;                     // demote, never drop
+  const mk=(n,why)=>({n:Math.round(n*cut),why:why+cadNote});
+  if(mine&&opens>=2&&today) return mk(560+opens*12,'Opened '+opens+'× · last '+fmtAgo(open)+' — reading you today, ring them');
+  if(mine&&opens>=2&&week)  return mk(470+opens*10,'Opened '+opens+'× · last '+fmtAgo(open)+' — they keep reading');
+  if(mine&&today)           return mk(410,'Opened '+fmtAgo(open)+' — reading you right now');
+  if(mine&&week)            return mk(330,'Opened '+fmtAgo(open)+' — still warm');
   // ICP: the shape that closes. Deliberately weaker than a real open, and it only earns a dial when
   // there is nothing warmer, which is exactly what "nurtured" has to mean or the list is just noise.
   let icp=0,bits=[];
@@ -7677,8 +7759,8 @@ function callIntent(c){
   if(isOwner(c)){ icp+=2; bits.push('owner'); }
   let locs=0; try{ locs=sameBrand(a).length; }catch(e){}
   if(locs>=1){ icp+=2; bits.push((locs+1)+' locations'); }
-  if(open){ icp+=1; bits.push('opened '+fmtAgo(open)); }
-  if(icp>=4) return {n:200+icp*20,why:'Strong fit — '+bits.join(' · ')};
+  if(open&&week){ icp+=1; bits.push('opened '+fmtAgo(open)); }
+  if(icp>=4) return mk(200+icp*20,'Strong fit — '+bits.join(' · '));
   return null;
 }
 /* ── A GOOD ACCOUNT WITH NO DATA IS A JOB, NOT A DEAD END ──
@@ -9383,7 +9465,10 @@ function openAccount(id){
     (acctLoc(a)?' <span style="font-weight:600;opacity:.5">'+esc(acctLoc(a))+'</span>':'')+'</div>'+
     '<div class="tsub">'+esc([a.city,a.state].filter(Boolean).join(', '))+_goC+'</div></div>'+
     (isBrand(a)?'<span class="tag">🏢 '+childLocs(id).length+' loc</span>':isLocation(a)?'<span class="tag">📍 Location</span>':'')+
-    (a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing customer</span>':a.isCustomer?'<span class="tag cust">Customer</span>':'<span class="tag">Prospect</span>')+
+    (a.existingCust?'<span class="tag" title="Already on Shipday — not your win">🏢 Existing customer</span>':a.isCustomer?'<span class="tag cust">Customer</span>':
+      /* Never let a row silently disappear from the queues — say WHICH sibling made it a customer.
+         This is an expansion conversation, not a cold one, and he should be able to see why. */
+      (function(){ const bc=brandCustomer(a); return bc?'<span class="tag cust" title="We already serve '+esc(bc.name||'another location of this brand')+' — this is expansion, not cold outreach">🏢 Brand is a customer</span>':'<span class="tag">Prospect</span>'; })())+
     '<button class="x" onclick="closeDrawer()">×</button>';
   let b=sibsHtml(a);
   // ---- at-a-glance: account heat/intent + freshness + open-now ----
