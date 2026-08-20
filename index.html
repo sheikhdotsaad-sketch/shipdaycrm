@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z198';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z199';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -7650,7 +7650,23 @@ function callCard(c,dueN,snoozedN){
   // Email in the same pass as the dial — no drawer, no scroll. Only offered when there's an
   // address that isn't already known bad; a dead button that toasts an error is worse than none.
   if(c.email&&!undeliverable(c)){
-    const es=c.emailSeq, sn=es&&!es.done?(' '+Math.min(+es.step||1,cadNFor(c))):'';
+    /* 🔴 z199 — THE HOT LIST WAS COUNTING STEPS AND CALLING THEM EMAILS. Saad: "hot list says emial
+       six. tasks say email 4 / 5 ... you tell me what i wanna believe", then "now it says email 7
+       lol idek why". It said 7 because the POINTER moved to 7 — the old line was
+           sn = Math.min(+es.step||1, cadNFor(c))
+       i.e. the raw step index with the word "Email" glued in front. In a 10-step interleaved play
+       the emails sit at steps 1,3,5,7,9, so step 6 is a CALL: "Email 6" was wrong about the number
+       AND about the kind. The tasks and the drawer were right all along — they use seqStepMeta(),
+       which returns the ordinal WITHIN that step kind ("✉ Email 4").
+       This button sends the NEXT EMAIL, so it names that email — walking past any call steps in
+       between rather than reporting whatever the pointer happens to be parked on. */
+    const es=c.emailSeq;
+    let sn='';
+    if(es&&!es.done){ try{
+      const def=cadDefFor(c), cur=seqCurStep(c);
+      for(let i=cur;i<=def.length;i++){
+        if(stepKind(def[i-1])==='email'){ const o=ordInSteps(def,i); if(o&&o.i) sn=' '+o.i; break; } }
+    }catch(e){} }
     h+='<button class="btn cc-email gh" onclick="emailFromCard(\''+c.id+'\')" title="Send their next sequence email right now, from this card — enrolls them if they aren\'t in a play yet">✉️ Email'+esc(sn)+'</button>';
   } else if(c.email&&undeliverable(c)){
     h+='<button class="btn cc-email gh" style="border-color:var(--hot);color:var(--hot)" onclick="openContact(\''+c.id+'\')" title="'+esc(sendBlock(c))+'">⛔ Email dead</button>';
