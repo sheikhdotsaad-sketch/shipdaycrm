@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z205';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z206';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -3715,7 +3715,108 @@ function mineCallFacts(txt,c,a){
   });
   const m=s.match(_MINE_OWNER);
   if(m&&m[1]&&!(a&&String(a.ownerName||'').trim())) out.owner=m[1].trim();
+  // An address belonging to somebody else becomes THAT PERSON, not a second address on this record.
+  out.newPeople=[];
+  out.emails=out.emails.filter(e=>{
+    const nm=personFromEmail(e,c);
+    if(!nm) return true;                                   // role address → keep as an alternate
+    const dupe=(a?contactsOf(a.id):[]).some(x=>cname(x).toLowerCase()===nm.toLowerCase());
+    if(dupe) return true;
+    out.newPeople.push({name:nm,email:e});
+    return false;
+  });
+  out.acct=mineAccountFacts(s,a);
   return out;
+}
+/* ── PASTE GOOGLE'S AI OVERVIEW, GET AN ENRICHED ACCOUNT ───────────────────────────────────────
+   Saad: "i want to be able to copy and paste the ai overview on google and have the notes in the
+   disposition take that and enrich the account."
+   This is the answer to the thing four vendors could not solve. Apify returned 82 usable owners from
+   1,824 domains; Apollo has baristas for independents; retail_location_count came back useful twice
+   in ten. But Google's overview panel routinely states, in a sentence, the two facts his ICP is
+   actually built on: HOW MANY LOCATIONS and WHICH POS/delivery stack. He is already Googling the
+   business while the phone rings — the 🔎 button is right there on the call card — so the cheapest
+   enrichment path in the whole product is letting him paste what he is already looking at.
+   🔑 locationCount is the prize. It is empty on ALL 3,279 accounts, which is why "3-10 location
+   pizza brand on Toast" — the ICP he wrote in July — has never been a filter he could run.
+   ⚠️ FILLS BLANKS ONLY, never overwrites, and every field is undoable. An AI overview is a summary
+   of the web, not a source of record: it is good enough to prioritise a dial and not good enough to
+   silently replace something a human typed. */
+const _MINE_LOCS=/\b(?:has|with|operates|across|features|includes|totalling|totaling)?\s*(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty)\s+(?:different\s+)?(?:locations?|restaurants?|stores?|outlets?|branches|units|shops)\b/i;
+const _NUMWORD={one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,twenty:20};
+/* 🔴 `toasttab` has no word break after "toast", so /\btoast\b/ missed the single most valuable
+   signal in his ICP. A toasttab.com ordering link in the overview is not a mention of Toast — it is
+   proof of Toast ONLINE ORDERING, which is the qualifier he wrote down in July. Check the domain
+   first and explicitly. Same reasoning for the other order-page domains. */
+const _POS_WORDS=[['Toast',/toasttab\.?com|\btoast\s*tab\b|\btoast\b/i],['Square',/squareup\.com|\bsquare\b/i],
+  ['Clover',/clover\.com|\bclover\b/i],['HungerRush',/hungerrush/i],
+  ['Revel',/\brevel\b/i],['SpotOn',/spot\s?on/i],['Lightspeed',/lightspeed/i],['TouchBistro',/touch\s?bistro/i],
+  ['Aloha',/\baloha\b/i],['Olo',/\bolo\b/i],['ChowNow',/chow\s?now/i],['Slice',/\bslice\b/i],['Owner.com',/owner\.com/i]];
+const _DLV_WORDS=[['DoorDash',/door\s?dash/i],['Uber Eats',/uber\s?eats/i],['Grubhub',/grub\s?hub/i],
+  ['Postmates',/postmates/i],['Toast Delivery Services',/toast delivery|(?:\bTDS\b)/i],['EZCater',/ez\s?cater/i],['Seamless',/seamless/i]];
+const _CUI_WORDS=[['Pizza',/\bpizzer?ia?\b|\bpizzas?\b/i],['BBQ',/\bbbq\b|barbecue|smokehouse/i],
+  ['Sushi / Japanese',/sushi|japanese|ramen|hibachi/i],['Mexican',/mexican|taqueria|tacos?\b|burrito/i],
+  ['Greek / Mediterranean',/greek|mediterranean|gyro/i],['Indian',/\bindian\b|curry|tandoori/i],
+  ['Cafe / Bakery',/bakery|caf[eé]\b|coffee\s?shop|patisserie/i],['Wings / Chicken',/\bwings?\b|fried chicken/i],
+  ['Italian',/\bitalian\b|pasta[s]?\b|trattoria|osteria/i],
+  ['Burger / American',/burgers?\b|\bamerican\b|farm-to-table|gastropub/i]];
+function mineAccountFacts(txt,a){
+  const s=String(txt||''), out={};
+  if(s.length<60) return out;                       // a one-line dispo note is not an overview
+  const m=s.match(_MINE_LOCS);
+  if(m){ const raw=String(m[1]).toLowerCase(); const n=_NUMWORD[raw]||parseInt(raw,10);
+    if(n>=2&&n<=200&&!(a&&+a.locationCount>0)) out.locationCount=n; }
+  if(!(a&&String(a.pos||'').trim())){ for(const [nm,rx] of _POS_WORDS){ if(rx.test(s)){ out.pos=nm; break; } } }
+  if(!(a&&String(a.delivery||'').trim())){
+    const hits=_DLV_WORDS.filter(([nm,rx])=>rx.test(s)).map(([nm])=>nm);
+    if(hits.length) out.delivery=hits.join(', ');
+  }
+  if(!(a&&String(a.cuisine||'').trim())){ for(const [nm,rx] of _CUI_WORDS){ if(rx.test(s)){ out.cuisine=nm; break; } } }
+  if(!(a&&String(a.website||'').trim())){
+    // their OWN site — not the aggregator links an AI overview always cites
+    const cand=s.match(/\b[a-z0-9-]+\.(?:com|net|org|co|us|pizza|restaurant)\b/ig)||[];
+    const own=cand.find(w=>!/shipday|google|doordash|ubereats|grubhub|yelp|facebook|instagram|toasttab|opentable|tripadvisor|linktr|squareup|clover|slicelife/i.test(w));
+    if(own) out.website=own;
+  }
+  /* 🔴 STRIP "(not X)" BEFORE READING A LOCATION. Saad's own paste reads:
+       "...in Sterling, Virginia (not Port Jefferson, Ohio)."
+     Google is CORRECTING the record — and a naive "City, State" match happily grabs the wrong half
+     and writes the very city the overview just told us is wrong. Parentheticals opening with "not"
+     are negations; drop them before looking for anything positional. */
+  const pos_s=s.replace(/\((?:\s*not\b)[^)]*\)/ig,' ');
+  if(!(a&&String(a.city||'').trim())){
+    const loc=pos_s.match(/\b(?:in|located in|based in)\s+([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){0,2}),\s*([A-Z][A-Za-z]+|[A-Z]{2})\b/);
+    if(loc){ out.city=loc[1].trim(); const st=loc[2].trim();
+      const ST={Ohio:'OH',Virginia:'VA',Michigan:'MI',Pennsylvania:'PA',Indiana:'IN',Kentucky:'KY',Florida:'FL',Texas:'TX',California:'CA',Illinois:'IL','West Virginia':'WV'};
+      out.state=ST[st]||(st.length===2?st.toUpperCase():''); if(!out.state) delete out.state; }
+  }
+  if(!(a&&String(a.address||'').trim())){
+    const ad=pos_s.match(/\b(\d{2,6}\s+[A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){0,3}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Parkway|Pkwy|Highway|Hwy|Court|Ct|Place|Pl))\b/);
+    if(ad) out.address=ad[1].trim();
+  }
+  return out;
+}
+/* A person's email in a note is usually a NEW PERSON, not a second address for whoever you dialled.
+   Saad, after pasting one: "it just added charlie as an alternate email instead of creating a new
+   contact for him ... probably because i didnt say create a new contact, but still."
+   He's right that the default was wrong. charlie@ on a call with Maria is Charlie, and filing his
+   address under Maria means every reply and open from Charlie attaches to the wrong human forever.
+   So: if the local part reads like a person AND is not the contact you're on, treat it as a new
+   contact. Anything role-shaped (info@, orders@, hello@) really is another line into the same
+   business, and stays an alternate address. */
+const _ROLE_LOCAL=/^(info|hello|contact|orders?|sales|admin|office|team|catering|events?|manager|owner|support|help|mail|general|gm|hr|jobs|marketing|no-?reply)$/i;
+function personFromEmail(em,c){
+  const local=String(em||'').split('@')[0].replace(/\+.*$/,'');
+  if(!local||_ROLE_LOCAL.test(local)) return '';
+  if(/^\d+$/.test(local)||local.length<3) return '';
+  const parts=local.split(/[._-]+/).filter(p=>p&&/^[a-z]+$/i.test(p)&&p.length>1);
+  if(!parts.length||parts.length>3) return '';
+  const nm=parts.map(p=>p[0].toUpperCase()+p.slice(1)).join(' ');
+  // already the person we're on? then it IS just their other address
+  const cur=String((c&&cname(c))||'').toLowerCase();
+  const first=parts[0].toLowerCase();
+  if(cur&&(cur.indexOf(first)>=0||first.indexOf(String((c&&c.first)||'').toLowerCase())>=0&&(c&&c.first))) return '';
+  return nm;
 }
 function saveMinedEmail(cid,em){ const c=contact(cid); if(!c) return;
   if(!canEdit()){ readOnlyBlocked(); return; }
@@ -4221,7 +4322,9 @@ function applyNoteFixes(c,txt){
   const a=acct(c.accountId), mined=mineCallFacts(txt,c,a);
   // Every kind of fact this function can apply has to be in this guard, or it bails before doing
   // the work — `people` was missing and "add suzy as a new contact" silently did nothing.
-  if(!f.bad.length&&!f.good.length&&!mined.emails.length&&!mined.owner&&!(mined.people||[]).length) return null;
+  const _acctFacts=Object.keys(mined.acct||{}).length;
+  if(!f.bad.length&&!f.good.length&&!mined.emails.length&&!mined.owner
+     &&!(mined.people||[]).length&&!(mined.newPeople||[]).length&&!_acctFacts) return null;
   const prev={phone:c.phone,mobile:c.mobile,badNums:(c.badNums||[]).slice(),
     email:c.email,email2:c.email2,aid:(a?a.id:''),ownerName:(a?a.ownerName:undefined)}, done=[];
   f.bad.forEach(n=>{
@@ -4247,6 +4350,25 @@ function applyNoteFixes(c,txt){
     done.push('👤 '+mined.owner+' saved as the owner'); }
   // "add suzy as a new contact" — create them, on the same account, sharing the line he just dialled.
   prev.madeIds=[];
+  // Facts about the BUSINESS, pasted from a Google AI overview. Blanks only — see mineAccountFacts.
+  if(a&&_acctFacts){
+    prev.acct={}; const LBL={locationCount:'🏢 Locations',pos:'POS',delivery:'Delivery',cuisine:'Cuisine',website:'Website',city:'City',state:'State',address:'Address'};
+    Object.keys(mined.acct).forEach(k=>{
+      if(String(a[k]||'').trim()) return;                  // never overwrite what is already there
+      prev.acct[k]=a[k]; a[k]=mined.acct[k];
+      done.push((LBL[k]||k)+' → '+mined.acct[k]); });
+    if(Object.keys(prev.acct).length){ if(mined.acct.locationCount>1) a.locType='multi';
+      stampU(a); logAuto(a,'✨ Enriched from a pasted overview: '+Object.keys(prev.acct).map(k=>k+'='+a[k]).join(' · ')); }
+  }
+  // An email that belongs to someone else → that someone else, with their address on THEIR record.
+  (mined.newPeople||[]).forEach(p=>{
+    const w=p.name.split(/\s+/), nid=uid('c');
+    store.contacts[nid]={id:nid,accountId:c.accountId||'',first:w[0],last:w.slice(1).join(' '),
+      title:'',phone:'',email:p.email,status:'New',warmth:'Warm',assignee:c.assignee||'',log:[],_u:Date.now()};
+    logAuto(store.contacts[nid],'➕ Added from a note on '+cname(c)+' — their own address, not an alias');
+    stampU(store.contacts[nid]); try{ claimLead(store.contacts[nid]); }catch(e){}
+    prev.madeIds.push(nid);
+    done.push('➕ '+p.name+' added ('+p.email+')'); });
   mined.people.forEach(nm=>{
     const w=nm.split(/\s+/), nid=uid('c');
     store.contacts[nid]={id:nid,accountId:c.accountId||'',first:w[0],last:w.slice(1).join(' '),
@@ -4346,6 +4468,10 @@ function cmMinedPreview(){ const c=contact(callModalId); if(!c) return '';
   if(f.emails.length) bits.push('📧 '+esc(f.emails[0])+(c.email?' as a second email':''));
   if(f.owner) bits.push('👤 '+esc(f.owner)+' as the owner'+(a?' of '+esc(aname(a)):''));
   (f.people||[]).forEach(p=>bits.push('➕ '+esc(p)+' as a new contact'));
+  (f.newPeople||[]).forEach(p=>bits.push('➕ '+esc(p.name)+' ('+esc(p.email)+') as their own contact'));
+  { const LBL={locationCount:'🏢 locations',pos:'POS',delivery:'delivery',cuisine:'cuisine',website:'website',city:'city',state:'state',address:'address'};
+    Object.keys(f.acct||{}).forEach(k=>{ if(a&&String(a[k]||'').trim()) return;
+      bits.push((LBL[k]||k)+' '+esc(String(f.acct[k]))); }); }
   if(!bits.length) return '';
   return '<div style="margin-top:5px;font-size:12px;color:var(--sig)">Saves to the account when you file this — '+bits.join(' · ')+'</div>'; }
 function cmRefreshMined(){ const e=el('cmMined'); if(e) e.innerHTML=cmMinedPreview(); }
@@ -4409,6 +4535,10 @@ function saveCallModal(){ const c=contact(callModalId); if(!c){ closeCallModal()
             else a3.ownerName=fx.prev.ownerName; stampU(a3); }
     // contacts the note created have to be un-created, or "undo" silently leaves people behind
     (fx.prev.madeIds||[]).forEach(id=>{ delete store.contacts[id]; }); idxBust();
+    // and the account fields the overview filled in
+    if(a3&&fx.prev.acct){ Object.keys(fx.prev.acct).forEach(k=>{
+      if(fx.prev.acct[k]===undefined) delete a3[k]; else a3[k]=fx.prev.acct[k]; });
+      if(fx.prev.acct.locationCount===undefined) delete a3.locType; stampU(a3); }
     stampU(c); save(); renderActive(); refreshDrawer(); }); }
 function bookDemoFromModal(){ const id=callModalId; cmSyncNote(); const nt=(cmSel.note||'').trim(); const c=contact(id);
   if(c&&nt){ c.callNote=nt; logAuto(c,'📝 '+nt); } closeCallModal(); if(id) bookDemo(id); }
