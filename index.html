@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z202';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z203';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -1969,10 +1969,20 @@ function emailOwner(c){ if(!c) return '';
   return o||mailboxOwner(c)||''; }
 // Called by the Gmail sync as each open/reply lands: this mailbox sent it, so this rep owns it.
 function stampOpenOwner(c){ if(c&&!c.openBy){ const me=senderName(); if(me) c.openBy=me; } }
-function openMine(c){ const me=repCanon((typeof myRep==='function'&&myRep())||''); if(!me) return true;
+/* 🔴 senderName(), NOT myRep(). myRep() is empty until the browser answers the rep gate, and this
+   function's `if(!me) return true` then quietly means "show everyone" — so the per-rep scoping
+   looked implemented and did nothing. That is exactly why Saad kept seeing Embert's opens: the
+   filter existed, it just never had a name to compare against. senderName() falls back through
+   store.__rep and the book's email, so it resolves in every state the app can actually be in.
+   ⚠️ Standing lesson in this codebase: when scoping doesn't take, check the identity function FIRST. */
+function openMine(c){ const me=repCanon((typeof senderName==='function'&&senderName())||''); if(!me) return true;
   const o=repCanon(emailOwner(c)); if(o) return o===me;
   const h=houseEmailer(); return !h||h===me; }   // nothing provable → the book's emailer, not everyone
-function sigGroups(){
+/* `all` = show every rep's signals, not just yours. Passed in by the Opens tab's 👥 Team toggle
+   (Saad: "maybe have like a team option there to see everyones opens"). It is a PARAMETER rather
+   than a read of opensScope because sigGroups() also feeds the Today signal feed and the bell,
+   and the toggle on one screen must not silently widen those. */
+function sigGroups(all){
   // The signal feed is only ever written by a sync that catches an open as it lands, so it
   // knows nothing about opens already sitting in the book — and with auto-refresh off by
   // default, that was nearly all of them. 76 opens were on record and this panel rendered
@@ -1984,11 +1994,11 @@ function sigGroups(){
   // still a person who read your pitch and never heard from you — that's a call worth making,
   // and it's sorted newest-first anyway so today stays on top.
   const WK=30*864e5, now=Date.now();
-  const sig=(store.__signals||[]).filter(s=>now-(+s.ts||0)<WK && (!s.by||repSame(s.by,myRep())||!myRep())).slice();
+  const sig=(store.__signals||[]).filter(s=>now-(+s.ts||0)<WK && (all||!s.by||repSame(s.by,myRep())||!myRep())).slice();
   const known=new Set(sig.map(s=>s.cid));
   contacts().forEach(c=>{
     if(known.has(c.id)) return;                 // the feed already speaks for this person
-    if(!openMine(c)) return;                    // somebody else sent that email — it's their read receipt
+    if(!all&&!openMine(c)) return;              // somebody else sent that email — it's their read receipt
     const o=lastOpenTs(c), r=+c.lastReplyTs||0;
     const row={cid:c.id,ts:0,name:cname(c),acct:(acct(c.accountId)||{}).name||'',seen:true};
     if(r&&now-r<WK) sig.push({...row,kind:'reply',ts:r});
@@ -9679,9 +9689,21 @@ function setIntentFocus(k){ intentFocus=(intentFocus===k)?null:k; TPAGE.intent=0
    they opened it AFTER your last call/email, so the follow-up is still owed. */
 let opensFocus='new';           // 'new' = opened since your last touch · 'all' · 'unknown'
 function setOpensFocus(k){ opensFocus=k; renderIntent(); }
+/* ── WHOSE OPENS ARE THESE? ────────────────────────────────────────────────────────────────────
+   Saad: "for email opens can it just be userspecific please ... no need for me to see embert ...
+   but maybe have like a team option there to see everyones opens."
+   opensRows() was built straight off sigGroups() with NO owner filter, so the Opens tab showed the
+   whole team's read receipts as though they were his. openMine() already exists and already knows
+   the answer (it reads emailOwner(c), falling back to the book's house emailer) — the report simply
+   never asked it. Defaults to MINE; the toggle is there for when he wants the team view. */
+let opensScope='mine';
+try{ const _s=localStorage.getItem('opensScope'); if(_s==='team'||_s==='mine') opensScope=_s; }catch(e){}
+function setOpensScope(k){ opensScope=(k==='team'?'team':'mine');
+  try{ localStorage.setItem('opensScope',opensScope); }catch(e){}
+  renderIntent(); }
 function opensRows(){
   const now=Date.now();
-  return sigGroups().filter(g=>g.opens>0).map(g=>{ const c=contact(g.cid);
+  return sigGroups(opensScope==='team').filter(g=>g.opens>0).map(g=>{ const c=contact(g.cid);
     const out=lastOutreachTs(c), call=lastCallTs(c);
     return {g,c,phone:telNum(c),
       // Owed = they opened it after the last thing YOU did. That's the whole point of a read
@@ -9698,9 +9720,12 @@ function opensReport(){
   const nToday=rows.filter(r=>r.g.last>=d0).length;
   const nWeek=rows.filter(r=>r.g.last>=now-7*864e5).length;
   const unknown=(function(){ try{ return mailTrackerUnknown(null)||[]; }catch(e){ return []; } })();
-  let h='<div class="panel"><div class="ph"><h3>📬 Who opened your email</h3>'+
-    '<span class="sub">from your tracking pixel and your MailTracker mail, last 30 days · newest first</span>'+
-    '<button class="btn sm pri" style="margin-left:auto" onclick="syncGmail()">↻ Check for new opens</button></div>'+
+  const _mine=opensScope==='mine';
+  const _pill=(k,lbl,tip)=>'<button class="btn sm '+(opensScope===k?'pri':'gh')+'" title="'+esc(tip)+'" onclick="setOpensScope(\''+k+'\')">'+lbl+'</button>';
+  let h='<div class="panel"><div class="ph"><h3>📬 Who opened '+(_mine?'your':'the team\'s')+' email</h3>'+
+    '<span class="sub">'+(_mine?'only mail sent by you':'every rep\'s opens')+' — tracking pixel + MailTracker, last 30 days · newest first</span>'+
+    '<span style="margin-left:auto;display:inline-flex;gap:6px">'+_pill('mine','👤 Mine','Only opens on mail you sent')+_pill('team','👥 Team','Everyone\'s opens, including the other reps')+
+    '<button class="btn sm pri" onclick="syncGmail()">↻ Check for new opens</button></span></div>'+
     '<div style="padding:14px 16px"><div class="grid">'+
       stat(nNew,'🔥 Opened, not followed up',true,"setOpensFocus('new')",opensFocus==='new')+
       stat(nToday,'Opened today',false,"setOpensFocus('all')",false)+
