@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z204';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z205';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -7395,6 +7395,9 @@ function withCallSteps(steps){ if(!Array.isArray(steps)||!steps.length) return s
 // pulled out but remembering where they were, waiting for a rep to re-enroll. Kept separate so paused
 // contacts drop out of the task queue / hot-list boosts but still show in the Sequences cockpit.
 function seqActive(c){ const s=c&&c.emailSeq; return !!(s&&!s.done&&!s.paused); }
+// Enrolled, not finished, but parked. Both flags exist: the bulk pull-out wrote emailSeq.paused,
+// older rows carry c.seqPaused.
+function seq2Paused(c){ const s=c&&c.emailSeq; return !!(s&&!s.done&&(s.paused||c.seqPaused)); }
 function seqPaused(c){ const s=c&&c.emailSeq; return !!(s&&s.paused&&!s.done); }
 // onCallStep: the contact's CURRENT sequence step is a call — a planned, meaningful dial. The Hot List
 // is a dialer playlist, so these should ride near the top and get cleared before the cadence stalls.
@@ -9060,6 +9063,7 @@ const PG_KINDS={
   call:    {icon:'☎️', verb:'Dial',                panel:'☎️ Dial',                 hint:'every one of these earned it — an open or a real fit, never a due date'},
   enroll:  {icon:'➕', verb:'Start a cadence',      panel:'➕ Put into a cadence',    hint:'phone and email on file, and nothing has been sent to them lately'},
   cooling: {icon:'🧊', verb:'Leave it',             panel:'🧊 Just came off a play', hint:'do not re-enrol these — the last cadence is still sitting in their inbox'},
+  stalled: {icon:'⏸', verb:'Resume the play',       panel:'⏸ Paused and gone cold',  hint:'paused mid-cadence and nobody has contacted them since — pick the play back up where it stopped'},
   email:   {icon:'📧', verb:'Send the step',        panel:'📧 Cadence emails due',   hint:'runs whether or not you get to the phone'},
   nurture: {icon:'✉️', verb:'Keep emailing',        panel:'✉️ Email-only',           hint:'no phone and no open yet — not worth research time'}
 };
@@ -9140,6 +9144,27 @@ function nextAction(c){
     const def=cadDefFor(c), n=Math.min(Math.max(+c.emailSeq.step||1,1),def.length);
     if(stepKind(def[n-1])==='email') return {k:'email',rank:heat(c)+50,
       why:stepLabel(c,n,'/')+' is queued'+(fresh?' · opened '+fmtAgo(openTs):'')};
+  }
+  /* ── ⏸ PAUSED MID-PLAY AND FORGOTTEN ──────────────────────────────────────────────────────────
+     Saad: "the ones that are paused in a sequence can we just add them to the hot list naturally —
+     they havent been touched in over 30 days."
+     MEASURED on his book: 149 paused enrolments, 92 of them with NO call and NO email sent in 30+
+     days (15 never contacted at all). They were not missing from the list — they were in the WRONG
+     part of it: 37 sat in `enroll`, which would have started a brand-new play and thrown away the
+     step they had reached, and 35 in `research`.
+     ⚠️ The obvious check is a trap: lastTouchTs() counts the system "👀 Opened" log line as a touch,
+     so measuring on it says ZERO of them are cold. lastOutreachTs() — a call or an email HE sent —
+     is the only honest clock here. Same lesson as the opens report: check what the timestamp means.
+     Ranked below an earned dial and below a queued step, above a cold enrolment: a half-finished
+     play with a month of silence is warmer than a stranger and colder than a hand raised. */
+  if(seq2Paused(c)){
+    const out2=lastOutreachTs(c)||0;
+    if(!out2||now-out2>30*864e5){
+      const nm=((seqById((c.emailSeq||{}).seqId)||{}).name)||'their play';
+      const st=+c.emailSeq.step||1;
+      return {k:'stalled',rank:520+heat(c)*0.5,
+        why:'Paused on step '+st+' of '+esc(nm)+' — '+(out2?'nothing sent or dialled since '+fmtAgo(out2):'never actually contacted')+'. Pick it back up.'};
+    }
   }
   /* ── WHY THIS IS NOT AN ENROLMENT ──
      Saad: "zach donabedian, they just were in a cadence / why tf would i put them in another
@@ -9356,8 +9381,10 @@ function pgNowCard(list){
    "Hand in hand" is why jobBar always prints ALL THREE counts, lit or not — you can see the email
    pile stacking up while you're on the phone, which is the whole reason to switch. */
 const PG_JOBS={
-  call: {t:'☎️ Calls', ks:['reply','noshow','owed','call'],            sub:'every dial here was earned by an open or a fit, not by a due date'},
-  email:{t:'📧 Emails',ks:['reply','email','enroll','cooling','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
+  call: {t:'☎️ Calls', ks:['reply','noshow','owed','call','stalled'],  sub:'every dial here was earned by an open or a fit, not by a due date'},
+  // 'stalled' rides in BOTH jobs on purpose: resuming the play is desk work, but 39 of the 92 have a
+  // phone and a month-old paused cadence is a perfectly good reason to just ring them instead.
+  email:{t:'📧 Emails',ks:['reply','email','enroll','stalled','cooling','nurture'],sub:'desk work — nothing here needs you to pick up the phone'},
   data: {t:'🔎 Data',  ks:['research'],                                 sub:'good accounts you can\u2019t reach yet — each row is one click to go get it'}};
 // A stored 'all' is a mode that no longer exists. Land it on calls rather than silently on whatever
 // Object.keys happens to return first.
