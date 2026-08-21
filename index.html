@@ -645,7 +645,7 @@ var SEED = /*__SEED_START__*/ null /*__SEED_END__*/;
 <script>
 'use strict';
 /* ====================== CONFIG ====================== */
-const BUILD = 'build Aug20·z203';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
+const BUILD = 'build Aug20·z204';  // bump every deploy — shown in Quota header so you can confirm you're on fresh code
 // Team lock (Jul17·z55): real Supabase Auth. Sign-ins are created in the Supabase dashboard
 // (Authentication → Users). The anon key stays public but grants NOTHING once the RLS policy
 // is switched to authenticated-only — see the lockdown SQL in the deploy notes.
@@ -4144,11 +4144,39 @@ function cmSeqChip(c){
   if(typeof onCallStep==='function'&&onCallStep(c)){ cls='seqcall'; lbl='Cadence says CALL now — '+lbl; }
   const own=(typeof seqOwner==='function'&&seqOwner(c))||'';
   const mine=!own||(typeof repCanon==='function'&&typeof myRep==='function'&&repCanon(own)===repCanon(myRep()));
-  /* The chip names the exact step ("On ✉ Email 5") and was a dead <span>. Clicking the thing that
-     tells you where they are in the play is the obvious way to go read it — z188 made the step
-     TITLE clickable in the task rows and missed this one. */
-  return '<div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap">'+
-    '<button type="button" class="cm-chip '+cls+'" style="cursor:pointer" onclick="openSeqFor(\''+c.id+'\')" title="Open the cadence — the modal stays open so you can still log the call">'+(paused?'⏸ Paused — ':'')+esc(lbl)+' ›</button>'+
+  /* 🔴 z204 — THE CHIP SHOULD SEND THE STEP, NOT NAVIGATE AWAY. Saad: "if i click on that green
+     outline button it goes to the next person in que — instead of staying in that contact and
+     sending out that email."
+     z197 wired this chip to openSeqFor(), which calls openContact() → a DIFFERENT record takes over
+     the drawer and the card behind the modal re-renders to whoever is next up. So the one button on
+     the card that names the email he wants to send was the button that lost his place.
+     What he actually wants from "On ✉ Email 2" is to send Email 2. sendSeqEmail() already confirms
+     before anything leaves the building, logs the send, and advances the play — and it does not
+     touch the modal, so he stays exactly where he is and can still file the call outcome.
+     stopPropagation because this sits inside the modal card, which has its own click handling.
+     Reading the cadence is still one click away, on the small ›. */
+  const _send=(typeof c.email==='string'&&c.email&&!(typeof undeliverable==='function'&&undeliverable(c)));
+  /* 🔑 "ON EMAIL 3" DOES NOT MEAN "SEND EMAIL 3". Saad, straight after sending one: "it just goes to
+     the next email says 'on email 3' which is fine, but sometimes that can be confusing maybe we can
+     have something that says last email sent so we know it was recent — and a new email is not due up."
+     He is right: the pointer moving is not the same as work being owed, and the chip only ever showed
+     the pointer. So when the next step is still inside its wait, the chip reports what he JUST DID
+     and when the next one lands, instead of naming a step as though it were due. The send button
+     stays available — it just stops shouting. */
+  const _s=c.emailSeq||{};
+  const _last=+_s.lastEmailAt||+_s.lastSentAt||0;
+  let _wait=0; try{ const _def=cadDefFor(c); const _st=_def[Math.min(Math.max(+_s.step||1,1),_def.length)-1]; _wait=(+(_st&&_st.d)||0)*864e5; }catch(e){}
+  const _due=_last?_last+_wait:0;
+  const _early=!paused&&_last&&_due>Date.now();
+  const _in=ms=>{ const d=Math.round(ms/864e5); return d>=1?('in '+d+'d'):('in '+Math.max(1,Math.round(ms/36e5))+'h'); };
+  return '<div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">'+
+    (_early
+      ? '<span class="cm-chip" style="color:var(--won);border-color:var(--won)" title="Nothing is owed yet — the play sends the next one on its own schedule">✅ Sent '+esc(fmtAgo(_last))+' · '+esc(lbl.replace(/^On /,''))+' '+esc(_in(_due-Date.now()))+'</span>'
+      : _send
+      ? '<button type="button" class="cm-chip '+cls+'" style="cursor:pointer" onclick="event.stopPropagation();sendSeqEmail(\''+c.id+'\')" title="Send this step to '+esc(c.email)+' now — you stay on this call and can still log the outcome">'+(paused?'⏸ Paused — ':'')+esc(lbl)+' · send</button>'
+      : '<span class="cm-chip '+cls+'" title="'+(c.email?'This address is marked undeliverable':'No email on this contact')+'">'+(paused?'⏸ Paused — ':'')+esc(lbl)+'</span>')+
+    (_early&&_send?'<button type="button" class="cm-chip" style="cursor:pointer;opacity:.75" onclick="event.stopPropagation();sendSeqEmail(\''+c.id+'\')" title="Send the next step early anyway">send now</button>':'')+
+    '<button type="button" class="cm-chip" style="cursor:pointer" onclick="event.stopPropagation();openSeqFor(\''+c.id+'\')" title="Open the cadence to read the copy — the call stays open beside it">›</button>'+
     (own&&!mine?'<span class="cm-chip" title="This cadence belongs to another rep">👤 '+esc(own)+'</span>':'')+
     '</div>';
 }
@@ -8389,6 +8417,11 @@ async function sendSeqEmail(id,addrTo){
     c.openBy=senderName();
     bumpEmail();                                // counts toward today's 100 — see the hot-list scoreboard
     save(); refreshDrawer(); if(typeof renderTaskWidget==='function') renderTaskWidget(); renderActive();
+    // Sent from inside a live call: repaint the modal so the chip updates in place. renderActive()
+    // only repaints the list BEHIND it, which left the chip still naming the step just sent.
+    if(typeof callModalId!=='undefined'&&callModalId===id&&typeof renderCallModal==='function'){
+      try{ cmSyncNote(); renderCallModal(); }catch(e){}
+    }
     setSync&&setSync('ok','Sent');
     toast(c.emailSeq.done?('✅ Cadence complete — '+stepLabel(c,n)+' sent to '+cname(c))
       :('✅ '+stepLabel(c,n)+' sent to '+cname(c)+(nextOfKind(c,n,'email')?' · '+stepLabel(c,nextOfKind(c,n,'email'))+' queued':'')));
